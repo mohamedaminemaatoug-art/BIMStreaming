@@ -7,6 +7,11 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:bim_streaming/models/user_model.dart';
+import 'package:bim_streaming/services/auth_service.dart';
+import 'package:bim_streaming/screens/login_page.dart';
+import 'package:bim_streaming/screens/user_profile_page.dart';
+import 'package:bim_streaming/screens/remote_support_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -30,6 +35,13 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
   ThemeModeType _themeMode = ThemeModeType.dark;
   Lang _lang = Lang.en;
   int _pageIndex = 0;
+  
+  // Authentication
+  User? _currentAuthenticatedUser;
+  final AuthService _authService = AuthService();
+  bool _isAuthenticated = false;
+  bool _showDemoUsers = false;
+  
   bool _showAddDialog = false;
   String _dialogCountry = '';
   String _dialogDepartment = '';
@@ -51,6 +63,28 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
   String _currentUserId = '';
   String _currentUserDept = 'IT Département'; // Département courant si Admin Département
   String _currentUserCountry = '🇫🇷 France'; // Pays courant si Admin Pays
+  
+  // Mapping des codes pays vers les noms complets dans la structure
+  final Map<String, String> _countryCodeToName = {
+    'FR': '🇫🇷 France',
+    'US': '🇺🇸 USA',
+    'GB': '🇬🇧 UK',
+    'DE': '🇩🇪 Germany',
+    'TN': '🇹🇳 Tunisia',
+  };
+
+  // Mapping des codes département vers les noms complets dans la structure
+  final Map<String, String> _departmentCodeToDeptName = {
+    'IT': 'IT Département',
+    'HR': 'HR Département',
+    'Finance': 'Finance Département',
+    'Marketing': 'Marketing Département',
+    'Engineering': 'Engineering Département',
+    'Operations': 'Operations Département',
+    'Sales': 'Sales Département',
+    'Development': 'Development Département',
+    'Support': 'Support Département',
+  };
   
   late Map<String, Map<String, dynamic>> _usersStructure;
 
@@ -133,6 +167,20 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
     super.initState();
     _initializeUsersStructure();
     _loadPreferences();
+    _initializeGuestUser();
+  }
+
+  void _initializeGuestUser() {
+    // Create a guest user and authenticate automatically
+    _currentAuthenticatedUser = User(
+      id: 'GUEST',
+      name: 'Guest',
+      password: '',
+      role: UserRole.client,
+    );
+    _isAuthenticated = true;
+    _userRole = _roleUser;
+    _currentUserId = 'GUEST';
   }
 
   Future<void> _loadPreferences() async {
@@ -170,6 +218,7 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
   }
 
   List<String> _countryFilterItems() {
+    // Tous les rôles voient tous les pays dans les filtres
     return [_allFilterValue, ..._usersStructure.keys];
   }
 
@@ -211,6 +260,11 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
   }
 
   Map<String, Map<String, dynamic>> _getFilteredUsersStructure() {
+    // Tous les rôles voient toute la structure - pas de filtrage basé sur les rôles
+    // Les restrictions sont appliquées au niveau des actions (ajouter, modifier, supprimer)
+    final baseStructure = _usersStructure;
+    
+    // Appliquer les filtres de recherche et sélection
     final query = _deviceSearchController.text.trim();
     final hasSearch = query.isNotEmpty;
     final hasCountry = _selectedCountryFilter != _allFilterValue;
@@ -218,12 +272,12 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
     final hasRole = _selectedDeviceRoleFilter != DeviceRoleFilter.all;
 
     if (!hasSearch && !hasCountry && !hasDepartment && !hasRole) {
-      return _usersStructure;
+      return baseStructure;
     }
 
     final result = <String, Map<String, dynamic>>{};
 
-    for (final countryEntry in _usersStructure.entries) {
+    for (final countryEntry in baseStructure.entries) {
       final countryName = countryEntry.key;
       final countryData = countryEntry.value;
 
@@ -567,6 +621,15 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
             _currentUserId = id;
             _currentUserCountry = countryEntry.key;
             _currentUserDept = deptEntry.key;
+            // Update the authenticated user object with AuthService
+            _currentAuthenticatedUser = User(
+              id: id,
+              name: user['name'] ?? id,
+              password: password,
+              role: UserRole.client,
+              countryCode: countryEntry.key.replaceAll(RegExp(r'[^\w]'), ''),
+              departmentCode: deptEntry.key,
+            );
           });
           _showStubMessage(t['auth_success']!);
           return true;
@@ -576,6 +639,40 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
 
     _showStubMessage(t['auth_invalid_credentials']!);
     return false;
+  }
+
+  Future<void> _authenticateWithAuthService() async {
+    final id = _authIdController.text.trim();
+    final password = _authPasswordController.text.trim();
+
+    if (id.isEmpty || password.isEmpty) {
+      _showStubMessage(t['auth_fill_all_fields']!);
+      return;
+    }
+
+    final result = await _authService.login(id, password);
+
+    if (!mounted) return;
+
+    if (result.success && result.user != null) {
+      setState(() {
+        _currentAuthenticatedUser = result.user;
+        _isAuthenticated = true;
+        _userRole = _mapUserRoleToString(result.user!.role);
+        _currentUserId = result.user!.id;
+        if (result.user!.countryCode != null && _countryCodeToName.containsKey(result.user!.countryCode)) {
+          _currentUserCountry = _countryCodeToName[result.user!.countryCode]!;
+        }
+        if (result.user!.departmentCode != null && _departmentCodeToDeptName.containsKey(result.user!.departmentCode)) {
+          _currentUserDept = _departmentCodeToDeptName[result.user!.departmentCode]!;
+        }
+      });
+      _showStubMessage(result.message);
+      _authIdController.clear();
+      _authPasswordController.clear();
+    } else {
+      _showStubMessage(result.message);
+    }
   }
 
   void _initializeUsersStructure() {
@@ -675,6 +772,21 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
     bool isAdmin,
     String userType,
   ) {
+    // Vérifier les permissions
+    bool hasPermission = false;
+    if (_userRole == _roleAdminPrincipal) {
+      hasPermission = true; // Admin Principal peut tout faire
+    } else if (_userRole == _roleAdminPays && _currentUserCountry == country) {
+      hasPermission = true; // Admin Pays peut gérer tous les départements de son pays
+    } else if (_userRole == _roleAdminDepartement && _currentUserDept == department && _currentUserCountry == country) {
+      hasPermission = !isAdmin; // Admin Département peut ajouter seulement des utilisateurs, pas des admins
+    }
+    
+    if (!hasPermission) {
+      _showStubMessage('Vous n\'avez pas les permissions pour cette action');
+      return;
+    }
+
     setState(() {
       if (isAdmin) {
         _usersStructure[country]![department]!['admin'] = {'id': userId, 'password': userPassword, 'name': userName};
@@ -690,6 +802,21 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
   }
 
   void _deleteUser(String country, String department, String userId) {
+    // Vérifier les permissions
+    bool hasPermission = false;
+    if (_userRole == _roleAdminPrincipal) {
+      hasPermission = true; // Admin Principal peut tout faire
+    } else if (_userRole == _roleAdminPays && _currentUserCountry == country) {
+      hasPermission = true; // Admin Pays peut gérer tous les départements de son pays
+    } else if (_userRole == _roleAdminDepartement && _currentUserDept == department && _currentUserCountry == country) {
+      hasPermission = true; // Admin Département peut supprimer les utilisateurs de son département
+    }
+    
+    if (!hasPermission) {
+      _showStubMessage('Vous n\'avez pas les permissions pour cette action');
+      return;
+    }
+
     setState(() {
       final usersList = List<Map<String, String>>.from(
         (_usersStructure[country]![department]!['users'] as List).map((u) => Map<String, String>.from(u))
@@ -773,6 +900,20 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
   }
 
   void _addDepartment(String country, String deptName, String adminId, String adminPassword, String adminName) {
+    // Vérifier les permissions
+    bool hasPermission = false;
+    if (_userRole == _roleAdminPrincipal) {
+      hasPermission = true; // Admin Principal peut créer des départements partout
+    } else if (_userRole == _roleAdminPays && _currentUserCountry == country) {
+      hasPermission = true; // Admin Pays peut créer des départements dans son pays
+    }
+    // Admin Département ne peut pas créer de départements
+    
+    if (!hasPermission) {
+      _showStubMessage('Vous n\'avez pas les permissions pour créer un département');
+      return;
+    }
+
     setState(() {
       _usersStructure[country]![deptName] = {
         'admin': {'id': adminId, 'password': adminPassword, 'name': adminName},
@@ -783,6 +924,20 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
   }
 
   void _promoteToAdmin(String country, String department, Map<String, String> user) {
+    // Vérifier les permissions
+    bool hasPermission = false;
+    if (_userRole == _roleAdminPrincipal) {
+      hasPermission = true; // Admin Principal peut promouvoir partout
+    } else if (_userRole == _roleAdminPays && _currentUserCountry == country) {
+      hasPermission = true; // Admin Pays peut promouvoir dans son pays
+    }
+    // Admin Département ne peut pas promouvoir
+    
+    if (!hasPermission) {
+      _showStubMessage('Vous n\'avez pas les permissions pour promouvoir un utilisateur');
+      return;
+    }
+
     setState(() {
       // Récupérer l'ancien admin
       final oldAdmin = Map<String, String>.from(_usersStructure[country]![department]!['admin']);
@@ -802,6 +957,20 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
   }
 
   void _deleteDepartment(String country, String deptName) {
+    // Vérifier les permissions
+    bool hasPermission = false;
+    if (_userRole == _roleAdminPrincipal) {
+      hasPermission = true; // Admin Principal peut supprimer partout
+    } else if (_userRole == _roleAdminPays && _currentUserCountry == country) {
+      hasPermission = true; // Admin Pays peut supprimer des départements de son pays
+    }
+    // Admin Département ne peut pas supprimer des départements
+    
+    if (!hasPermission) {
+      _showStubMessage('Vous n\'avez pas les permissions pour supprimer un département');
+      return;
+    }
+
     setState(() {
       _usersStructure[country]!.remove(deptName);
     });
@@ -1123,7 +1292,14 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
   Map<String, String> get t => _translations[_lang]!;
 
   void _openSupportSession() {
-    setState(() => _pageIndex = 5);
+    _navigatorKey.currentState?.push(
+      MaterialPageRoute(
+        builder: (context) => RemoteSupportPage(
+          deviceName: _selectedConnection == 'Recent Connections...' ? 'Device' : _selectedConnection,
+          deviceId: _idController.text.isEmpty ? 'RID-${DateTime.now().millisecondsSinceEpoch}' : _idController.text,
+        ),
+      ),
+    );
   }
 
   Future<void> _handleDeviceUserTap(Map<String, String> user) async {
@@ -1230,6 +1406,69 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
 
   @override
   Widget build(BuildContext context) {
+    // Si l'utilisateur n'est pas authentifié, afficher la page de login
+    if (!_isAuthenticated || _currentAuthenticatedUser == null) {
+      return MaterialApp(
+        navigatorKey: _navigatorKey,
+        scaffoldMessengerKey: _scaffoldMessengerKey,
+        debugShowCheckedModeBanner: false,
+        title: t['title']!,
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        supportedLocales: const [
+          Locale('en', 'US'),
+          Locale('fr', 'FR'),
+        ],
+        theme: ThemeData(
+          useMaterial3: true,
+          brightness: _themeMode == ThemeModeType.dark ? Brightness.dark : Brightness.light,
+        ),
+        home: LoginPage(
+          isDarkMode: _themeMode == ThemeModeType.dark,
+          translate: (key) => t[key] ?? key,
+          onLoginSuccess: (user) {
+            setState(() {
+              _currentAuthenticatedUser = user;
+              _isAuthenticated = true;
+              _userRole = _mapUserRoleToString(user.role);
+              _currentUserId = user.id;
+              
+              // IMPORTANT : Mettre à jour le pays et le département selon le rôle
+              if (user.role == UserRole.adminPays || user.role == UserRole.adminDepartement) {
+                // Utiliser le mapping pour trouver le nom complet du pays
+                if (user.countryCode != null && _countryCodeToName.containsKey(user.countryCode)) {
+                  _currentUserCountry = _countryCodeToName[user.countryCode]!;
+                  print('🔧 LOGIN DEBUG: countryCode=${user.countryCode} => _currentUserCountry=$_currentUserCountry');
+                  
+                  // Pour Admin Département, trouver aussi le département exact
+                  if (user.role == UserRole.adminDepartement && user.departmentCode != null) {
+                    final countryData = _usersStructure[_currentUserCountry];
+                    if (countryData != null) {
+                      for (final deptKey in countryData.keys) {
+                        if (deptKey != 'countryAdmin' && deptKey.contains(user.departmentCode!)) {
+                          _currentUserDept = deptKey;
+                          print('🔧 LOGIN DEBUG: departmentCode=${user.departmentCode} => _currentUserDept=$_currentUserDept');
+                          break;
+                        }
+                      }
+                    }
+                  }
+                } else {
+                  print('❌ LOGIN ERROR: countryCode ${user.countryCode} not found in mapping!');
+                }
+              }
+              
+              print('✅ LOGIN SUCCESS: Role=$_userRole, Country=$_currentUserCountry, Dept=$_currentUserDept');
+            });
+          },
+        ),
+      );
+    }
+    
+    // Interface principale après authentification
     return MaterialApp(
       navigatorKey: _navigatorKey,
       scaffoldMessengerKey: _scaffoldMessengerKey,
@@ -1254,6 +1493,29 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
           backgroundColor: c.bg,
           elevation: 0,
           scrolledUnderElevation: 0,
+          title: Text(_currentAuthenticatedUser?.name ?? ''),
+          actions: [
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: _getRoleColor(_currentAuthenticatedUser!.role),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    _currentAuthenticatedUser!.role.shortLabel,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
           leading: Builder(
             builder: (context) => IconButton(
               icon: Icon(Icons.menu, color: c.textP),
@@ -1278,7 +1540,7 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
                   _buildHistoryPage(),
                   _buildAuthenticationPage(),
                   _buildSettingsPage(),
-                  _buildSupportPage(),
+                  _buildProfilePage(),
                 ],
               ),
             ),
@@ -1297,6 +1559,7 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
       (t['history']!, Icons.history),
       (t['authentication']!, Icons.lock_outline),
       (t['settings']!, Icons.settings_outlined),
+      ('Profil', Icons.person_outline),
     ];
 
     return Container(
@@ -1356,7 +1619,11 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
     return InkWell(
       onTap: () {
         setState(() => _pageIndex = idx);
-        Navigator.of(context).maybePop();
+        try {
+          Navigator.of(context).pop();
+        } catch (e) {
+          // Navigator might not be available in drawer context
+        }
       },
       child: Container(
         height: 50,
@@ -1373,6 +1640,57 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
           ],
         ),
       ),
+    );
+  }
+
+  // Helper methods for authentication
+  String _mapUserRoleToString(UserRole role) {
+    switch (role) {
+      case UserRole.adminGlobal:
+        return _roleAdminPrincipal;
+      case UserRole.adminPays:
+        return _roleAdminPays;
+      case UserRole.adminDepartement:
+        return _roleAdminDepartement;
+      case UserRole.client:
+        return _roleUser; // Maper client à User pour cohérence
+    }
+  }
+
+  Color _getRoleColor(UserRole role) {
+    switch (role) {
+      case UserRole.adminGlobal:
+        return Colors.red[600] ?? Colors.red;
+      case UserRole.adminPays:
+        return Colors.orange[600] ?? Colors.orange;
+      case UserRole.adminDepartement:
+        return Colors.blue[600] ?? Colors.blue;
+      case UserRole.client:
+        return Colors.grey[600] ?? Colors.grey;
+    }
+  }
+
+  Widget _buildProfilePage() {
+    if (_currentAuthenticatedUser == null) {
+      return Center(
+        child: Text('Erreur: utilisateur non chargé', style: TextStyle(color: c.textP)),
+      );
+    }
+
+    return UserProfilePage(
+      user: _currentAuthenticatedUser!,
+      isDarkMode: _themeMode == ThemeModeType.dark,
+      translate: (key) => t[key] ?? key,
+      onLogout: () {
+        _authService.logout();
+        setState(() {
+          // Return to guest mode instead of fully logging out
+          _initializeGuestUser();
+          _pageIndex = 0;
+          _authIdController.clear();
+          _authPasswordController.clear();
+        });
+      },
     );
   }
 
@@ -1583,8 +1901,14 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
   Widget _buildCountrySection(String countryName, Map<String, dynamic> countryData) {
     final countryAdmin = countryData['countryAdmin'] as Map<String, String>?;
     final isCollapsed = _isCountryCollapsed(countryName);
+    
+    // Vérifier les permissions pour créer un département
     final canCreateDept = _userRole == _roleAdminPrincipal || 
                           (_userRole == _roleAdminPays && _currentUserCountry == countryName);
+    
+    print('🏳️ COUNTRY SECTION: $countryName');
+    print('   _userRole=$_userRole, _currentUserCountry=$_currentUserCountry');
+    print('   canCreateDept=$canCreateDept (condition: $_userRole == $_roleAdminPays && $_currentUserCountry == $countryName)');
     
     // Filtrer les départements (exclure countryAdmin)
     final departments = Map<String, dynamic>.from(countryData)..remove('countryAdmin');
@@ -1661,12 +1985,18 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
     bool showAdmin = true,
   }) {
     final isCollapsed = _isDepartmentCollapsed(country, deptName);
+    
+    // Vérifier les permissions
     final canManage = _userRole == _roleAdminPrincipal || 
                       (_userRole == _roleAdminPays && _currentUserCountry == country) ||
                       (_userRole == _roleAdminDepartement && _currentUserDept == deptName && _currentUserCountry == country);
     
     final canDeleteDept = _userRole == _roleAdminPrincipal || 
                           (_userRole == _roleAdminPays && _currentUserCountry == country);
+    
+    print('📁 DEPT SECTION: $deptName in $country');
+    print('   _userRole=$_userRole, _currentUserCountry=$_currentUserCountry, _currentUserDept=$_currentUserDept');
+    print('   canManage=$canManage, canDeleteDept=$canDeleteDept');
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -2036,13 +2366,169 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
                     height: 42,
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(backgroundColor: c.accent, foregroundColor: Colors.white),
-                      onPressed: _authenticate,
+                      onPressed: _authenticateWithAuthService,
                       child: Text(t['authenticate_btn']!, style: const TextStyle(fontWeight: FontWeight.bold)),
                     ),
                   ),
+                  const SizedBox(height: 16),
+                  GestureDetector(
+                    onTap: () {
+                      setState(() => _showDemoUsers = !_showDemoUsers);
+                    },
+                    child: Row(
+                      children: [
+                        Icon(
+                          _showDemoUsers ? Icons.expand_less : Icons.expand_more,
+                          color: c.accent,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Utilisateurs Démo',
+                          style: TextStyle(
+                            color: c.accent,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (_showDemoUsers) ...[
+                    const SizedBox(height: 12),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(
+                        maxHeight: 320,
+                      ),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: c.bg,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: c.border),
+                        ),
+                        child: SingleChildScrollView(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _buildDemoUserRow('Admin Principal', 'admin1', 'admin123'),
+                              const SizedBox(height: 10),
+                              _buildDemoUserRow('Admin France', 'admin_fr', 'france123'),
+                              const SizedBox(height: 10),
+                              _buildDemoUserRow('Admin IT France', 'admin_de_fr', 'it_france123'),
+                              const SizedBox(height: 10),
+                              _buildDemoUserRow('Admin USA', 'admin_us', 'usa123'),
+                              const SizedBox(height: 10),
+                              _buildDemoUserRow('Admin HR USA', 'admin_de_us', 'hr_usa123'),
+                              const SizedBox(height: 10),
+                              _buildDemoUserRow('Admin Pays (France)', 'CADM001', 'countryadmin'),
+                              const SizedBox(height: 10),
+                              _buildDemoUserRow('Admin IT France', 'ADM001', 'admin123'),
+                              const SizedBox(height: 10),
+                              _buildDemoUserRow('User (France IT)', 'USR001', 'pass123'),
+                              const SizedBox(height: 10),
+                              _buildDemoUserRow('Technicien (France IT)', 'USR003', 'pass123'),
+                              const SizedBox(height: 10),
+                              _buildDemoUserRow('User (France HR)', 'USR004', 'pass123'),
+                              const SizedBox(height: 10),
+                              _buildDemoUserRow('Admin USA Pays', 'CADM002', 'countryadmin'),
+                              const SizedBox(height: 10),
+                              _buildDemoUserRow('Admin Finance USA', 'ADM003', 'admin123'),
+                              const SizedBox(height: 10),
+                              _buildDemoUserRow('User (USA Finance)', 'USR006', 'pass123'),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDemoUserRow(String role, String id, String password) {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: c.card,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            role,
+            style: TextStyle(
+              color: c.textP,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Expanded(
+                child: GestureDetector(
+                  onTap: () {
+                    _authIdController.text = id;
+                  },
+                  child: Row(
+                    children: [
+                      Text(
+                        'ID: ',
+                        style: TextStyle(color: c.textS, fontSize: 10),
+                      ),
+                      Expanded(
+                        child: Text(
+                          id,
+                          style: TextStyle(
+                            color: c.accent,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            fontFamily: 'Courier',
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: GestureDetector(
+                  onTap: () {
+                    _authPasswordController.text = password;
+                  },
+                  child: Row(
+                    children: [
+                      Text(
+                        'MDP: ',
+                        style: TextStyle(color: c.textS, fontSize: 10),
+                      ),
+                      Expanded(
+                        child: Text(
+                          password,
+                          style: TextStyle(
+                            color: c.accent,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            fontFamily: 'Courier',
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
