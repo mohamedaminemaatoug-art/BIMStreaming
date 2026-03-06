@@ -15,6 +15,8 @@ class UserProfilePage extends StatelessWidget {
     required this.translate,
   });
 
+  String tr(String key) => translate(key);
+
   @override
   Widget build(BuildContext context) {
     final isDark = isDarkMode;
@@ -54,7 +56,7 @@ class UserProfilePage extends StatelessWidget {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'ID: ${user.id}',
+                      '${tr('profile_id_label')}: ${user.id}',
                       style: TextStyle(
                         fontSize: 12,
                         color: isDark ? Colors.grey[400] : Colors.grey[600],
@@ -105,7 +107,7 @@ class UserProfilePage extends StatelessWidget {
             const SizedBox(height: 24),
             // Permissions
             Text(
-              'Permissions',
+              tr('profile_permissions'),
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
@@ -115,27 +117,27 @@ class UserProfilePage extends StatelessWidget {
             const SizedBox(height: 12),
             _buildPermissionTile(
               icon: Icons.visibility,
-              title: 'Voir les appareils',
+              title: tr('profile_permission_view_title'),
               description: _getViewPermissionDescription(user),
               isDark: isDark,
             ),
             _buildPermissionTile(
               icon: Icons.edit,
-              title: 'Modifier les appareils',
+              title: tr('profile_permission_modify_title'),
               description: _getModifyPermissionDescription(user),
               isDark: isDark,
               canAccess: user.role != UserRole.client,
             ),
             _buildPermissionTile(
               icon: Icons.add_circle,
-              title: 'Ajouter des appareils',
+              title: tr('profile_permission_add_title'),
               description: _getAddPermissionDescription(user),
               isDark: isDark,
               canAccess: user.role != UserRole.client,
             ),
             _buildPermissionTile(
               icon: Icons.delete,
-              title: 'Supprimer des appareils',
+              title: tr('profile_permission_delete_title'),
               description: _getDeletePermissionDescription(user),
               isDark: isDark,
               canAccess: user.role != UserRole.client,
@@ -152,9 +154,9 @@ class UserProfilePage extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
-                          'Informations de Zone',
-                          style: TextStyle(
+                        Text(
+                          tr('profile_region_info'),
+                          style: const TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.bold,
                           ),
@@ -162,13 +164,13 @@ class UserProfilePage extends StatelessWidget {
                         const SizedBox(height: 12),
                         if (user.countryCode != null)
                           _buildInfoTile(
-                            'Pays',
+                            tr('profile_country_label'),
                             user.countryCode!,
                             isDark,
                           ),
                         if (user.departmentCode != null)
                           _buildInfoTile(
-                            'Département',
+                            tr('profile_department_label'),
                             user.departmentCode!,
                             isDark,
                           ),
@@ -184,20 +186,20 @@ class UserProfilePage extends StatelessWidget {
                 showDialog(
                   context: context,
                   builder: (context) => AlertDialog(
-                    title: const Text('Confirmation'),
-                    content: const Text('Êtes-vous sûr de vouloir vous déconnecter ?'),
+                    title: Text(tr('logout_confirm_title')),
+                    content: Text(tr('logout_confirm_message')),
                     actions: [
                       TextButton(
                         onPressed: () => Navigator.pop(context),
-                        child: const Text('Annuler'),
+                        child: Text(tr('btn_cancel')),
                       ),
                       TextButton(
                         onPressed: () {
                           Navigator.pop(context);
                           onLogout();
                         },
-                        child: const Text(
-                          'Déconnecter',
+                        child: Text(
+                          tr('btn_disconnect'),
                           style: TextStyle(color: Colors.red),
                         ),
                       ),
@@ -206,7 +208,7 @@ class UserProfilePage extends StatelessWidget {
                 );
               },
               icon: const Icon(Icons.logout),
-              label: const Text('Déconnecter'),
+              label: Text(tr('btn_disconnect')),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.red[600],
                 minimumSize: const Size(double.infinity, 48),
@@ -306,52 +308,52 @@ class UserProfilePage extends StatelessWidget {
   String _getViewPermissionDescription(User user) {
     switch (user.role) {
       case UserRole.adminGlobal:
-        return 'Voir tous les appareils';
+        return tr('profile_view_all_devices');
       case UserRole.adminPays:
-        return 'Voir les appareils du ${user.countryCode}';
+        return '${tr('profile_view_country_devices')} ${user.countryCode ?? ''}';
       case UserRole.adminDepartement:
-        return 'Voir les appareils du département ${user.departmentCode}';
+        return '${tr('profile_view_department_devices')} ${user.departmentCode ?? ''}';
       case UserRole.client:
-        return 'Aucun accès';
+        return tr('profile_no_access');
     }
   }
 
   String _getModifyPermissionDescription(User user) {
     switch (user.role) {
       case UserRole.adminGlobal:
-        return 'Modifier tous les appareils';
+        return tr('profile_modify_all_devices');
       case UserRole.adminPays:
-        return 'Modifier les appareils du ${user.countryCode}';
+        return '${tr('profile_modify_country_devices')} ${user.countryCode ?? ''}';
       case UserRole.adminDepartement:
-        return 'Modifier les appareils du département ${user.departmentCode}';
+        return '${tr('profile_modify_department_devices')} ${user.departmentCode ?? ''}';
       case UserRole.client:
-        return 'Aucun accès';
+        return tr('profile_no_access');
     }
   }
 
   String _getAddPermissionDescription(User user) {
     switch (user.role) {
       case UserRole.adminGlobal:
-        return 'Ajouter des appareils mondiaux';
+        return tr('profile_add_all_devices');
       case UserRole.adminPays:
-        return 'Ajouter des appareils au ${user.countryCode}';
+        return '${tr('profile_add_country_devices')} ${user.countryCode ?? ''}';
       case UserRole.adminDepartement:
-        return 'Ajouter des appareils au département ${user.departmentCode}';
+        return '${tr('profile_add_department_devices')} ${user.departmentCode ?? ''}';
       case UserRole.client:
-        return 'Aucun accès';
+        return tr('profile_no_access');
     }
   }
 
   String _getDeletePermissionDescription(User user) {
     switch (user.role) {
       case UserRole.adminGlobal:
-        return 'Supprimer tous les appareils';
+        return tr('profile_delete_all_devices');
       case UserRole.adminPays:
-        return 'Supprimer les appareils du ${user.countryCode}';
+        return '${tr('profile_delete_country_devices')} ${user.countryCode ?? ''}';
       case UserRole.adminDepartement:
-        return 'Supprimer les appareils du département ${user.departmentCode}';
+        return '${tr('profile_delete_department_devices')} ${user.departmentCode ?? ''}';
       case UserRole.client:
-        return 'Aucun accès';
+        return tr('profile_no_access');
     }
   }
 }

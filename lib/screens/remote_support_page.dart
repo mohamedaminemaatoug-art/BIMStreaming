@@ -6,11 +6,15 @@ import 'package:window_manager/window_manager.dart';
 class RemoteSupportPage extends StatefulWidget {
   final String deviceName;
   final String deviceId;
+  final bool isDarkMode;
+  final String Function(String) translate;
 
   const RemoteSupportPage({
     super.key,
     required this.deviceName,
     required this.deviceId,
+    required this.isDarkMode,
+    required this.translate,
   });
 
   @override
@@ -24,12 +28,17 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   String _sessionTime = '00:00:00';
   String _encryptionType = 'AES-256 Encrypted';
   bool _isFullScreen = false;
+  bool _isRecording = false;
+  bool _audioEnabled = true;
+  bool _isBlackoutMode = false;
   String? _activeTab;
   final TextEditingController _composerController = TextEditingController();
   final List<String> _chatMessages = [];
   final List<String> _commandResults = [];
   Timer? _sessionTimer;
   int _sessionSeconds = 0;
+
+  String tr(String key) => widget.translate(key);
 
   @override
   void initState() {
@@ -69,6 +78,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     await windowManager.setFullScreen(nextValue);
     if (!mounted) return;
     setState(() => _isFullScreen = nextValue);
+    _showMessage(context, _isFullScreen ? tr('full_screen') : tr('exit_full_screen'), _getColors(context));
   }
 
   @override
@@ -96,7 +106,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'BIM Remote Support',
+              tr('remote_support_title'),
               style: TextStyle(
                 color: colors['text']!,
                 fontSize: 18,
@@ -104,7 +114,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
               ),
             ),
             Text(
-              'Internal Secure Network',
+              tr('internal_secure_network'),
               style: TextStyle(
                 color: colors['textSecondary']!,
                 fontSize: 12,
@@ -125,12 +135,12 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
                       Icon(Icons.circle, color: _isConnected ? Colors.green : Colors.grey, size: 8),
                       const SizedBox(width: 4),
                       Text(
-                        _isConnected ? 'Connected' : 'Disconnected',
+                        _isConnected ? tr('status_connected') : tr('status_disconnected'),
                         style: TextStyle(color: colors['textSecondary']!, fontSize: 11),
                       ),
                       const SizedBox(width: 12),
                       Text(
-                        'Session: $_sessionTime',
+                        '${tr('session_label')}: $_sessionTime',
                         style: TextStyle(color: colors['textSecondary']!, fontSize: 11),
                       ),
                       const SizedBox(width: 12),
@@ -156,7 +166,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
               backgroundColor: Colors.red,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
             ),
-            child: const Text('Disconnect', style: TextStyle(color: Colors.white, fontSize: 12)),
+            child: Text(tr('btn_disconnect'), style: const TextStyle(color: Colors.white, fontSize: 12)),
           ),
           const SizedBox(width: 16),
         ],
@@ -168,51 +178,111 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
             flex: _isFullScreen ? 1 : 3,
             child: Stack(
               children: [
-                Container(
-                  color: colors['cardBg']!,
-                  child: Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                // Top Actions Bar
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: Container(
+                    color: colors['bg']!,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    child: Row(
                       children: [
-                        Icon(
-                          Icons.device_hub,
-                          size: 80,
-                          color: colors['accent']!,
+                        _buildActionButton(Icons.screenshot_monitor, tr('btn_screenshot'), _takeScreenshot, colors),
+                        const SizedBox(width: 8),
+                        _buildActionButton(
+                          _isRecording ? Icons.stop_circle : Icons.fiber_manual_record,
+                          _isRecording ? tr('btn_stop_record') : tr('btn_record'),
+                          _toggleRecording,
+                          colors,
+                          isActive: _isRecording,
                         ),
-                        const SizedBox(height: 24),
-                        Text(
-                          _connectionStatus,
-                          style: TextStyle(
-                            color: colors['text']!,
-                            fontSize: 18,
-                            fontWeight: FontWeight.w500,
-                          ),
+                        const SizedBox(width: 8),
+                        _buildActionButton(
+                          _audioEnabled ? Icons.mic : Icons.mic_off,
+                          tr('btn_audio'),
+                          _toggleAudio,
+                          colors,
+                          isActive: _audioEnabled,
                         ),
-                        const SizedBox(height: 8),
-                        Text(
-                          _isFullScreen
-                              ? 'Full screen session mode'
-                              : 'Remote session is active',
-                          style: TextStyle(
-                            color: colors['textSecondary']!,
-                            fontSize: 14,
-                          ),
+                        const SizedBox(width: 8),
+                        _buildActionButton(Icons.lock, tr('btn_lock'), _lockDevice, colors),
+                        const SizedBox(width: 8),
+                        _buildActionButton(Icons.restart_alt, tr('btn_reboot'), _rebootDevice, colors),
+                        const SizedBox(width: 8),
+                        _buildActionButton(
+                          _isBlackoutMode ? Icons.visibility_off : Icons.visibility,
+                          tr('btn_privacy'),
+                          _toggleBlackout,
+                          colors,
+                          isActive: _isBlackoutMode,
                         ),
+                        const SizedBox(width: 8),
+                        _buildActionButton(
+                          _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
+                          _isFullScreen ? tr('exit_full_screen') : tr('full_screen'),
+                          _toggleFullScreen,
+                          colors,
+                        ),
+                        const Spacer(),
+                        _buildActionButton(Icons.close, tr('btn_disconnect'), () => Navigator.pop(context), colors, isDanger: true),
                       ],
                     ),
                   ),
                 ),
-                Positioned(
-                  top: 12,
-                  right: 12,
-                  child: IconButton(
-                    tooltip: _isFullScreen ? 'Exit Full Screen' : 'Full Screen',
-                    onPressed: _toggleFullScreen,
-                    icon: Icon(
-                      _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
-                      color: colors['text']!,
-                    ),
-                  ),
+                Container(
+                  color: colors['cardBg']!,
+                  margin: const EdgeInsets.only(top: 56),
+                  child: _isBlackoutMode
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.privacy_tip, size: 80, color: colors['accent']!),
+                              const SizedBox(height: 24),
+                              Text(
+                                tr('privacy_mode_active'),
+                                style: TextStyle(color: colors['text']!, fontSize: 18, fontWeight: FontWeight.w500),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                tr('screen_is_hidden'),
+                                style: TextStyle(color: colors['textSecondary']!, fontSize: 14),
+                              ),
+                            ],
+                          ),
+                        )
+                      : Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.device_hub,
+                                size: 80,
+                                color: colors['accent']!,
+                              ),
+                              const SizedBox(height: 24),
+                              Text(
+                                _isConnected ? tr('status_connected') : tr('status_disconnected'),
+                                style: TextStyle(
+                                  color: colors['text']!,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                _isFullScreen
+                                    ? tr('full_screen_mode')
+                                    : tr('remote_session_active'),
+                                style: TextStyle(
+                                  color: colors['textSecondary']!,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                 ),
               ],
             ),
@@ -229,11 +299,11 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
                   padding: const EdgeInsets.all(8),
                   child: Row(
                     children: [
-                      _buildTab('chat', 'Chat', Icons.chat_bubble_outline, colors),
+                      _buildTab('chat', tr('tab_chat'), Icons.chat_bubble_outline, colors),
                       const SizedBox(width: 4),
-                      _buildTab('transfer', 'Transfer', Icons.folder_outlined, colors),
+                      _buildTab('transfer', tr('tab_transfer'), Icons.folder_outlined, colors),
                       const SizedBox(width: 4),
-                      _buildTab('command', 'Command', Icons.terminal, colors),
+                      _buildTab('command', tr('tab_command'), Icons.terminal, colors),
                     ],
                   ),
                 ),
@@ -339,7 +409,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
                   onSubmitted: (_) => _sendMessage(),
                   style: TextStyle(color: colors['text']!),
                   decoration: InputDecoration(
-                    hintText: 'Message...',
+                    hintText: tr('chat_message_hint'),
                     hintStyle: TextStyle(color: colors['textSecondary']!),
                     border: InputBorder.none,
                     contentPadding: EdgeInsets.zero,
@@ -411,7 +481,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
                   onSubmitted: (_) => _sendMessage(),
                   style: TextStyle(color: colors['text']!),
                   decoration: InputDecoration(
-                    hintText: 'Write your command...',
+                    hintText: tr('command_hint'),
                     hintStyle: TextStyle(color: colors['textSecondary']!),
                     border: InputBorder.none,
                     contentPadding: EdgeInsets.zero,
@@ -446,14 +516,14 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
       children: [
         _buildFileButton(
           icon: Icons.cloud_upload_outlined,
-          label: 'Upload File',
+          label: tr('btn_upload_file'),
           onPressed: _handleUpload,
           colors: colors,
         ),
         const SizedBox(height: 12),
         _buildFileButton(
           icon: Icons.cloud_download_outlined,
-          label: 'Download File',
+          label: tr('btn_download_file'),
           onPressed: _handleDownload,
           colors: colors,
         ),
@@ -535,8 +605,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
         _chatMessages.add(value);
       } else if (_activeTab == 'command') {
         _commandResults.add('> $value');
-        // Simuler une réponse de commande
-        _commandResults.add('Command executed successfully');
+        _commandResults.add(tr('command_executed_success'));
       }
     });
     _composerController.clear();
@@ -546,24 +615,24 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     final result = await FilePicker.platform.pickFiles(allowMultiple: false);
     if (!mounted) return;
     if (result == null || result.files.isEmpty) {
-      _showMessage(context, 'Upload canceled.', _getColors(context));
+      _showMessage(context, tr('upload_canceled'), _getColors(context));
       return;
     }
     final fileName = result.files.single.name;
-    _showMessage(context, 'Selected for upload: $fileName', _getColors(context));
+    _showMessage(context, '${tr('selected_for_upload')}: $fileName', _getColors(context));
   }
 
   Future<void> _handleDownload() async {
     final outputPath = await FilePicker.platform.saveFile(
-      dialogTitle: 'Save downloaded file',
+      dialogTitle: tr('save_downloaded_file'),
       fileName: 'downloaded_file.txt',
     );
     if (!mounted) return;
     if (outputPath == null || outputPath.isEmpty) {
-      _showMessage(context, 'Download canceled.', _getColors(context));
+      _showMessage(context, tr('download_canceled'), _getColors(context));
       return;
     }
-    _showMessage(context, 'Download target selected: $outputPath', _getColors(context));
+    _showMessage(context, '${tr('download_target_selected')}: $outputPath', _getColors(context));
   }
 
   void _showMessage(BuildContext context, String message, Map<String, Color> colors) {
@@ -576,8 +645,79 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     );
   }
 
+  void _takeScreenshot() {
+    _showMessage(context, tr('screenshot_taken'), _getColors(context));
+  }
+
+  void _toggleRecording() {
+    setState(() => _isRecording = !_isRecording);
+    _showMessage(context, _isRecording ? tr('recording_started') : tr('recording_stopped'), _getColors(context));
+  }
+
+  void _toggleAudio() {
+    setState(() => _audioEnabled = !_audioEnabled);
+    _showMessage(context, _audioEnabled ? tr('audio_enabled') : tr('audio_disabled'), _getColors(context));
+  }
+
+  void _lockDevice() {
+    _showMessage(context, tr('device_locked'), _getColors(context));
+  }
+
+  void _rebootDevice() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(tr('confirm_reboot')),
+        content: Text(tr('reboot_warning')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(tr('btn_cancel')),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _showMessage(context, tr('device_rebooting'), _getColors(context));
+            },
+            child: Text(tr('btn_reboot')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _toggleBlackout() {
+    setState(() => _isBlackoutMode = !_isBlackoutMode);
+    _showMessage(context, _isBlackoutMode ? tr('privacy_mode_enabled') : tr('privacy_mode_disabled'), _getColors(context));
+  }
+
+  Widget _buildActionButton(IconData icon, String label, VoidCallback onTap, Map<String, Color> colors, {bool isActive = false, bool isDanger = false}) {
+    return Tooltip(
+      message: label,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: isDanger ? Colors.red[600] : (isActive ? colors['accent']! : colors['cardBg']!),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: isDanger ? Colors.red[700]! : colors['border']!),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: isDanger ? Colors.white : colors['text']!, size: 16),
+              const SizedBox(width: 4),
+              Text(label, style: TextStyle(color: isDanger ? Colors.white : colors['text']!, fontSize: 12, fontWeight: FontWeight.w500)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Map<String, Color> _getColors(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isDark = widget.isDarkMode;
     return {
       'bg': isDark ? const Color(0xFF1A1A1A) : const Color(0xFFF5F5F5),
       'cardBg': isDark ? const Color(0xFF2A2A2A) : Colors.white,
