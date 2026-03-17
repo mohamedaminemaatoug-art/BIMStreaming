@@ -1,0 +1,94 @@
+version: "3.9"
+
+services:
+  go-server:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    container_name: bim-go-server
+    env_file:
+      - ../../.env.example
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+      coturn:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  postgres:
+    image: postgres:16
+    container_name: bim-postgres
+    environment:
+      POSTGRES_DB: bimstream
+      POSTGRES_USER: bim
+      POSTGRES_PASSWORD: bim
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bim -d bimstream"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    container_name: bim-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: bim-keycloak
+    command: ["start-dev"]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - "8081:8080"
+
+  coturn:
+    image: instrumentisto/coturn
+    container_name: bim-coturn
+    command: ["-c", "/etc/coturn/turnserver.conf"]
+    volumes:
+      - ../coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    ports:
+      - "3478:3478"
+      - "3478:3478/udp"
+      - "49160-49200:49160-49200/udp"
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: bim-prometheus
+    volumes:
+      - ../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: bim-grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+volumes:
+  pgdata:

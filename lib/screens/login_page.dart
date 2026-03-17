@@ -147,6 +147,7 @@ class _LoginPageState extends State<LoginPage> {
   @override
   Widget build(BuildContext context) {
     final isDark = widget.isDarkMode;
+    const double formMaxWidth = 430;
     
     return Scaffold(
       backgroundColor: isDark ? Colors.grey[900] : Colors.grey[50],
@@ -193,92 +194,115 @@ class _LoginPageState extends State<LoginPage> {
               ),
               SizedBox(height: MediaQuery.of(context).size.height * 0.05),
               // User ID Input
-              TextField(
-                controller: _userIdController,
-                enabled: !_isLoading,
-                decoration: InputDecoration(
-                  labelText: widget.translate('id_field_hint'),
-                  hintText: widget.translate('id_field_hint'),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
+              Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: formMaxWidth),
+                  child: TextField(
+                    controller: _userIdController,
+                    enabled: !_isLoading,
+                    decoration: InputDecoration(
+                      labelText: widget.translate('id_field_hint'),
+                      hintText: widget.translate('id_field_hint'),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      filled: true,
+                      fillColor: isDark ? Colors.grey[800] : Colors.white,
+                      prefixIcon: const Icon(Icons.person),
+                    ),
                   ),
-                  filled: true,
-                  fillColor: isDark ? Colors.grey[800] : Colors.white,
-                  prefixIcon: const Icon(Icons.person),
                 ),
               ),
               const SizedBox(height: 16),
               // Password Input
-              TextField(
-                controller: _passwordController,
-                enabled: !_isLoading,
-                obscureText: !_showPassword,
-                decoration: InputDecoration(
-                  labelText: widget.translate('password_field_hint'),
-                  hintText: widget.translate('password_field_hint'),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  filled: true,
-                  fillColor: isDark ? Colors.grey[800] : Colors.white,
-                  prefixIcon: const Icon(Icons.lock),
-                  suffixIcon: IconButton(
-                    icon: Icon(
-                      _showPassword ? Icons.visibility : Icons.visibility_off,
+              Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: formMaxWidth),
+                  child: TextField(
+                    controller: _passwordController,
+                    enabled: !_isLoading,
+                    obscureText: !_showPassword,
+                    decoration: InputDecoration(
+                      labelText: widget.translate('password_field_hint'),
+                      hintText: widget.translate('password_field_hint'),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      filled: true,
+                      fillColor: isDark ? Colors.grey[800] : Colors.white,
+                      prefixIcon: const Icon(Icons.lock),
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                          _showPassword ? Icons.visibility : Icons.visibility_off,
+                        ),
+                        onPressed: () {
+                          setState(() {
+                            _showPassword = !_showPassword;
+                          });
+                        },
+                      ),
                     ),
-                    onPressed: () {
-                      setState(() {
-                        _showPassword = !_showPassword;
-                      });
-                    },
+                    onSubmitted: (_) => _handleLogin(),
                   ),
                 ),
-                onSubmitted: (_) => _handleLogin(),
               ),
               const SizedBox(height: 12),
               // Error Message
               if (_errorMessage != null)
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.red[100],
-                    border: Border.all(color: Colors.red[400]!),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    _errorMessage!,
-                    style: TextStyle(
-                      color: Colors.red[900],
-                      fontSize: 12,
+                Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: formMaxWidth),
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.red[100],
+                        border: Border.all(color: Colors.red[400]!),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        _errorMessage!,
+                        style: TextStyle(
+                          color: Colors.red[900],
+                          fontSize: 12,
+                        ),
+                      ),
                     ),
                   ),
                 ),
               const SizedBox(height: 24),
               // Login Button
-              ElevatedButton(
-                onPressed: _isLoading ? null : _handleLogin,
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  backgroundColor: Colors.blue[600],
-                  disabledBackgroundColor: Colors.grey[400],
-                ),
-                child: _isLoading
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation(Colors.white),
-                        ),
-                      )
-                    : Text(
-                        widget.translate('authenticate_btn'),
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
+              Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: formMaxWidth),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _isLoading ? null : _handleLogin,
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                        backgroundColor: Colors.blue[600],
+                        disabledBackgroundColor: Colors.grey[400],
                       ),
+                      child: _isLoading
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation(Colors.white),
+                              ),
+                            )
+                          : Text(
+                              widget.translate('authenticate_btn'),
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                    ),
+                  ),
+                ),
               ),
               const SizedBox(height: 16),
               // Demo Users Info Button

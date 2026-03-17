@@ -1,10 +1,12 @@
 import 'package:bim_streaming/models/user_model.dart';
+import 'package:bim_streaming/services/cloud_backend_service.dart';
 
 // Service d'authentification
 class AuthService {
   static final AuthService _instance = AuthService._internal();
   
   AuthSession? _currentSession;
+  final CloudBackendService _cloudBackend = CloudBackendService();
   
   // Base de données d'utilisateurs (à remplacer par une vraie BD)
   late final Map<String, User> _users;
@@ -20,21 +22,60 @@ class AuthService {
   // Initialiser les utilisateurs de test
   void _initializeUsers() {
     _users = {
+      'PADM001': User(
+        id: 'PADM001',
+        name: 'Admin Principal Demo',
+        password: '32d18f26',
+        role: UserRole.adminGlobal,
+      ),
+      'CADM001': User(
+        id: 'CADM001',
+        name: 'Country Admin France',
+        password: 'countryadmin',
+        role: UserRole.adminPays,
+        countryCode: 'FR',
+      ),
+      'ADM001': User(
+        id: 'ADM001',
+        name: 'Department Admin IT France',
+        password: 'admin123',
+        role: UserRole.adminDepartement,
+        countryCode: 'FR',
+        departmentCode: 'IT',
+      ),
+      'USR001': User(
+        id: 'USR001',
+        name: 'Marie Dupont',
+        password: 'pass123',
+        role: UserRole.client,
+      ),
+      'USR002': User(
+        id: 'USR002',
+        name: 'Jean Petit',
+        password: 'pass123',
+        role: UserRole.client,
+      ),
+      'USR003': User(
+        id: 'USR003',
+        name: 'Sophie Martin',
+        password: 'pass123',
+        role: UserRole.client,
+      ),
       'admin1': User(
-        id: 'admin1',
+        id: 'PADM001',
         name: 'Admin Principal',
         password: 'admin123',
         role: UserRole.adminGlobal,
       ),
       'admin_fr': User(
-        id: 'admin_fr',
+        id: 'CADM001',
         name: 'Admin France',
         password: 'france123',
         role: UserRole.adminPays,
         countryCode: 'FR',
       ),
       'admin_de_fr': User(
-        id: 'admin_de_fr',
+        id: 'ADM001',
         name: 'Admin IT France',
         password: 'it_france123',
         role: UserRole.adminDepartement,
@@ -42,7 +83,7 @@ class AuthService {
         departmentCode: 'IT',
       ),
       'client1': User(
-        id: 'client1',
+        id: 'USR001',
         name: 'Client Standard',
         password: 'client123',
         role: UserRole.client,
@@ -68,6 +109,23 @@ class AuthService {
   // Authentifier un utilisateur
   Future<AuthResult> login(String userId, String password) async {
     try {
+      if (CloudBackendConfig.isConfigured) {
+        final cloudResult = await _cloudBackend.login(userId, password);
+        if (cloudResult.success && cloudResult.user != null) {
+          _currentSession = AuthSession(
+            user: cloudResult.user!,
+            token: cloudResult.token ?? _generateToken(cloudResult.user!.id),
+            loginTime: DateTime.now(),
+          );
+
+          return AuthResult(
+            success: true,
+            message: cloudResult.message,
+            user: _currentSession!.user,
+          );
+        }
+      }
+
       // Simuler un délai réseau
       await Future.delayed(const Duration(milliseconds: 500));
 
@@ -113,6 +171,7 @@ class AuthService {
 
   // Logout
   void logout() {
+    _cloudBackend.logout();
     _currentSession = null;
   }
 
@@ -124,6 +183,38 @@ class AuthService {
 
   // Obtenir l'utilisateur actuel
   User? get currentUser => _currentSession?.user;
+
+  bool get isCloudModeEnabled => CloudBackendConfig.isConfigured;
+
+  bool get isCloudAuthenticated => _cloudBackend.isAuthenticated;
+
+  Future<RemoteSessionResult> createRemoteSessionByAccount({
+    required String targetAccountId,
+    required String sessionPassword,
+  }) async {
+    if (!CloudBackendConfig.hasApi) {
+      return const RemoteSessionResult(
+        success: false,
+        message: 'Cloud mode is not configured. Set BIM_API_BASE_URL.',
+      );
+    }
+
+    final result = await _cloudBackend.createSession(
+      targetAccountId: targetAccountId,
+      sessionPassword: sessionPassword,
+    );
+
+    return RemoteSessionResult(
+      success: result.success,
+      message: result.message,
+      sessionId: result.sessionId,
+      sessionCode: result.sessionCode,
+    );
+  }
+
+  CloudSignalChannel? openCloudSignalChannel(String sessionId) {
+    return _cloudBackend.openSignalChannel(sessionId);
+  }
 
   // Générer un token (simplifié pour la démo)
   String _generateToken(String userId) {
@@ -244,6 +335,20 @@ class AuthResult {
     required this.message,
     this.user,
     this.errorCode,
+  });
+}
+
+class RemoteSessionResult {
+  final bool success;
+  final String message;
+  final String? sessionId;
+  final String? sessionCode;
+
+  const RemoteSessionResult({
+    required this.success,
+    required this.message,
+    this.sessionId,
+    this.sessionCode,
   });
 }
 

@@ -1,11 +1,18 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io' as io;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:window_manager/window_manager.dart';
+import '../services/signaling_client_service.dart';
 
 class RemoteSupportPage extends StatefulWidget {
   final String deviceName;
   final String deviceId;
+  final String? sessionId;
+  final String? currentUserId;
+  final SignalingClientService? signalingService;
   final bool isDarkMode;
   final String Function(String) translate;
 
@@ -13,6 +20,9 @@ class RemoteSupportPage extends StatefulWidget {
     super.key,
     required this.deviceName,
     required this.deviceId,
+    this.sessionId,
+    this.currentUserId,
+    this.signalingService,
     required this.isDarkMode,
     required this.translate,
   });
@@ -31,11 +41,22 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   bool _isRecording = false;
   bool _audioEnabled = true;
   bool _isBlackoutMode = false;
-  String? _activeTab;
+  bool _isDeviceLocked = false;
+  bool _isRebooting = false;
+  bool _isScreenSharing = false;
+  bool _isCapturing = false;
+  int _framesSent = 0;
+  int _framesReceived = 0;
+  String _captureError = '';
+  String _activeTab = 'chat';
   final TextEditingController _composerController = TextEditingController();
   final List<String> _chatMessages = [];
   final List<String> _commandResults = [];
+  final List<Map<String, String>> _transfers = [];
+  Uint8List? _remoteScreenFrame;
   Timer? _sessionTimer;
+  Timer? _screenShareTimer;
+  StreamSubscription<SignalEvent>? _signalSubscription;
   int _sessionSeconds = 0;
 
   String tr(String key) => widget.translate(key);
@@ -45,6 +66,124 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     super.initState();
     _syncFullScreenState();
     _startSessionTimer();
+    _connectSessionSignalIfAvailable();
+    _startAutomaticScreenShareIfPossible();
+  }
+
+  bool get _canSignal =>
+      widget.signalingService != null &&
+      (widget.currentUserId ?? '').isNotEmpty;
+
+  void _connectSessionSignalIfAvailable() {
+    if (!_canSignal) return;
+    _signalSubscription = widget.signalingService!.events.listen(_handleSignalEvent);
+  }
+
+  void _startAutomaticScreenShareIfPossible() {
+    if (widget.signalingService == null || !_isConnected) return;
+    _isScreenSharing = true;
+    _screenShareTimer?.cancel();
+    _screenShareTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      _sendScreenFrame();
+    });
+    _sendScreenFrame();
+  }
+
+  void _handleSignalEvent(SignalEvent event) {
+    if (!mounted || event.type != 'session_message') return;
+
+    final rawData = event.data['data'];
+    if (rawData is! Map) return;
+
+    final data = Map<String, dynamic>.from(rawData as Map);
+    final messageSessionId = (data['sessionId'] ?? data['session_id'] ?? '').toString();
+    final expectedSessionId = (widget.sessionId ?? '').toString();
+    if (expectedSessionId.isNotEmpty && messageSessionId.isNotEmpty && messageSessionId != expectedSessionId) {
+      return;
+    }
+
+    final fromUserId = (data['fromUserId'] ?? data['from'] ?? '').toString();
+    if (fromUserId.isEmpty || fromUserId == widget.currentUserId) {
+      return;
+    }
+
+    final messageType = (data['messageType'] ?? '').toString();
+    final payload = data['payload'] is Map
+        ? Map<String, dynamic>.from(data['payload'] as Map)
+        : <String, dynamic>{};
+
+    print('[RemoteSupportPage] Received $messageType from $fromUserId: $payload');
+
+    setState(() {
+      switch (messageType) {
+        case 'chat':
+          final text = (payload['text'] ?? '').toString();
+          if (text.isNotEmpty) {
+            print('[Chat] Added from peer: $text');
+            _chatMessages.add('${widget.deviceName}: $text');
+          }
+          break;
+        case 'command':
+          final cmd = (payload['command'] ?? '').toString();
+          final result = (payload['result'] ?? '').toString();
+          if (cmd.isNotEmpty) {
+            _commandResults.add('[${widget.deviceName}] $cmd');
+            _commandResults.add(
+              result.isNotEmpty
+                  ? result
+                  : '[${widget.deviceName}] ${tr('command_executed_success')}',
+            );
+          }
+          break;
+        case 'upload':
+          final fileName = (payload['fileName'] ?? '').toString();
+          final fileData = (payload['fileData'] ?? '').toString();
+          final rawSize = payload['fileSize'];
+          final fileSize = rawSize is int ? rawSize : (rawSize is double ? rawSize.toInt() : 0);
+          if (fileName.isNotEmpty) {
+            _transfers.add({
+              'type': 'received',
+              'fileName': fileName,
+              'from': fromUserId,
+              'fileData': fileData,
+              'fileSize': fileSize > 0
+                  ? '${(fileSize / 1024).toStringAsFixed(1)} KB'
+                  : '',
+            });
+          }
+          break;
+        case 'screen_frame':
+          final frameData = (payload['frameData'] ?? '').toString();
+          if (frameData.isNotEmpty) {
+            try {
+              _remoteScreenFrame = base64Decode(frameData);
+              _framesReceived++;
+              print('[ScreenShare] Frame received #$_framesReceived (${frameData.length} chars b64) from $fromUserId');
+            } catch (e) {
+              print('[ScreenShare] Decode error: $e');
+              _remoteScreenFrame = null;
+            }
+          }
+          break;
+      }
+    });
+  }
+
+  void _sendSessionPayload({
+    required String messageType,
+    required Map<String, dynamic> payload,
+  }) {
+    if (!_canSignal) {
+      print('[RemoteSupportPage] Cannot signal: signalingService=${widget.signalingService}, userId=${widget.currentUserId}, sessionId=${widget.sessionId}');
+      return;
+    }
+    print('[RemoteSupportPage] Sending $messageType to ${widget.deviceId} via session ${widget.sessionId}');
+    widget.signalingService!.sendSessionMessage(
+      sessionId: (widget.sessionId ?? '').toString(),
+      toUserId: widget.deviceId,
+      messageType: messageType,
+      payload: payload,
+    );
   }
 
   void _startSessionTimer() {
@@ -84,6 +223,8 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   @override
   void dispose() {
     _sessionTimer?.cancel();
+    _screenShareTimer?.cancel();
+    _signalSubscription?.cancel();
     _composerController.dispose();
     super.dispose();
   }
@@ -160,15 +301,6 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
               ),
             ),
           ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-            ),
-            child: Text(tr('btn_disconnect'), style: const TextStyle(color: Colors.white, fontSize: 12)),
-          ),
-          const SizedBox(width: 16),
         ],
       ),
       body: Row(
@@ -188,7 +320,13 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     child: Row(
                       children: [
-                        _buildActionButton(Icons.screenshot_monitor, tr('btn_screenshot'), _takeScreenshot, colors),
+                        _buildActionButton(
+                          Icons.screenshot_monitor,
+                          tr('btn_screenshot'),
+                          () => _takeScreenshot(),
+                          colors,
+                          enabled: _isConnected,
+                        ),
                         const SizedBox(width: 8),
                         _buildActionButton(
                           _isRecording ? Icons.stop_circle : Icons.fiber_manual_record,
@@ -196,6 +334,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
                           _toggleRecording,
                           colors,
                           isActive: _isRecording,
+                          enabled: _isConnected,
                         ),
                         const SizedBox(width: 8),
                         _buildActionButton(
@@ -204,11 +343,26 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
                           _toggleAudio,
                           colors,
                           isActive: _audioEnabled,
+                          enabled: _isConnected,
                         ),
                         const SizedBox(width: 8),
-                        _buildActionButton(Icons.lock, tr('btn_lock'), _lockDevice, colors),
+                        _buildActionButton(
+                          _isDeviceLocked ? Icons.lock_open : Icons.lock,
+                          tr('btn_lock'),
+                          _lockDevice,
+                          colors,
+                          isActive: _isDeviceLocked,
+                          enabled: _isConnected && !_isRebooting,
+                        ),
                         const SizedBox(width: 8),
-                        _buildActionButton(Icons.restart_alt, tr('btn_reboot'), _rebootDevice, colors),
+                        _buildActionButton(
+                          Icons.restart_alt,
+                          tr('btn_reboot'),
+                          _rebootDevice,
+                          colors,
+                          isActive: _isRebooting,
+                          enabled: _isConnected && !_isRebooting,
+                        ),
                         const SizedBox(width: 8),
                         _buildActionButton(
                           _isBlackoutMode ? Icons.visibility_off : Icons.visibility,
@@ -216,6 +370,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
                           _toggleBlackout,
                           colors,
                           isActive: _isBlackoutMode,
+                          enabled: _isConnected,
                         ),
                         const SizedBox(width: 8),
                         _buildActionButton(
@@ -252,6 +407,20 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
                             ],
                           ),
                         )
+                      : _remoteScreenFrame != null
+                          ? Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(12),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: Image.memory(
+                                    _remoteScreenFrame!,
+                                    fit: BoxFit.contain,
+                                    gaplessPlayback: true,
+                                  ),
+                                ),
+                              ),
+                            )
                       : Center(
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
@@ -278,6 +447,40 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
                                 style: TextStyle(
                                   color: colors['textSecondary']!,
                                   fontSize: 14,
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              // Diagnostic screen share
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: Colors.black26,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Column(
+                                  children: [
+                                    Text(
+                                      '📤 Envoyées: $_framesSent  📥 Reçues: $_framesReceived',
+                                      style: const TextStyle(color: Colors.white70, fontSize: 12),
+                                    ),
+                                    if (_captureError.isNotEmpty)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 4),
+                                        child: Text(
+                                          '⚠ $_captureError',
+                                          style: const TextStyle(color: Colors.redAccent, fontSize: 11),
+                                          textAlign: TextAlign.center,
+                                        ),
+                                      ),
+                                    if (_isScreenSharing && _captureError.isEmpty)
+                                      const Padding(
+                                        padding: EdgeInsets.only(top: 4),
+                                        child: Text(
+                                          '⏳ En attente du flux distant...',
+                                          style: TextStyle(color: Colors.amber, fontSize: 11),
+                                        ),
+                                      ),
+                                  ],
                                 ),
                               ),
                             ],
@@ -514,20 +717,101 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        Expanded(
+          child: Container(
+            decoration: BoxDecoration(
+              color: colors['bg']!,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: colors['border']!),
+            ),
+            padding: const EdgeInsets.all(12),
+            child: ListView.builder(
+              itemCount: _transfers.length,
+              itemBuilder: (context, index) {
+                return _buildTransferItem(_transfers[index], colors);
+              },
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
         _buildFileButton(
           icon: Icons.cloud_upload_outlined,
           label: tr('btn_upload_file'),
           onPressed: _handleUpload,
           colors: colors,
         ),
-        const SizedBox(height: 12),
-        _buildFileButton(
-          icon: Icons.cloud_download_outlined,
-          label: tr('btn_download_file'),
-          onPressed: _handleDownload,
-          colors: colors,
-        ),
       ],
+    );
+  }
+
+  Widget _buildTransferItem(
+    Map<String, String> transfer,
+    Map<String, Color> colors,
+  ) {
+    final type = transfer['type'] ?? 'sent';
+    final fileName = transfer['fileName'] ?? '';
+    final from = transfer['from'] ?? '';
+    final fileSize = transfer['fileSize'] ?? '';
+    final isReceived = type == 'received';
+    final icon = isReceived ? Icons.get_app : Icons.upload_file;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: isReceived ? colors['bg']! : colors['cardBg']!,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: isReceived ? colors['accent']! : colors['border']!,
+            width: isReceived ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: colors['accent'], size: 16),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    fileName,
+                    style: TextStyle(
+                      color: colors['text'],
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Text(
+                    isReceived
+                        ? 'Reçu de: $from${fileSize.isNotEmpty ? '  •  $fileSize' : ''}'
+                        : 'Envoyé${fileSize.isNotEmpty ? '  •  $fileSize' : ''}',
+                    style: TextStyle(color: colors['textSecondary'], fontSize: 10),
+                  ),
+                ],
+              ),
+            ),
+            if (isReceived)
+              Tooltip(
+                message: 'Sauvegarder sur disque',
+                child: InkWell(
+                  onTap: () => _saveReceivedFile(transfer),
+                  borderRadius: BorderRadius.circular(6),
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: colors['accent']!,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Icon(Icons.save_alt, color: Colors.white, size: 14),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -581,7 +865,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   }
 
   Widget _buildCommandLine(String line, Map<String, Color> colors) {
-    final isCommand = line.startsWith('>');
+    final isCommand = line.contains('> ');
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: Text(
@@ -600,39 +884,90 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     final value = _composerController.text.trim();
     if (value.isEmpty) return;
     
+    print('[RemoteSupportPage] Sending $value via tab=$_activeTab');
+    
     setState(() {
       if (_activeTab == 'chat') {
-        _chatMessages.add(value);
+        _chatMessages.add('You: $value');
+        _sendSessionPayload(
+          messageType: 'chat',
+          payload: {'text': value},
+        );
       } else if (_activeTab == 'command') {
         _commandResults.add('> $value');
-        _commandResults.add(tr('command_executed_success'));
+        _commandResults.add('[Local] ${tr('command_executed_success')}');
+        _sendSessionPayload(
+          messageType: 'command',
+          payload: {'command': value},
+        );
       }
     });
     _composerController.clear();
   }
 
   Future<void> _handleUpload() async {
-    final result = await FilePicker.platform.pickFiles(allowMultiple: false);
+    final result = await FilePicker.platform.pickFiles(
+      allowMultiple: false,
+      withData: true,
+    );
     if (!mounted) return;
     if (result == null || result.files.isEmpty) {
       _showMessage(context, tr('upload_canceled'), _getColors(context));
       return;
     }
-    final fileName = result.files.single.name;
+    final file = result.files.single;
+    final bytes = file.bytes;
+    if (bytes == null) {
+      _showMessage(context, tr('upload_canceled'), _getColors(context));
+      return;
+    }
+    const maxSize = 8 * 1024 * 1024; // 8 MB
+    if (bytes.length > maxSize) {
+      _showMessage(context, 'Fichier trop grand (max 8 MB)', _getColors(context));
+      return;
+    }
+    final fileName = file.name;
+    final base64Data = base64Encode(bytes);
+    _sendSessionPayload(
+      messageType: 'upload',
+      payload: {
+        'fileName': fileName,
+        'fileSize': bytes.length,
+        'fileData': base64Data,
+      },
+    );
+    setState(() {
+      _transfers.add({
+        'type': 'sent',
+        'fileName': fileName,
+        'from': 'You',
+        'fileSize': '${(bytes.length / 1024).toStringAsFixed(1)} KB',
+        'fileData': '',
+      });
+    });
     _showMessage(context, '${tr('selected_for_upload')}: $fileName', _getColors(context));
   }
 
-  Future<void> _handleDownload() async {
-    final outputPath = await FilePicker.platform.saveFile(
-      dialogTitle: tr('save_downloaded_file'),
-      fileName: 'downloaded_file.txt',
-    );
-    if (!mounted) return;
-    if (outputPath == null || outputPath.isEmpty) {
-      _showMessage(context, tr('download_canceled'), _getColors(context));
+  Future<void> _saveReceivedFile(Map<String, String> transfer) async {
+    final fileData = transfer['fileData'] ?? '';
+    if (fileData.isEmpty) {
+      _showMessage(context, 'Aucune donnée disponible', _getColors(context));
       return;
     }
-    _showMessage(context, '${tr('download_target_selected')}: $outputPath', _getColors(context));
+    final outputPath = await FilePicker.platform.saveFile(
+      dialogTitle: tr('save_downloaded_file'),
+      fileName: transfer['fileName'] ?? 'fichier_recu',
+    );
+    if (!mounted || outputPath == null || outputPath.isEmpty) return;
+    try {
+      final bytes = base64Decode(fileData);
+      await io.File(outputPath).writeAsBytes(bytes);
+      if (!mounted) return;
+      _showMessage(context, 'Fichier sauvegardé: $outputPath', _getColors(context));
+    } catch (e) {
+      if (!mounted) return;
+      _showMessage(context, 'Erreur sauvegarde: $e', _getColors(context));
+    }
   }
 
   void _showMessage(BuildContext context, String message, Map<String, Color> colors) {
@@ -645,25 +980,187 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     );
   }
 
-  void _takeScreenshot() {
-    _showMessage(context, tr('screenshot_taken'), _getColors(context));
+  Future<void> _takeScreenshot() async {
+    if (!_isConnected) return;
+
+    final fileName = 'screenshot_${DateTime.now().millisecondsSinceEpoch}.png';
+    final outputPath = await FilePicker.platform.saveFile(
+      dialogTitle: tr('save_screenshot_file'),
+      fileName: fileName,
+      type: FileType.custom,
+      allowedExtensions: const ['png'],
+    );
+
+    if (!mounted) return;
+
+    if (outputPath == null || outputPath.isEmpty) {
+      _showMessage(context, tr('screenshot_save_canceled'), _getColors(context));
+      return;
+    }
+
+    final saved = await _captureLocalScreenToPath(outputPath);
+    if (!mounted) return;
+
+    if (saved) {
+      final time = DateTime.now().toIso8601String();
+      setState(() {
+        _commandResults.add('> screenshot --capture');
+        _commandResults.add('[$time] ${tr('screenshot_taken')}');
+      });
+      _sendSessionPayload(
+        messageType: 'command',
+        payload: {
+          'command': '> screenshot --capture',
+          'result': '[$time] Screenshot pris par ${widget.currentUserId ?? widget.deviceId}',
+        },
+      );
+      _showMessage(
+        context,
+        '${tr('screenshot_saved_to')}: $outputPath',
+        _getColors(context),
+      );
+      return;
+    }
+
+    _showMessage(context, tr('screenshot_failed'), _getColors(context));
+  }
+
+  Future<void> _sendScreenFrame() async {
+    if (!_canSignal || !_isScreenSharing || _isCapturing) return;
+    _isCapturing = true;
+    try {
+      print('[ScreenShare] Capturing... canSignal=$_canSignal toUser=${widget.deviceId}');
+      final bytes = await _captureLocalScreenToJpegBytes();
+      if (!mounted) return;
+      if (bytes == null || bytes.isEmpty) {
+        print('[ScreenShare] Capture returned null/empty');
+        if (mounted) setState(() => _captureError = 'capture null');
+        return;
+      }
+      const maxFrameBytes = 2 * 1024 * 1024;
+      if (bytes.length > maxFrameBytes) {
+        print('[ScreenShare] Frame too large: ${bytes.length} bytes');
+        if (mounted) setState(() => _captureError = 'too large: ${bytes.length}');
+        return;
+      }
+      final b64 = base64Encode(bytes);
+      _sendSessionPayload(
+        messageType: 'screen_frame',
+        payload: {'frameData': b64},
+      );
+      if (mounted) setState(() { _framesSent++; _captureError = ''; });
+      print('[ScreenShare] Sent frame #$_framesSent (${bytes.length} bytes)');
+    } finally {
+      _isCapturing = false;
+    }
+  }
+
+  Future<Uint8List?> _captureLocalScreenToJpegBytes() async {
+    if (!io.Platform.isWindows) return null;
+
+    final tmpDir = await io.Directory.systemTemp.createTemp('bim-share-');
+    final outputPath = '${tmpDir.path}\\frame.jpg';
+    final scriptPath = '${tmpDir.path}\\capture.ps1';
+    final escapedOutput = outputPath.replaceAll("'", "''");
+
+    // Script écrit dans un fichier (.ps1) pour éviter tout problème d'encodage en ligne de commande
+    final scriptContent = r'''Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+$b=[System.Windows.Forms.SystemInformation]::VirtualScreen
+$src=New-Object System.Drawing.Bitmap $b.Width,$b.Height
+$g=[System.Drawing.Graphics]::FromImage($src)
+$g.CopyFromScreen($b.Left,$b.Top,0,0,$src.Size)
+$tw=if($src.Width -gt 1280){1280}else{$src.Width}
+$th=[int]($src.Height*($tw/[double]$src.Width))
+$sc=New-Object System.Drawing.Bitmap $tw,$th
+$g2=[System.Drawing.Graphics]::FromImage($sc)
+$g2.InterpolationMode=[System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+$g2.DrawImage($src,0,0,$tw,$th)
+$sc.Save('OUTPUT_PATH',[System.Drawing.Imaging.ImageFormat]::Jpeg)
+$g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
+'''.replaceAll('OUTPUT_PATH', escapedOutput);
+
+    await io.File(scriptPath).writeAsString(scriptContent);
+
+    try {
+      final result = await io.Process.run(
+        'powershell',
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
+      );
+      if (result.exitCode != 0) {
+        final err = '${result.stderr}'.trim();
+        print('[ScreenShare] PS1 failed (exit=${result.exitCode}): $err');
+        if (mounted) setState(() => _captureError = 'PS1 exit=${result.exitCode}: ${err.substring(0, err.length.clamp(0, 80))}');
+        return null;
+      }
+      final file = io.File(outputPath);
+      if (!file.existsSync()) {
+        print('[ScreenShare] Output JPEG not found: $outputPath');
+        if (mounted) setState(() => _captureError = 'file not found');
+        return null;
+      }
+      return await file.readAsBytes();
+    } catch (e) {
+      print('[ScreenShare] Exception: $e');
+      if (mounted) setState(() => _captureError = e.toString());
+      return null;
+    } finally {
+      try { tmpDir.deleteSync(recursive: true); } catch (_) {}
+    }
+  }
+
+  Future<bool> _captureLocalScreenToPath(String outputPath) async {
+    if (!io.Platform.isWindows) {
+      return false;
+    }
+
+    final escapedPath = outputPath.replaceAll("'", "''");
+    final script = r'''
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+$bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+$graphics.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $bitmap.Size)
+$bitmap.Save('__OUTPUT_PATH__', [System.Drawing.Imaging.ImageFormat]::Png)
+$graphics.Dispose()
+$bitmap.Dispose()
+'''.replaceAll('__OUTPUT_PATH__', escapedPath);
+
+    try {
+      final result = await io.Process.run(
+        'powershell',
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+      );
+      return result.exitCode == 0 && io.File(outputPath).existsSync();
+    } catch (_) {
+      return false;
+    }
   }
 
   void _toggleRecording() {
+    if (!_isConnected) return;
     setState(() => _isRecording = !_isRecording);
     _showMessage(context, _isRecording ? tr('recording_started') : tr('recording_stopped'), _getColors(context));
   }
 
   void _toggleAudio() {
+    if (!_isConnected) return;
     setState(() => _audioEnabled = !_audioEnabled);
     _showMessage(context, _audioEnabled ? tr('audio_enabled') : tr('audio_disabled'), _getColors(context));
   }
 
   void _lockDevice() {
-    _showMessage(context, tr('device_locked'), _getColors(context));
+    if (!_isConnected || _isRebooting) return;
+    setState(() => _isDeviceLocked = !_isDeviceLocked);
+    _showMessage(
+      context,
+      _isDeviceLocked ? tr('device_locked') : 'Device unlocked',
+      _getColors(context),
+    );
   }
 
   void _rebootDevice() {
+    if (!_isConnected || _isRebooting) return;
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -677,7 +1174,15 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
           TextButton(
             onPressed: () {
               Navigator.pop(ctx);
+              setState(() => _isRebooting = true);
               _showMessage(context, tr('device_rebooting'), _getColors(context));
+              Future.delayed(const Duration(seconds: 3), () {
+                if (!mounted) return;
+                setState(() {
+                  _isRebooting = false;
+                  _isDeviceLocked = false;
+                });
+              });
             },
             child: Text(tr('btn_reboot')),
           ),
@@ -687,28 +1192,39 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   }
 
   void _toggleBlackout() {
+    if (!_isConnected) return;
     setState(() => _isBlackoutMode = !_isBlackoutMode);
     _showMessage(context, _isBlackoutMode ? tr('privacy_mode_enabled') : tr('privacy_mode_disabled'), _getColors(context));
   }
 
-  Widget _buildActionButton(IconData icon, String label, VoidCallback onTap, Map<String, Color> colors, {bool isActive = false, bool isDanger = false}) {
+  Widget _buildActionButton(IconData icon, String label, VoidCallback onTap, Map<String, Color> colors, {bool isActive = false, bool isDanger = false, bool enabled = true}) {
+    final bgColor = !enabled
+        ? colors['cardBg']!
+        : (isDanger ? Colors.red[600] : (isActive ? colors['accent']! : colors['cardBg']!));
+    final borderColor = !enabled
+        ? colors['border']!
+        : (isDanger ? Colors.red[700]! : colors['border']!);
+    final fgColor = !enabled
+        ? colors['textSecondary']!
+        : (isDanger ? Colors.white : (isActive ? Colors.white : colors['text']!));
+
     return Tooltip(
       message: label,
       child: InkWell(
-        onTap: onTap,
+        onTap: enabled ? onTap : null,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color: isDanger ? Colors.red[600] : (isActive ? colors['accent']! : colors['cardBg']!),
+            color: bgColor,
             borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: isDanger ? Colors.red[700]! : colors['border']!),
+            border: Border.all(color: borderColor),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, color: isDanger ? Colors.white : colors['text']!, size: 16),
+              Icon(icon, color: fgColor, size: 16),
               const SizedBox(width: 4),
-              Text(label, style: TextStyle(color: isDanger ? Colors.white : colors['text']!, fontSize: 12, fontWeight: FontWeight.w500)),
+              Text(label, style: TextStyle(color: fgColor, fontSize: 12, fontWeight: FontWeight.w500)),
             ],
           ),
         ),

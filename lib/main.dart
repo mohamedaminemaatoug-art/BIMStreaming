@@ -1,5 +1,6 @@
 import 'dart:io' as io;
 import 'dart:math';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -9,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:bim_streaming/models/user_model.dart';
 import 'package:bim_streaming/services/auth_service.dart';
+import 'package:bim_streaming/services/signaling_client_service.dart';
 import 'package:bim_streaming/screens/login_page.dart';
 import 'package:bim_streaming/screens/user_profile_page.dart';
 import 'package:bim_streaming/screens/remote_support_page.dart';
@@ -39,7 +41,10 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
   // Authentication
   User? _currentAuthenticatedUser;
   final AuthService _authService = AuthService();
+  final SignalingClientService _signalingService = SignalingClientService();
+  StreamSubscription<SignalEvent>? _signalSubscription;
   bool _isAuthenticated = false;
+  bool _isSignalConnected = false;
   bool _showDemoUsers = false;
   
   bool _showAddDialog = false;
@@ -171,16 +176,13 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
   }
 
   void _initializeGuestUser() {
-    // Create a guest user and authenticate automatically
-    _currentAuthenticatedUser = User(
-      id: 'GUEST',
-      name: 'Guest',
-      password: '',
-      role: UserRole.client,
-    );
-    _isAuthenticated = true;
+    // Start in unauthenticated mode so LoginPage is shown first.
+    _currentAuthenticatedUser = null;
+    _isAuthenticated = false;
     _userRole = _roleUser;
-    _currentUserId = 'GUEST';
+    _currentUserId = '';
+    _currentUserDept = 'IT Département';
+    _currentUserCountry = '🇫🇷 France';
   }
 
   Future<void> _loadPreferences() async {
@@ -658,6 +660,7 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
       setState(() {
         _currentAuthenticatedUser = result.user;
         _isAuthenticated = true;
+        _pageIndex = 0;
         _userRole = _mapUserRoleToString(result.user!.role);
         _currentUserId = result.user!.id;
         if (result.user!.countryCode != null && _countryCodeToName.containsKey(result.user!.countryCode)) {
@@ -670,6 +673,7 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
       _showStubMessage(result.message);
       _authIdController.clear();
       _authPasswordController.clear();
+      _connectSignalingForCurrentUser();
     } else {
       _showStubMessage(result.message);
     }
@@ -1291,12 +1295,62 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
   AppColors get c => _themeMode == ThemeModeType.dark ? AppColors.dark : AppColors.light;
   Map<String, String> get t => _translations[_lang]!;
 
-  void _openSupportSession() {
+  Future<bool> _openSupportSession() async {
+    final targetAccountId = _idController.text.trim();
+    if (targetAccountId.isEmpty) {
+      _showStubMessage(t['remote_account_required']!);
+      return false;
+    }
+
+    return _requestConnectionToUser(
+      targetId: targetAccountId,
+      targetName: targetAccountId,
+    );
+  }
+
+  Future<bool> _requestConnectionToUser({
+    required String targetId,
+    required String targetName,
+  }) async {
+    if (_currentUserId.isEmpty) {
+      _showStubMessage(t['auth_fill_all_fields']!);
+      return false;
+    }
+    if (!_isSignalConnected) {
+      _showStubMessage(t['signaling_offline']!);
+      return false;
+    }
+
+    final result = await _signalingService.requestSession(
+      fromUserId: _currentUserId,
+      fromName: _currentAuthenticatedUser?.name ?? _currentUserId,
+      toUserId: targetId,
+    );
+
+    if (!mounted) return false;
+
+    if (result['success'] != true) {
+      _showStubMessage((result['message'] ?? t['request_failed']!).toString());
+      return false;
+    }
+
+    _showStubMessage(t['connection_request_sent']!.replaceAll('{name}', targetName));
+    return true;
+  }
+
+  void _openSupportPageForPeer({
+    required String peerId,
+    required String peerName,
+    String? sessionId,
+  }) {
     _navigatorKey.currentState?.push(
       MaterialPageRoute(
         builder: (context) => RemoteSupportPage(
-          deviceName: _selectedConnection == 'Recent Connections...' ? 'Device' : _selectedConnection,
-          deviceId: _idController.text.isEmpty ? 'RID-${DateTime.now().millisecondsSinceEpoch}' : _idController.text,
+          deviceName: peerName,
+          deviceId: peerId,
+          sessionId: sessionId,
+          currentUserId: _currentUserId,
+          signalingService: _signalingService,
           isDarkMode: _themeMode == ThemeModeType.dark,
           translate: (key) => t[key] ?? key,
         ),
@@ -1315,34 +1369,7 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
       return;
     }
 
-    final isGuestOrStandardUser = _userRole == _roleUser;
-    if (isGuestOrStandardUser) {
-      final waitingText = t['waiting_other_user_accept']!.replaceAll('{name}', targetName);
-      final navigatorContext = _navigatorKey.currentContext;
-      if (navigatorContext == null) {
-        _showStubMessage(waitingText);
-        return;
-      }
-      await showDialog<void>(
-        context: navigatorContext,
-        useRootNavigator: true,
-        barrierDismissible: false,
-        builder: (dialogContext) => AlertDialog(
-          title: Text(t['connection_request_title']!),
-          content: Text(waitingText),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: Text(t['btn_ok']!),
-            ),
-          ],
-        ),
-      );
-      return;
-    }
-
-    _openSupportSession();
-    _showStubMessage(t['connecting_to_user']!.replaceAll('{name}', targetName));
+    await _requestConnectionToUser(targetId: targetId, targetName: targetName);
   }
 
   void _sendMessage() {
@@ -1367,8 +1394,95 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
     _scaffoldMessengerKey.currentState?.showSnackBar(SnackBar(content: Text(text)));
   }
 
+  Future<void> _connectSignalingForCurrentUser() async {
+    if (_currentUserId.trim().isEmpty) {
+      return;
+    }
+
+    await _signalSubscription?.cancel();
+    final connected = await _signalingService.connect(userId: _currentUserId);
+    if (!mounted) return;
+
+    setState(() => _isSignalConnected = connected);
+    if (!connected) {
+      _showStubMessage(t['signaling_offline']!);
+      return;
+    }
+
+    _signalSubscription = _signalingService.events.listen(_handleSignalEvent);
+  }
+
+  Future<void> _handleSignalEvent(SignalEvent event) async {
+    if (!mounted) return;
+
+    if (event.type == 'connection_request') {
+      final sessionId = (event.data['session_id'] ?? '').toString();
+      final fromUserId = (event.data['from'] ?? '').toString();
+      final payload = event.data['payload'] is Map<String, dynamic>
+          ? Map<String, dynamic>.from(event.data['payload'] as Map<String, dynamic>)
+          : <String, dynamic>{};
+      final fromName = (payload['from_name'] ?? fromUserId).toString();
+      if (sessionId.isEmpty || fromUserId.isEmpty) return;
+
+      final dialogContext = _navigatorKey.currentContext;
+      if (dialogContext == null) return;
+
+      final accepted = await showDialog<bool>(
+        context: dialogContext,
+        useRootNavigator: true,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: Text(t['connection_request_title']!),
+          content: Text(t['incoming_connection_request']!.replaceAll('{name}', fromName)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: Text(t['btn_reject']!),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: Text(t['btn_accept']!),
+            ),
+          ],
+        ),
+      );
+
+      if (accepted == null) return;
+
+      await _signalingService.respondSession(
+        sessionId: sessionId,
+        fromUserId: _currentUserId,
+        toUserId: fromUserId,
+        accepted: accepted,
+      );
+
+      if (accepted) {
+        _openSupportPageForPeer(peerId: fromUserId, peerName: fromName, sessionId: sessionId);
+      } else {
+        _showStubMessage(t['connection_rejected']!);
+      }
+      return;
+    }
+
+    if (event.type == 'connection_accept') {
+      final peerId = (event.data['from'] ?? '').toString();
+      final sessionId = (event.data['session_id'] ?? '').toString();
+      if (peerId.isEmpty) return;
+      _showStubMessage(t['connection_accepted']!.replaceAll('{name}', peerId));
+      _openSupportPageForPeer(peerId: peerId, peerName: peerId, sessionId: sessionId.isEmpty ? null : sessionId);
+      return;
+    }
+
+    if (event.type == 'connection_reject') {
+      final peerId = (event.data['from'] ?? '').toString();
+      _showStubMessage(t['connection_rejected_by']!.replaceAll('{name}', peerId));
+    }
+  }
+
   @override
   void dispose() {
+    _signalSubscription?.cancel();
+    _signalingService.dispose();
     _idController.dispose();
     _passwordController.dispose();
     _chatController.dispose();
@@ -1435,6 +1549,7 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
             setState(() {
               _currentAuthenticatedUser = user;
               _isAuthenticated = true;
+              _pageIndex = 0;
               _userRole = _mapUserRoleToString(user.role);
               _currentUserId = user.id;
               
@@ -1465,6 +1580,7 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
               
               print('✅ LOGIN SUCCESS: Role=$_userRole, Country=$_currentUserCountry, Dept=$_currentUserDept');
             });
+            _connectSignalingForCurrentUser();
           },
         ),
       );
@@ -1556,12 +1672,11 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
 
   Widget _buildSidebar() {
     final items = [
-      (t['remote_control']!, Icons.desktop_windows_outlined),
-      (t['devices']!, Icons.devices_outlined),
-      (t['history']!, Icons.history),
-      (t['authentication']!, Icons.lock_outline),
-      (t['settings']!, Icons.settings_outlined),
-      ('Profil', Icons.person_outline),
+      (t['remote_control']!, Icons.desktop_windows_outlined, 0),
+      (t['devices']!, Icons.devices_outlined, 1),
+      (t['history']!, Icons.history, 2),
+      (t['settings']!, Icons.settings_outlined, 4),
+      ('Profil', Icons.person_outline, 5),
     ];
 
     return Container(
@@ -1589,7 +1704,7 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
                 style: TextStyle(color: c.accent, fontWeight: FontWeight.bold, fontSize: 10),
               ),
             ),
-            for (int i = 0; i < items.length; i++) _buildSidebarButton(i, items[i].$1, items[i].$2),
+            for (int i = 0; i < items.length; i++) _buildSidebarButton(items[i].$3, items[i].$1, items[i].$2),
             const Spacer(),
             Container(
               margin: const EdgeInsets.all(15),
@@ -1685,9 +1800,12 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
       translate: (key) => t[key] ?? key,
       onLogout: () {
         _authService.logout();
+        _signalSubscription?.cancel();
+        _signalingService.disconnect();
         setState(() {
-          // Return to guest mode instead of fully logging out
+          // Return to login page on logout.
           _initializeGuestUser();
+          _isSignalConnected = false;
           _pageIndex = 0;
           _authIdController.clear();
           _authPasswordController.clear();
@@ -1743,10 +1861,10 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
                         ),
                         const SizedBox(height: 10),
                         if (!hideIdInput) ...[
-                          _styledInput(_idController, 'Enter Remote ID...'),
+                          _styledInput(_idController, t['remote_account_id_hint']!),
                           const SizedBox(height: 10),
                         ],
-                        _styledInput(_passwordController, 'Enter Session Password...', obscure: true),
+                        _styledInput(_passwordController, t['session_password_hint']!, obscure: true),
                         const SizedBox(height: 12),
                         SizedBox(
                           width: double.infinity,
@@ -3077,6 +3195,10 @@ const Map<Lang, Map<String, String>> _translations = {
     'establish': 'ESTABLISH CONNECTION',
     'recent_activity': 'Recent Activity',
     'connect_btn': 'Connect to Device',
+    'remote_account_id_hint': 'Enter target account ID...',
+    'session_password_hint': 'Enter session password...',
+    'remote_account_required': 'Please enter the target account ID.',
+    'session_created_with_code': 'Session created. Code: {code}',
     'registered_devices': 'Registered Devices',
     'connection_history': 'Connection History',
     'secure_access': 'SECURE ACCESS',
@@ -3162,6 +3284,15 @@ const Map<Lang, Map<String, String>> _translations = {
     'connection_request_title': 'Connection request',
     'waiting_other_user_accept': 'Waiting for {name} to accept.',
     'connecting_to_user': 'Connecting to {name}...',
+    'connection_request_sent': 'Connection request sent to {name}.',
+    'incoming_connection_request': '{name} wants to connect to your session.',
+    'btn_accept': 'Accept',
+    'btn_reject': 'Reject',
+    'connection_accepted': '{name} accepted your request.',
+    'connection_rejected': 'Connection request rejected.',
+    'connection_rejected_by': '{name} rejected your request.',
+    'signaling_offline': 'Signaling server unavailable. Start backend first.',
+    'request_failed': 'Request failed.',
     'btn_ok': 'OK',
     'remote_support_title': 'BIM Remote Support',
     'internal_secure_network': 'Internal Secure Network',
@@ -3180,6 +3311,10 @@ const Map<Lang, Map<String, String>> _translations = {
     'save_downloaded_file': 'Save downloaded file',
     'download_canceled': 'Download canceled.',
     'download_target_selected': 'Download target selected',
+    'save_screenshot_file': 'Save screenshot',
+    'screenshot_save_canceled': 'Screenshot save canceled.',
+    'screenshot_saved_to': 'Screenshot saved to',
+    'screenshot_failed': 'Screenshot failed',
     'btn_screenshot': 'Screenshot',
     'btn_record': 'Record',
     'btn_stop_record': 'Stop',
@@ -3215,6 +3350,10 @@ const Map<Lang, Map<String, String>> _translations = {
     'establish': 'ÉTABLIR LA CONNEXION',
     'recent_activity': 'Activité récente',
     'connect_btn': 'Se connecter à un appareil',
+    'remote_account_id_hint': 'Entrez l\'ID du compte cible...',
+    'session_password_hint': 'Entrez le mot de passe de session...',
+    'remote_account_required': 'Veuillez entrer l\'ID du compte cible.',
+    'session_created_with_code': 'Session créée. Code : {code}',
     'registered_devices': 'Appareils enregistrés',
     'connection_history': 'Historique des connexions',
     'secure_access': 'ACCÈS SÉCURISÉ',
@@ -3300,6 +3439,15 @@ const Map<Lang, Map<String, String>> _translations = {
     'connection_request_title': 'Demande de connexion',
     'waiting_other_user_accept': 'En attente de l\'acceptation de {name}.',
     'connecting_to_user': 'Connexion à {name}...',
+    'connection_request_sent': 'Demande de connexion envoyée à {name}.',
+    'incoming_connection_request': '{name} veut se connecter à votre session.',
+    'btn_accept': 'Accepter',
+    'btn_reject': 'Refuser',
+    'connection_accepted': '{name} a accepté votre demande.',
+    'connection_rejected': 'Demande de connexion refusée.',
+    'connection_rejected_by': '{name} a refusé votre demande.',
+    'signaling_offline': 'Serveur signaling indisponible. Lancez le backend.',
+    'request_failed': 'Échec de la requête.',
     'btn_ok': 'OK',
     'remote_support_title': 'Support à distance BIM',
     'internal_secure_network': 'Réseau interne sécurisé',
@@ -3318,6 +3466,10 @@ const Map<Lang, Map<String, String>> _translations = {
     'save_downloaded_file': 'Enregistrer le fichier téléchargé',
     'download_canceled': 'Téléchargement annulé.',
     'download_target_selected': 'Destination de téléchargement sélectionnée',
+    'save_screenshot_file': 'Enregistrer la capture',
+    'screenshot_save_canceled': 'Enregistrement de la capture annulé.',
+    'screenshot_saved_to': 'Capture enregistrée dans',
+    'screenshot_failed': 'Échec de la capture',
     'btn_screenshot': 'Capture',
     'btn_record': 'Enregistrer',
     'btn_stop_record': 'Arrêter',
