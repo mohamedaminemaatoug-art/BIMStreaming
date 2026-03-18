@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io' as io;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:window_manager/window_manager.dart';
 import '../services/signaling_client_service.dart';
@@ -10,6 +12,8 @@ import '../services/signaling_client_service.dart';
 class RemoteSupportPage extends StatefulWidget {
   final String deviceName;
   final String deviceId;
+  final bool sendLocalScreen;
+  final VoidCallback? onExitToRemoteControl;
   final String? sessionId;
   final String? currentUserId;
   final SignalingClientService? signalingService;
@@ -20,6 +24,8 @@ class RemoteSupportPage extends StatefulWidget {
     super.key,
     required this.deviceName,
     required this.deviceId,
+    required this.sendLocalScreen,
+    this.onExitToRemoteControl,
     this.sessionId,
     this.currentUserId,
     this.signalingService,
@@ -58,6 +64,14 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   Timer? _screenShareTimer;
   StreamSubscription<SignalEvent>? _signalSubscription;
   int _sessionSeconds = 0;
+  final FocusNode _remoteControlFocusNode = FocusNode();
+  int _lastPointerMoveMs = 0;
+  bool _rightButtonPressed = false;
+  bool _isClosingSession = false;
+  int _remoteFrameWidth = 16;
+  int _remoteFrameHeight = 9;
+  int _localFrameWidth = 0;
+  int _localFrameHeight = 0;
 
   String tr(String key) => widget.translate(key);
 
@@ -68,6 +82,13 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     _startSessionTimer();
     _connectSessionSignalIfAvailable();
     _startAutomaticScreenShareIfPossible();
+    if (!widget.sendLocalScreen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _remoteControlFocusNode.requestFocus();
+        }
+      });
+    }
   }
 
   bool get _canSignal =>
@@ -80,10 +101,12 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   }
 
   void _startAutomaticScreenShareIfPossible() {
-    if (widget.signalingService == null || !_isConnected) return;
+    if (!widget.sendLocalScreen || widget.signalingService == null || !_isConnected) {
+      return;
+    }
     _isScreenSharing = true;
     _screenShareTimer?.cancel();
-    _screenShareTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+    _screenShareTimer = Timer.periodic(const Duration(milliseconds: 450), (_) {
       _sendScreenFrame();
     });
     _sendScreenFrame();
@@ -111,6 +134,18 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     final payload = data['payload'] is Map
         ? Map<String, dynamic>.from(data['payload'] as Map)
         : <String, dynamic>{};
+
+    if (messageType == 'input_event') {
+      if (widget.sendLocalScreen) {
+        _applyRemoteInput(payload);
+      }
+      return;
+    }
+
+    if (messageType == 'session_end') {
+      _closeSession(notifyPeer: false);
+      return;
+    }
 
     print('[RemoteSupportPage] Received $messageType from $fromUserId: $payload');
 
@@ -157,6 +192,12 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
           if (frameData.isNotEmpty) {
             try {
               _remoteScreenFrame = base64Decode(frameData);
+              final fw = payload['frameWidth'];
+              final fh = payload['frameHeight'];
+              if (fw is num && fh is num && fw > 0 && fh > 0) {
+                _remoteFrameWidth = fw.toInt();
+                _remoteFrameHeight = fh.toInt();
+              }
               _framesReceived++;
               print('[ScreenShare] Frame received #$_framesReceived (${frameData.length} chars b64) from $fromUserId');
             } catch (e) {
@@ -167,6 +208,133 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
           break;
       }
     });
+  }
+
+  void _closeSession({bool notifyPeer = true}) {
+    if (_isClosingSession) return;
+    _isClosingSession = true;
+
+    if (notifyPeer) {
+      _sendSessionPayload(
+        messageType: 'session_end',
+        payload: {'reason': 'disconnect'},
+      );
+    }
+
+    _sessionTimer?.cancel();
+    _screenShareTimer?.cancel();
+
+    if (!mounted) return;
+
+    Navigator.of(context).pop();
+    widget.onExitToRemoteControl?.call();
+  }
+
+  bool get _canSendRemoteInput =>
+      _canSignal && _isConnected && !widget.sendLocalScreen;
+
+  void _sendInputEvent(
+    String action, {
+    double? normalizedX,
+    double? normalizedY,
+    int? wheelDelta,
+    String? key,
+  }) {
+    if (!_canSendRemoteInput) return;
+    final payload = <String, dynamic>{'action': action};
+    if (normalizedX != null) payload['x'] = normalizedX.clamp(0.0, 1.0);
+    if (normalizedY != null) payload['y'] = normalizedY.clamp(0.0, 1.0);
+    if (wheelDelta != null) payload['wheelDelta'] = wheelDelta;
+    if (key != null && key.isNotEmpty) payload['key'] = key;
+    _sendSessionPayload(messageType: 'input_event', payload: payload);
+  }
+
+  Future<void> _applyRemoteInput(Map<String, dynamic> payload) async {
+    if (!io.Platform.isWindows) return;
+
+    final action = (payload['action'] ?? '').toString();
+    if (action.isEmpty) return;
+    final x = (payload['x'] is num) ? (payload['x'] as num).toDouble() : null;
+    final y = (payload['y'] is num) ? (payload['y'] as num).toDouble() : null;
+    final wheelDelta = (payload['wheelDelta'] is num)
+        ? (payload['wheelDelta'] as num).toInt()
+        : 0;
+    final key = (payload['key'] ?? '').toString();
+
+    final script = r'''
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class NativeInput {
+  [DllImport("user32.dll")]
+  public static extern bool SetCursorPos(int X, int Y);
+
+  [DllImport("user32.dll")]
+  public static extern void mouse_event(uint dwFlags, uint dx, uint dy, int dwData, UIntPtr dwExtraInfo);
+}
+"@
+
+$action = '__ACTION__'
+$x = __X__
+$y = __Y__
+$wheel = __WHEEL__
+$key = '__KEY__'
+
+$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+if ($x -ge 0 -and $y -ge 0) {
+  $px = $bounds.Left + [int]([double]$bounds.Width * $x)
+  $py = $bounds.Top + [int]([double]$bounds.Height * $y)
+  [NativeInput]::SetCursorPos($px, $py) | Out-Null
+}
+
+switch ($action) {
+  'left_down' { [NativeInput]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero) }
+  'left_up' { [NativeInput]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero) }
+  'right_down' { [NativeInput]::mouse_event(0x0008, 0, 0, 0, [UIntPtr]::Zero) }
+  'right_up' { [NativeInput]::mouse_event(0x0010, 0, 0, 0, [UIntPtr]::Zero) }
+  'wheel' { [NativeInput]::mouse_event(0x0800, 0, 0, [int]$wheel, [UIntPtr]::Zero) }
+  'key_press' {
+    if (-not [string]::IsNullOrWhiteSpace($key)) {
+      $map = @{
+        'Enter' = '{ENTER}';
+        'Backspace' = '{BACKSPACE}';
+        'Tab' = '{TAB}';
+        'Escape' = '{ESC}';
+        'Arrow Left' = '{LEFT}';
+        'Arrow Right' = '{RIGHT}';
+        'Arrow Up' = '{UP}';
+        'Arrow Down' = '{DOWN}';
+        'Delete' = '{DELETE}';
+        'Home' = '{HOME}';
+        'End' = '{END}';
+        'Page Up' = '{PGUP}';
+        'Page Down' = '{PGDN}';
+        'Space' = ' ';
+      }
+      if ($map.ContainsKey($key)) {
+        [System.Windows.Forms.SendKeys]::SendWait($map[$key])
+      } elseif ($key.Length -eq 1) {
+        [System.Windows.Forms.SendKeys]::SendWait($key)
+      }
+    }
+  }
+}
+'''
+        .replaceAll('__ACTION__', action.replaceAll("'", "''"))
+        .replaceAll('__X__', x == null ? '-1' : x.toStringAsFixed(6))
+        .replaceAll('__Y__', y == null ? '-1' : y.toStringAsFixed(6))
+        .replaceAll('__WHEEL__', wheelDelta.toString())
+        .replaceAll('__KEY__', key.replaceAll("'", "''"));
+
+    try {
+      await io.Process.run(
+        'powershell',
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+      );
+    } catch (_) {
+      // Ignore remote input injection failures silently to keep session alive.
+    }
   }
 
   void _sendSessionPayload({
@@ -226,6 +394,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     _screenShareTimer?.cancel();
     _signalSubscription?.cancel();
     _composerController.dispose();
+    _remoteControlFocusNode.dispose();
     super.dispose();
   }
 
@@ -241,7 +410,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
         elevation: 0,
         leading: IconButton(
           icon: Icon(Icons.arrow_back, color: colors['text']!),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () => _closeSession(),
         ),
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -380,14 +549,14 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
                           colors,
                         ),
                         const Spacer(),
-                        _buildActionButton(Icons.close, tr('btn_disconnect'), () => Navigator.pop(context), colors, isDanger: true),
+                        _buildActionButton(Icons.close, tr('btn_disconnect'), () => _closeSession(), colors, isDanger: true),
                       ],
                     ),
                   ),
                 ),
                 Container(
                   color: colors['cardBg']!,
-                  margin: const EdgeInsets.only(top: 56),
+                  margin: EdgeInsets.zero,
                   child: _isBlackoutMode
                       ? Center(
                           child: Column(
@@ -408,16 +577,124 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
                           ),
                         )
                       : _remoteScreenFrame != null
-                          ? Center(
-                              child: Padding(
-                                padding: const EdgeInsets.all(12),
-                                child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(12),
-                                  child: Image.memory(
-                                    _remoteScreenFrame!,
-                                    fit: BoxFit.contain,
-                                    gaplessPlayback: true,
-                                  ),
+                          ? Container(
+                              color: Colors.black,
+                              alignment: Alignment.center,
+                              child: RawKeyboardListener(
+                                focusNode: _remoteControlFocusNode,
+                                autofocus: !widget.sendLocalScreen,
+                                onKey: (event) {
+                                  if (!_canSendRemoteInput) return;
+                                  if (event is RawKeyDownEvent) {
+                                    final key = event.logicalKey.keyLabel.isNotEmpty
+                                        ? event.logicalKey.keyLabel
+                                        : event.logicalKey.debugName;
+                                    if (key != null && key.isNotEmpty) {
+                                      _sendInputEvent('key_press', key: key);
+                                    }
+                                  }
+                                },
+                                child: Builder(
+                                  builder: (localContext) {
+                                    Offset? normalize(Offset globalPosition) {
+                                      final box = localContext.findRenderObject();
+                                      if (box is! RenderBox) return null;
+                                      final local = box.globalToLocal(globalPosition);
+                                      final w = box.size.width;
+                                      final h = box.size.height;
+                                      if (w <= 0 || h <= 0) return null;
+
+                                      final frameAspect = _remoteFrameWidth / _remoteFrameHeight;
+                                      final viewAspect = w / h;
+                                      double drawW;
+                                      double drawH;
+                                      double offsetX = 0;
+                                      double offsetY = 0;
+
+                                      if (frameAspect > viewAspect) {
+                                        drawW = w;
+                                        drawH = w / frameAspect;
+                                        offsetY = (h - drawH) / 2;
+                                      } else {
+                                        drawH = h;
+                                        drawW = h * frameAspect;
+                                        offsetX = (w - drawW) / 2;
+                                      }
+
+                                      final inX = (local.dx - offsetX);
+                                      final inY = (local.dy - offsetY);
+                                      if (inX < 0 || inY < 0 || inX > drawW || inY > drawH) {
+                                        return null;
+                                      }
+
+                                      return Offset(inX / drawW, inY / drawH);
+                                    }
+
+                                    return Listener(
+                                      onPointerHover: _canSendRemoteInput
+                                          ? (event) {
+                                              final now = DateTime.now().millisecondsSinceEpoch;
+                                              if (now - _lastPointerMoveMs < 80) return;
+                                              _lastPointerMoveMs = now;
+                                              final p = normalize(event.position);
+                                              if (p == null) return;
+                                              _sendInputEvent('move', normalizedX: p.dx, normalizedY: p.dy);
+                                            }
+                                          : null,
+                                      onPointerDown: _canSendRemoteInput
+                                          ? (event) {
+                                              final p = normalize(event.position);
+                                              if (p == null) return;
+                                              _rightButtonPressed = event.buttons == kSecondaryMouseButton;
+                                              _sendInputEvent(
+                                                _rightButtonPressed ? 'right_down' : 'left_down',
+                                                normalizedX: p.dx,
+                                                normalizedY: p.dy,
+                                              );
+                                              _remoteControlFocusNode.requestFocus();
+                                            }
+                                          : null,
+                                      onPointerMove: _canSendRemoteInput
+                                          ? (event) {
+                                              final now = DateTime.now().millisecondsSinceEpoch;
+                                              if (now - _lastPointerMoveMs < 80) return;
+                                              _lastPointerMoveMs = now;
+                                              final p = normalize(event.position);
+                                              if (p == null) return;
+                                              _sendInputEvent('move', normalizedX: p.dx, normalizedY: p.dy);
+                                            }
+                                          : null,
+                                      onPointerUp: _canSendRemoteInput
+                                          ? (event) {
+                                              final p = normalize(event.position);
+                                              if (p == null) return;
+                                              _sendInputEvent(
+                                                _rightButtonPressed ? 'right_up' : 'left_up',
+                                                normalizedX: p.dx,
+                                                normalizedY: p.dy,
+                                              );
+                                              _rightButtonPressed = false;
+                                            }
+                                          : null,
+                                      onPointerSignal: _canSendRemoteInput
+                                          ? (event) {
+                                              if (event is PointerScrollEvent) {
+                                                _sendInputEvent(
+                                                  'wheel',
+                                                  wheelDelta: event.scrollDelta.dy.toInt(),
+                                                );
+                                              }
+                                            }
+                                          : null,
+                                      child: Image.memory(
+                                        _remoteScreenFrame!,
+                                        width: double.infinity,
+                                        height: double.infinity,
+                                        fit: BoxFit.contain,
+                                        gaplessPlayback: true,
+                                      ),
+                                    );
+                                  },
                                 ),
                               ),
                             )
@@ -983,12 +1260,17 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   Future<void> _takeScreenshot() async {
     if (!_isConnected) return;
 
-    final fileName = 'screenshot_${DateTime.now().millisecondsSinceEpoch}.png';
+    if (_remoteScreenFrame == null || _remoteScreenFrame!.isEmpty) {
+      _showMessage(context, tr('screenshot_failed'), _getColors(context));
+      return;
+    }
+
+    final fileName = 'remote_screenshot_${DateTime.now().millisecondsSinceEpoch}.jpg';
     final outputPath = await FilePicker.platform.saveFile(
       dialogTitle: tr('save_screenshot_file'),
       fileName: fileName,
       type: FileType.custom,
-      allowedExtensions: const ['png'],
+      allowedExtensions: const ['jpg', 'jpeg', 'png'],
     );
 
     if (!mounted) return;
@@ -998,10 +1280,9 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
       return;
     }
 
-    final saved = await _captureLocalScreenToPath(outputPath);
-    if (!mounted) return;
-
-    if (saved) {
+    try {
+      await io.File(outputPath).writeAsBytes(_remoteScreenFrame!, flush: true);
+      if (!mounted) return;
       final time = DateTime.now().toIso8601String();
       setState(() {
         _commandResults.add('> screenshot --capture');
@@ -1020,9 +1301,10 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
         _getColors(context),
       );
       return;
+    } catch (_) {
+      if (!mounted) return;
+      _showMessage(context, tr('screenshot_failed'), _getColors(context));
     }
-
-    _showMessage(context, tr('screenshot_failed'), _getColors(context));
   }
 
   Future<void> _sendScreenFrame() async {
@@ -1037,7 +1319,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
         if (mounted) setState(() => _captureError = 'capture null');
         return;
       }
-      const maxFrameBytes = 2 * 1024 * 1024;
+      const maxFrameBytes = 8 * 1024 * 1024;
       if (bytes.length > maxFrameBytes) {
         print('[ScreenShare] Frame too large: ${bytes.length} bytes');
         if (mounted) setState(() => _captureError = 'too large: ${bytes.length}');
@@ -1046,7 +1328,11 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
       final b64 = base64Encode(bytes);
       _sendSessionPayload(
         messageType: 'screen_frame',
-        payload: {'frameData': b64},
+        payload: {
+          'frameData': b64,
+          'frameWidth': _localFrameWidth,
+          'frameHeight': _localFrameHeight,
+        },
       );
       if (mounted) setState(() { _framesSent++; _captureError = ''; });
       print('[ScreenShare] Sent frame #$_framesSent (${bytes.length} bytes)');
@@ -1069,13 +1355,18 @@ $b=[System.Windows.Forms.SystemInformation]::VirtualScreen
 $src=New-Object System.Drawing.Bitmap $b.Width,$b.Height
 $g=[System.Drawing.Graphics]::FromImage($src)
 $g.CopyFromScreen($b.Left,$b.Top,0,0,$src.Size)
-$tw=if($src.Width -gt 1280){1280}else{$src.Width}
-$th=[int]($src.Height*($tw/[double]$src.Width))
+$tw=$src.Width
+$th=$src.Height
 $sc=New-Object System.Drawing.Bitmap $tw,$th
 $g2=[System.Drawing.Graphics]::FromImage($sc)
 $g2.InterpolationMode=[System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
 $g2.DrawImage($src,0,0,$tw,$th)
-$sc.Save('OUTPUT_PATH',[System.Drawing.Imaging.ImageFormat]::Jpeg)
+$encoder=[System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
+$params=New-Object System.Drawing.Imaging.EncoderParameters(1)
+$params.Param[0]=New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, 92L)
+$sc.Save('OUTPUT_PATH',$encoder,$params)
+Write-Output "$tw,$th"
+$params.Dispose()
 $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
 '''.replaceAll('OUTPUT_PATH', escapedOutput);
 
@@ -1098,7 +1389,24 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
         if (mounted) setState(() => _captureError = 'file not found');
         return null;
       }
-      return await file.readAsBytes();
+      final out = '${result.stdout}'.trim();
+      final line = out.split(RegExp(r'[\r\n]+')).firstWhere(
+        (l) => l.contains(','),
+        orElse: () => '',
+      );
+      if (line.isNotEmpty) {
+        final parts = line.split(',');
+        if (parts.length == 2) {
+          final w = int.tryParse(parts[0].trim()) ?? 0;
+          final h = int.tryParse(parts[1].trim()) ?? 0;
+          if (w > 0 && h > 0) {
+            _localFrameWidth = w;
+            _localFrameHeight = h;
+          }
+        }
+      }
+      final bytes = await file.readAsBytes();
+      return bytes;
     } catch (e) {
       print('[ScreenShare] Exception: $e');
       if (mounted) setState(() => _captureError = e.toString());

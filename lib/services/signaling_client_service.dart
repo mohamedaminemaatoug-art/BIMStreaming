@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' as io;
 
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -12,10 +13,28 @@ class SignalEvent {
 
 class SignalingClientService {
   SignalingClientService({
-    String wsBaseUrl = 'ws://127.0.0.1:8080/api/v1/ws',
-  }) : _wsBaseUrl = wsBaseUrl;
+    String? wsBaseUrl,
+  }) : _wsBaseUrl = _resolveWsBaseUrl(wsBaseUrl);
 
   final String _wsBaseUrl;
+
+  static String _resolveWsBaseUrl(String? explicit) {
+    if (explicit != null && explicit.trim().isNotEmpty) {
+      return explicit.trim();
+    }
+
+    const fromDefine = String.fromEnvironment('BIM_SIGNAL_URL', defaultValue: '');
+    if (fromDefine.trim().isNotEmpty) {
+      return fromDefine.trim();
+    }
+
+    final fromEnv = io.Platform.environment['BIM_SIGNAL_URL'] ?? '';
+    if (fromEnv.trim().isNotEmpty) {
+      return fromEnv.trim();
+    }
+
+    return 'ws://127.0.0.1:8080/api/v1/ws';
+  }
 
   final StreamController<SignalEvent> _eventsController = StreamController<SignalEvent>.broadcast();
   WebSocketChannel? _channel;

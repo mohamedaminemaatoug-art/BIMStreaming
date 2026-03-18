@@ -1341,6 +1341,7 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
   void _openSupportPageForPeer({
     required String peerId,
     required String peerName,
+    required bool sendLocalScreen,
     String? sessionId,
   }) {
     _navigatorKey.currentState?.push(
@@ -1348,6 +1349,11 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
         builder: (context) => RemoteSupportPage(
           deviceName: peerName,
           deviceId: peerId,
+          sendLocalScreen: sendLocalScreen,
+          onExitToRemoteControl: () {
+            if (!mounted) return;
+            setState(() => _pageIndex = 0);
+          },
           sessionId: sessionId,
           currentUserId: _currentUserId,
           signalingService: _signalingService,
@@ -1457,7 +1463,12 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
       );
 
       if (accepted) {
-        _openSupportPageForPeer(peerId: fromUserId, peerName: fromName, sessionId: sessionId);
+        _openSupportPageForPeer(
+          peerId: fromUserId,
+          peerName: fromName,
+          sendLocalScreen: true,
+          sessionId: sessionId,
+        );
       } else {
         _showStubMessage(t['connection_rejected']!);
       }
@@ -1469,7 +1480,12 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
       final sessionId = (event.data['session_id'] ?? '').toString();
       if (peerId.isEmpty) return;
       _showStubMessage(t['connection_accepted']!.replaceAll('{name}', peerId));
-      _openSupportPageForPeer(peerId: peerId, peerName: peerId, sessionId: sessionId.isEmpty ? null : sessionId);
+      _openSupportPageForPeer(
+        peerId: peerId,
+        peerName: peerId,
+        sendLocalScreen: false,
+        sessionId: sessionId.isEmpty ? null : sessionId,
+      );
       return;
     }
 

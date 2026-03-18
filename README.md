@@ -85,6 +85,24 @@ flutter pub get
 flutter run -d windows
 ```
 
+### Exécution sur 2 machines physiques (même réseau)
+
+Par défaut, le client utilise `ws://127.0.0.1:8080/api/v1/ws` (localhost), ce qui ne fonctionne que sur une seule machine.
+Pour connecter deux PC physiques, configurez l'URL WebSocket du serveur avec son IP LAN.
+
+PowerShell (sur chaque PC client):
+
+```powershell
+$env:BIM_SIGNAL_URL = 'ws://192.168.1.50:8080/api/v1/ws'
+flutter run -d windows
+```
+
+Alternative avec dart-define:
+
+```powershell
+flutter run -d windows --dart-define=BIM_SIGNAL_URL=ws://192.168.1.50:8080/api/v1/ws
+```
+
 ## 6) Scénarios de démonstration (soutenance)
 
 ### Scénario A – Utilisateur standard (sans authentification)
