@@ -38,6 +38,10 @@ class RemoteSupportPage extends StatefulWidget {
 }
 
 class _RemoteSupportPageState extends State<RemoteSupportPage> {
+  static const Duration _screenShareInterval = Duration(milliseconds: 120);
+  static const int _maxCaptureWidth = 1600;
+  static const int _jpegQuality = 70;
+
   bool _isConnected = true;
   String _connectionStatus = 'Connected';
   bool _isEncrypted = true;
@@ -72,6 +76,15 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   int _remoteFrameHeight = 9;
   int _localFrameWidth = 0;
   int _localFrameHeight = 0;
+  int _localCaptureLeft = 0;
+  int _localCaptureTop = 0;
+  int _localCaptureWidth = 0;
+  int _localCaptureHeight = 0;
+  bool _fillRemoteViewport = false;
+  bool _isRemoteViewExpanded = false;
+  int _lastAppliedMoveMs = 0;
+  double? _lastSentMoveX;
+  double? _lastSentMoveY;
 
   String tr(String key) => widget.translate(key);
 
@@ -106,7 +119,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     }
     _isScreenSharing = true;
     _screenShareTimer?.cancel();
-    _screenShareTimer = Timer.periodic(const Duration(milliseconds: 450), (_) {
+    _screenShareTimer = Timer.periodic(_screenShareInterval, (_) {
       _sendScreenFrame();
     });
     _sendScreenFrame();
@@ -147,7 +160,9 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
       return;
     }
 
-    print('[RemoteSupportPage] Received $messageType from $fromUserId: $payload');
+    if (messageType != 'screen_frame' && messageType != 'input_event') {
+      print('[RemoteSupportPage] Received $messageType from $fromUserId: $payload');
+    }
 
     setState(() {
       switch (messageType) {
@@ -199,7 +214,9 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
                 _remoteFrameHeight = fh.toInt();
               }
               _framesReceived++;
-              print('[ScreenShare] Frame received #$_framesReceived (${frameData.length} chars b64) from $fromUserId');
+              if (_framesReceived % 30 == 0) {
+                print('[ScreenShare] Frame received #$_framesReceived (${frameData.length} chars b64) from $fromUserId');
+              }
             } catch (e) {
               print('[ScreenShare] Decode error: $e');
               _remoteScreenFrame = null;
@@ -254,6 +271,12 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
 
     final action = (payload['action'] ?? '').toString();
     if (action.isEmpty) return;
+    if (action == 'move') {
+      // Running a PowerShell process per event is expensive; throttle move apply.
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (now - _lastAppliedMoveMs < 45) return;
+      _lastAppliedMoveMs = now;
+    }
     final x = (payload['x'] is num) ? (payload['x'] as num).toDouble() : null;
     final y = (payload['y'] is num) ? (payload['y'] as num).toDouble() : null;
     final wheelDelta = (payload['wheelDelta'] is num)
@@ -263,6 +286,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
 
     final script = r'''
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -273,6 +297,11 @@ public static class NativeInput {
   [DllImport("user32.dll")]
   public static extern void mouse_event(uint dwFlags, uint dx, uint dy, int dwData, UIntPtr dwExtraInfo);
 }
+
+public static class NativeDpi {
+  [DllImport("user32.dll")]
+  public static extern bool SetProcessDPIAware();
+}
 "@
 
 $action = '__ACTION__'
@@ -280,11 +309,20 @@ $x = __X__
 $y = __Y__
 $wheel = __WHEEL__
 $key = '__KEY__'
+$capLeft = __CAP_LEFT__
+$capTop = __CAP_TOP__
+$capWidth = __CAP_WIDTH__
+$capHeight = __CAP_HEIGHT__
 
-$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+[NativeDpi]::SetProcessDPIAware() | Out-Null
+
+$bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+if ($capWidth -gt 0 -and $capHeight -gt 0) {
+  $bounds = New-Object System.Drawing.Rectangle($capLeft, $capTop, $capWidth, $capHeight)
+}
 if ($x -ge 0 -and $y -ge 0) {
-  $px = $bounds.Left + [int]([double]$bounds.Width * $x)
-  $py = $bounds.Top + [int]([double]$bounds.Height * $y)
+  $px = $bounds.Left + [int]([double]($bounds.Width - 1) * $x)
+  $py = $bounds.Top + [int]([double]($bounds.Height - 1) * $y)
   [NativeInput]::SetCursorPos($px, $py) | Out-Null
 }
 
@@ -325,6 +363,10 @@ switch ($action) {
         .replaceAll('__X__', x == null ? '-1' : x.toStringAsFixed(6))
         .replaceAll('__Y__', y == null ? '-1' : y.toStringAsFixed(6))
         .replaceAll('__WHEEL__', wheelDelta.toString())
+  .replaceAll('__CAP_LEFT__', _localCaptureLeft.toString())
+  .replaceAll('__CAP_TOP__', _localCaptureTop.toString())
+  .replaceAll('__CAP_WIDTH__', _localCaptureWidth.toString())
+  .replaceAll('__CAP_HEIGHT__', _localCaptureHeight.toString())
         .replaceAll('__KEY__', key.replaceAll("'", "''"));
 
     try {
@@ -345,13 +387,27 @@ switch ($action) {
       print('[RemoteSupportPage] Cannot signal: signalingService=${widget.signalingService}, userId=${widget.currentUserId}, sessionId=${widget.sessionId}');
       return;
     }
-    print('[RemoteSupportPage] Sending $messageType to ${widget.deviceId} via session ${widget.sessionId}');
+    if (messageType != 'screen_frame' && messageType != 'input_event') {
+      print('[RemoteSupportPage] Sending $messageType to ${widget.deviceId} via session ${widget.sessionId}');
+    }
     widget.signalingService!.sendSessionMessage(
       sessionId: (widget.sessionId ?? '').toString(),
       toUserId: widget.deviceId,
       messageType: messageType,
       payload: payload,
     );
+  }
+
+  void _sendMoveIfNeeded(Offset p) {
+    const epsilon = 0.0025;
+    final sameAsLast = _lastSentMoveX != null &&
+        _lastSentMoveY != null &&
+        (p.dx - _lastSentMoveX!).abs() < epsilon &&
+        (p.dy - _lastSentMoveY!).abs() < epsilon;
+    if (sameAsLast) return;
+    _lastSentMoveX = p.dx;
+    _lastSentMoveY = p.dy;
+    _sendInputEvent('move', normalizedX: p.dx, normalizedY: p.dy);
   }
 
   void _startSessionTimer() {
@@ -548,6 +604,22 @@ switch ($action) {
                           _toggleFullScreen,
                           colors,
                         ),
+                        const SizedBox(width: 8),
+                        _buildActionButton(
+                          _fillRemoteViewport ? Icons.fit_screen_outlined : Icons.fit_screen,
+                          _fillRemoteViewport ? 'Fit' : 'Fill',
+                          () => setState(() => _fillRemoteViewport = !_fillRemoteViewport),
+                          colors,
+                          isActive: _fillRemoteViewport,
+                        ),
+                        const SizedBox(width: 8),
+                        _buildActionButton(
+                          _isRemoteViewExpanded ? Icons.close_fullscreen : Icons.open_in_full,
+                          _isRemoteViewExpanded ? 'Small view' : 'Full view',
+                          () => setState(() => _isRemoteViewExpanded = !_isRemoteViewExpanded),
+                          colors,
+                          isActive: _isRemoteViewExpanded,
+                        ),
                         const Spacer(),
                         _buildActionButton(Icons.close, tr('btn_disconnect'), () => _closeSession(), colors, isDanger: true),
                       ],
@@ -557,7 +629,10 @@ switch ($action) {
                 Container(
                   color: colors['cardBg']!,
                   margin: EdgeInsets.zero,
-                  child: _isBlackoutMode
+                  child: Padding(
+                    // Keep remote surface below top action bar to preserve accurate pointer mapping.
+                    padding: const EdgeInsets.only(top: 58),
+                    child: _isBlackoutMode
                       ? Center(
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
@@ -576,7 +651,7 @@ switch ($action) {
                             ],
                           ),
                         )
-                      : _remoteScreenFrame != null
+                        : _remoteScreenFrame != null
                           ? Container(
                               color: Colors.black,
                               alignment: Alignment.center,
@@ -596,10 +671,9 @@ switch ($action) {
                                 },
                                 child: Builder(
                                   builder: (localContext) {
-                                    Offset? normalize(Offset globalPosition) {
+                                    Offset? normalize(Offset local) {
                                       final box = localContext.findRenderObject();
                                       if (box is! RenderBox) return null;
-                                      final local = box.globalToLocal(globalPosition);
                                       final w = box.size.width;
                                       final h = box.size.height;
                                       if (w <= 0 || h <= 0) return null;
@@ -611,39 +685,55 @@ switch ($action) {
                                       double offsetX = 0;
                                       double offsetY = 0;
 
-                                      if (frameAspect > viewAspect) {
-                                        drawW = w;
-                                        drawH = w / frameAspect;
-                                        offsetY = (h - drawH) / 2;
+                                      if (_fillRemoteViewport) {
+                                        // BoxFit.cover geometry: image fills viewport with center crop.
+                                        if (frameAspect > viewAspect) {
+                                          drawH = h;
+                                          drawW = h * frameAspect;
+                                          offsetX = (w - drawW) / 2;
+                                        } else {
+                                          drawW = w;
+                                          drawH = w / frameAspect;
+                                          offsetY = (h - drawH) / 2;
+                                        }
                                       } else {
-                                        drawH = h;
-                                        drawW = h * frameAspect;
-                                        offsetX = (w - drawW) / 2;
+                                        // BoxFit.contain geometry: whole frame visible with letterboxing.
+                                        if (frameAspect > viewAspect) {
+                                          drawW = w;
+                                          drawH = w / frameAspect;
+                                          offsetY = (h - drawH) / 2;
+                                        } else {
+                                          drawH = h;
+                                          drawW = h * frameAspect;
+                                          offsetX = (w - drawW) / 2;
+                                        }
                                       }
 
                                       final inX = (local.dx - offsetX);
                                       final inY = (local.dy - offsetY);
-                                      if (inX < 0 || inY < 0 || inX > drawW || inY > drawH) {
+                                      if (!_fillRemoteViewport && (inX < 0 || inY < 0 || inX > drawW || inY > drawH)) {
                                         return null;
                                       }
 
-                                      return Offset(inX / drawW, inY / drawH);
+                                      final nx = (inX / drawW).clamp(0.0, 1.0);
+                                      final ny = (inY / drawH).clamp(0.0, 1.0);
+                                      return Offset(nx, ny);
                                     }
 
                                     return Listener(
                                       onPointerHover: _canSendRemoteInput
                                           ? (event) {
                                               final now = DateTime.now().millisecondsSinceEpoch;
-                                              if (now - _lastPointerMoveMs < 80) return;
+                                              if (now - _lastPointerMoveMs < 35) return;
                                               _lastPointerMoveMs = now;
-                                              final p = normalize(event.position);
+                                              final p = normalize(event.localPosition);
                                               if (p == null) return;
-                                              _sendInputEvent('move', normalizedX: p.dx, normalizedY: p.dy);
+                                              _sendMoveIfNeeded(p);
                                             }
                                           : null,
                                       onPointerDown: _canSendRemoteInput
                                           ? (event) {
-                                              final p = normalize(event.position);
+                                              final p = normalize(event.localPosition);
                                               if (p == null) return;
                                               _rightButtonPressed = event.buttons == kSecondaryMouseButton;
                                               _sendInputEvent(
@@ -657,16 +747,16 @@ switch ($action) {
                                       onPointerMove: _canSendRemoteInput
                                           ? (event) {
                                               final now = DateTime.now().millisecondsSinceEpoch;
-                                              if (now - _lastPointerMoveMs < 80) return;
+                                              if (now - _lastPointerMoveMs < 35) return;
                                               _lastPointerMoveMs = now;
-                                              final p = normalize(event.position);
+                                              final p = normalize(event.localPosition);
                                               if (p == null) return;
-                                              _sendInputEvent('move', normalizedX: p.dx, normalizedY: p.dy);
+                                              _sendMoveIfNeeded(p);
                                             }
                                           : null,
                                       onPointerUp: _canSendRemoteInput
                                           ? (event) {
-                                              final p = normalize(event.position);
+                                              final p = normalize(event.localPosition);
                                               if (p == null) return;
                                               _sendInputEvent(
                                                 _rightButtonPressed ? 'right_up' : 'left_up',
@@ -690,7 +780,7 @@ switch ($action) {
                                         _remoteScreenFrame!,
                                         width: double.infinity,
                                         height: double.infinity,
-                                        fit: BoxFit.contain,
+                                        fit: _fillRemoteViewport ? BoxFit.cover : BoxFit.contain,
                                         gaplessPlayback: true,
                                       ),
                                     );
@@ -698,7 +788,7 @@ switch ($action) {
                                 ),
                               ),
                             )
-                      : Center(
+                        : Center(
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
@@ -763,14 +853,15 @@ switch ($action) {
                             ],
                           ),
                         ),
+                  ),
                 ),
               ],
             ),
           ),
-          if (!_isFullScreen)
+          if (!_isFullScreen && !_isRemoteViewExpanded)
           // Partie droite - Panneau de contrôle
           Container(
-            width: 300,
+            width: _remoteScreenFrame != null ? 240 : 300,
             color: colors['bg']!,
             child: Column(
               children: [
@@ -1311,7 +1402,6 @@ switch ($action) {
     if (!_canSignal || !_isScreenSharing || _isCapturing) return;
     _isCapturing = true;
     try {
-      print('[ScreenShare] Capturing... canSignal=$_canSignal toUser=${widget.deviceId}');
       final bytes = await _captureLocalScreenToJpegBytes();
       if (!mounted) return;
       if (bytes == null || bytes.isEmpty) {
@@ -1332,10 +1422,16 @@ switch ($action) {
           'frameData': b64,
           'frameWidth': _localFrameWidth,
           'frameHeight': _localFrameHeight,
+          'captureLeft': _localCaptureLeft,
+          'captureTop': _localCaptureTop,
+          'captureWidth': _localCaptureWidth,
+          'captureHeight': _localCaptureHeight,
         },
       );
       if (mounted) setState(() { _framesSent++; _captureError = ''; });
-      print('[ScreenShare] Sent frame #$_framesSent (${bytes.length} bytes)');
+      if (_framesSent % 30 == 0) {
+        print('[ScreenShare] Sent frame #$_framesSent (${bytes.length} bytes) ${_localFrameWidth}x$_localFrameHeight');
+      }
     } finally {
       _isCapturing = false;
     }
@@ -1344,31 +1440,53 @@ switch ($action) {
   Future<Uint8List?> _captureLocalScreenToJpegBytes() async {
     if (!io.Platform.isWindows) return null;
 
-    final tmpDir = await io.Directory.systemTemp.createTemp('bim-share-');
-    final outputPath = '${tmpDir.path}\\frame.jpg';
-    final scriptPath = '${tmpDir.path}\\capture.ps1';
+    // Use stable paths so antivirus exclusions can target one precise location.
+    final stableDir = io.Directory('${io.Platform.environment['LOCALAPPDATA']}\\BIMStreaming\\screenshare');
+    if (!stableDir.existsSync()) {
+      stableDir.createSync(recursive: true);
+    }
+    final outputPath = '${stableDir.path}\\frame.jpg';
+    final scriptPath = '${stableDir.path}\\capture.ps1';
     final escapedOutput = outputPath.replaceAll("'", "''");
 
     // Script écrit dans un fichier (.ps1) pour éviter tout problème d'encodage en ligne de commande
     final scriptContent = r'''Add-Type -AssemblyName System.Windows.Forms,System.Drawing
-$b=[System.Windows.Forms.SystemInformation]::VirtualScreen
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class NativeDpi {
+  [DllImport("user32.dll")]
+  public static extern bool SetProcessDPIAware();
+}
+"@
+[NativeDpi]::SetProcessDPIAware() | Out-Null
+$b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 $src=New-Object System.Drawing.Bitmap $b.Width,$b.Height
 $g=[System.Drawing.Graphics]::FromImage($src)
 $g.CopyFromScreen($b.Left,$b.Top,0,0,$src.Size)
+$maxW=MAX_WIDTH
 $tw=$src.Width
 $th=$src.Height
+if ($tw -gt $maxW) {
+  $ratio=[double]$maxW/[double]$tw
+  $tw=[int]([Math]::Round($tw*$ratio))
+  $th=[int]([Math]::Round($th*$ratio))
+}
 $sc=New-Object System.Drawing.Bitmap $tw,$th
 $g2=[System.Drawing.Graphics]::FromImage($sc)
 $g2.InterpolationMode=[System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
 $g2.DrawImage($src,0,0,$tw,$th)
 $encoder=[System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
 $params=New-Object System.Drawing.Imaging.EncoderParameters(1)
-$params.Param[0]=New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, 92L)
+$params.Param[0]=New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, JPEG_QUALITY)
 $sc.Save('OUTPUT_PATH',$encoder,$params)
-Write-Output "$tw,$th"
+Write-Output "$tw,$th,$($b.Left),$($b.Top),$($b.Width),$($b.Height)"
 $params.Dispose()
 $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
-'''.replaceAll('OUTPUT_PATH', escapedOutput);
+'''
+        .replaceAll('OUTPUT_PATH', escapedOutput)
+        .replaceAll('MAX_WIDTH', _maxCaptureWidth.toString())
+        .replaceAll('JPEG_QUALITY', '${_jpegQuality}L');
 
     await io.File(scriptPath).writeAsString(scriptContent);
 
@@ -1396,13 +1514,19 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
       );
       if (line.isNotEmpty) {
         final parts = line.split(',');
-        if (parts.length == 2) {
+        if (parts.length >= 2) {
           final w = int.tryParse(parts[0].trim()) ?? 0;
           final h = int.tryParse(parts[1].trim()) ?? 0;
           if (w > 0 && h > 0) {
             _localFrameWidth = w;
             _localFrameHeight = h;
           }
+        }
+        if (parts.length >= 6) {
+          _localCaptureLeft = int.tryParse(parts[2].trim()) ?? _localCaptureLeft;
+          _localCaptureTop = int.tryParse(parts[3].trim()) ?? _localCaptureTop;
+          _localCaptureWidth = int.tryParse(parts[4].trim()) ?? _localCaptureWidth;
+          _localCaptureHeight = int.tryParse(parts[5].trim()) ?? _localCaptureHeight;
         }
       }
       final bytes = await file.readAsBytes();
@@ -1412,7 +1536,7 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
       if (mounted) setState(() => _captureError = e.toString());
       return null;
     } finally {
-      try { tmpDir.deleteSync(recursive: true); } catch (_) {}
+      try { io.File(outputPath).deleteSync(); } catch (_) {}
     }
   }
 
