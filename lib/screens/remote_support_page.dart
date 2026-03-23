@@ -98,8 +98,11 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   bool _showLeftFloatingButtons = true;
   int _captureMaxWidth = _defaultCaptureMaxWidth;
   int _captureJpegQuality = _defaultJpegQuality;
-  String _captureResolutionLabel = 'Auto';
+  String _captureResolutionLabel = 'Full Screen';
   String _qualityLabel = 'Medium';
+  String _autoQualityMode = 'Auto';
+  String _screenshotPath = '';
+  String _recordingsPath = '';
   int _selectedRemoteScreenIndex = 0;
   int _selectedLocalScreenIndex = 0;
   int _remoteScreenCount = 1;
@@ -119,6 +122,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   @override
   void initState() {
     super.initState();
+    _initializeUserPaths();
     _syncFullScreenState();
     _startSessionTimer();
     _connectSessionSignalIfAvailable();
@@ -134,6 +138,32 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
           _remoteControlFocusNode.requestFocus();
         }
       });
+    }
+  }
+
+  void _initializeUserPaths() {
+    try {
+      final userProfile = io.Platform.environment['USERPROFILE'] ?? '';
+      if (userProfile.isNotEmpty) {
+        _screenshotPath = '$userProfile\\screenshot';
+        _recordingsPath = '$userProfile\\records';
+        io.Directory(_screenshotPath).createSync(recursive: true);
+        io.Directory(_recordingsPath).createSync(recursive: true);
+      }
+    } catch (_) {
+      // Fall back to BimStreaming defaults if path creation fails
+      final baseDir = io.Directory('${io.Platform.environment['USERPROFILE'] ?? '.'}\\BimStreaming');
+      try {
+        baseDir.createSync(recursive: true);
+        _screenshotPath = '${baseDir.path}\\screenshot';
+        _recordingsPath = '${baseDir.path}\\records';
+        io.Directory(_screenshotPath).createSync(recursive: true);
+        io.Directory(_recordingsPath).createSync(recursive: true);
+      } catch (_) {
+        // Use temp directory as last resort
+        _screenshotPath = io.Directory.systemTemp.path;
+        _recordingsPath = io.Directory.systemTemp.path;
+      }
     }
   }
 
@@ -246,6 +276,7 @@ Write-Output $count
         _lastNetSampleAt = now;
       });
       await _refreshPing();
+      _applyAutoQuality();
     });
     _refreshPing();
   }
@@ -277,22 +308,11 @@ Write-Output $count
       switch (preset) {
         case 'Full Screen':
           _fillRemoteViewport = true;
-          break;
-        case 'Windowed Adapted':
-          _fillRemoteViewport = false;
-          break;
-        case 'Adapted Resolution':
-          _fillRemoteViewport = false;
           _captureMaxWidth = _defaultCaptureMaxWidth;
           break;
-        case '720p':
-          _captureMaxWidth = 1280;
-          break;
-        case '1080p':
-          _captureMaxWidth = 1920;
-          break;
-        case '540p':
-          _captureMaxWidth = 960;
+        case 'Adapter':
+          _fillRemoteViewport = false;
+          _captureMaxWidth = _defaultCaptureMaxWidth;
           break;
         default:
           _captureMaxWidth = _defaultCaptureMaxWidth;
@@ -304,18 +324,51 @@ Write-Output $count
   void _setQualityPreset(String preset) {
     setState(() {
       _qualityLabel = preset;
+      _autoQualityMode = preset;
       switch (preset) {
+        case 'Auto':
+          // Auto will be handled by _applyAutoQuality() during diagnostics
+          _autoQualityMode = 'Auto';
+          break;
         case 'Low':
           _captureJpegQuality = 45;
+          _autoQualityMode = 'Manual';
+          break;
+        case 'Medium':
+          _captureJpegQuality = _defaultJpegQuality;
+          _autoQualityMode = 'Manual';
           break;
         case 'High':
           _captureJpegQuality = 85;
+          _autoQualityMode = 'Manual';
           break;
         default:
           _captureJpegQuality = _defaultJpegQuality;
+          _autoQualityMode = 'Manual';
       }
     });
     _sendDisplayConfig();
+  }
+
+  void _applyAutoQuality() {
+    if (_autoQualityMode != 'Auto') return;
+    // Auto-adjust quality based on bandwidth and ping
+    // Excellent (ping <= 50ms): High quality
+    // Good (ping <= 100ms): Medium quality
+    // Fair (ping <= 180ms): Low quality
+    // Poor (ping > 180ms): Very Low quality
+    final newQuality = _pingMs <= 50
+        ? 85  // High
+        : (_pingMs <= 100
+            ? _defaultJpegQuality  // Medium
+            : (_pingMs <= 180
+                ? 45  // Low
+                : 35)); // Very Low
+    if (_captureJpegQuality != newQuality) {
+      setState(() {
+        _captureJpegQuality = newQuality;
+      });
+    }
   }
 
   void _sendDisplayConfig() {
@@ -362,19 +415,6 @@ Write-Output $count
     });
     _sendInputPolicy();
     _showMessage(context, 'Input control restarted', _getColors(context));
-  }
-
-  io.Directory _ensureOutputDirectory(String dirName) {
-    final userProfile = io.Platform.environment['USERPROFILE'] ?? '.';
-    final baseDir = io.Directory('$userProfile\\BimStreaming');
-    if (!baseDir.existsSync()) {
-      baseDir.createSync(recursive: true);
-    }
-    final outDir = io.Directory('${baseDir.path}\\$dirName');
-    if (!outDir.existsSync()) {
-      outDir.createSync(recursive: true);
-    }
-    return outDir;
   }
 
   String _timestampForFile() {
@@ -1329,139 +1369,191 @@ switch ($action) {
       );
     }
 
-    return Container(
-      color: Colors.black,
-      alignment: Alignment.center,
-      child: KeyboardListener(
-        focusNode: _remoteControlFocusNode,
-        autofocus: !widget.sendLocalScreen,
-        onKeyEvent: (event) {
-          if (!_canSendRemoteInput || _isDeviceLocked || _isSessionPaused || !_keyboardInputEnabledForUser2) {
-            return;
-          }
-          if (event is KeyDownEvent) {
-            final key = event.logicalKey.keyLabel.isNotEmpty
-                ? event.logicalKey.keyLabel
-                : event.logicalKey.debugName;
-            if (key != null && key.isNotEmpty) {
-              _sendInputEvent('key_press', key: key);
-            }
-          }
-        },
-        child: Builder(
-          builder: (localContext) {
-            Offset? normalize(Offset local) {
-              final box = localContext.findRenderObject();
-              if (box is! RenderBox) return null;
-              final w = box.size.width;
-              final h = box.size.height;
-              if (w <= 0 || h <= 0) return null;
-
-              final frameAspect = _remoteFrameWidth / _remoteFrameHeight;
-              final viewAspect = w / h;
-              double drawW;
-              double drawH;
-              double offsetX = 0;
-              double offsetY = 0;
-
-              if (_fillRemoteViewport) {
-                if (frameAspect > viewAspect) {
-                  drawH = h;
-                  drawW = h * frameAspect;
-                  offsetX = (w - drawW) / 2;
-                } else {
-                  drawW = w;
-                  drawH = w / frameAspect;
-                  offsetY = (h - drawH) / 2;
-                }
-              } else {
-                if (frameAspect > viewAspect) {
-                  drawW = w;
-                  drawH = w / frameAspect;
-                  offsetY = (h - drawH) / 2;
-                } else {
-                  drawH = h;
-                  drawW = h * frameAspect;
-                  offsetX = (w - drawW) / 2;
+    return Stack(
+      children: [
+        Container(
+          color: Colors.black,
+          alignment: Alignment.center,
+          child: KeyboardListener(
+            focusNode: _remoteControlFocusNode,
+            autofocus: !widget.sendLocalScreen,
+            onKeyEvent: (event) {
+              if (!_canSendRemoteInput || _isDeviceLocked || _isSessionPaused || !_keyboardInputEnabledForUser2) {
+                return;
+              }
+              if (event is KeyDownEvent) {
+                final key = event.logicalKey.keyLabel.isNotEmpty
+                    ? event.logicalKey.keyLabel
+                    : event.logicalKey.debugName;
+                if (key != null && key.isNotEmpty) {
+                  _sendInputEvent('key_press', key: key);
                 }
               }
+            },
+            child: Builder(
+              builder: (localContext) {
+                Offset? normalize(Offset local) {
+                  final box = localContext.findRenderObject();
+                  if (box is! RenderBox) return null;
+                  final w = box.size.width;
+                  final h = box.size.height;
+                  if (w <= 0 || h <= 0) return null;
 
-              final inX = (local.dx - offsetX);
-              final inY = (local.dy - offsetY);
-              if (!_fillRemoteViewport && (inX < 0 || inY < 0 || inX > drawW || inY > drawH)) {
-                return null;
-              }
+                  final frameAspect = _remoteFrameWidth / _remoteFrameHeight;
+                  final viewAspect = w / h;
+                  double drawW;
+                  double drawH;
+                  double offsetX = 0;
+                  double offsetY = 0;
 
-              final nx = (inX / drawW).clamp(0.0, 1.0);
-              final ny = (inY / drawH).clamp(0.0, 1.0);
-              return Offset(nx, ny);
-            }
+                  if (_fillRemoteViewport) {
+                    if (frameAspect > viewAspect) {
+                      drawH = h;
+                      drawW = h * frameAspect;
+                      offsetX = (w - drawW) / 2;
+                    } else {
+                      drawW = w;
+                      drawH = w / frameAspect;
+                      offsetY = (h - drawH) / 2;
+                    }
+                  } else {
+                    if (frameAspect > viewAspect) {
+                      drawW = w;
+                      drawH = w / frameAspect;
+                      offsetY = (h - drawH) / 2;
+                    } else {
+                      drawH = h;
+                      drawW = h * frameAspect;
+                      offsetX = (w - drawW) / 2;
+                    }
+                  }
 
-            return Listener(
-              onPointerDown: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
-                  ? (event) {
-                      _revealOverlayTemporarily();
-                      final p = normalize(event.localPosition);
-                      if (p == null) return;
-                      _rightButtonPressed = event.buttons == kSecondaryMouseButton;
-                      _sendInputEvent(
-                        _rightButtonPressed ? 'right_down' : 'left_down',
-                        normalizedX: p.dx,
-                        normalizedY: p.dy,
-                      );
-                      _remoteControlFocusNode.requestFocus();
-                    }
-                  : (_) => _revealOverlayTemporarily(),
-                onPointerHover: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
-                  ? (event) {
-                      final now = DateTime.now().millisecondsSinceEpoch;
-                      if (now - _lastPointerMoveMs < 35) return;
-                      _lastPointerMoveMs = now;
-                      final p = normalize(event.localPosition);
-                      if (p == null) return;
-                      _sendMoveIfNeeded(p);
-                    }
-                  : null,
-                onPointerMove: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
-                  ? (event) {
-                      final now = DateTime.now().millisecondsSinceEpoch;
-                      if (now - _lastPointerMoveMs < 35) return;
-                      _lastPointerMoveMs = now;
-                      final p = normalize(event.localPosition);
-                      if (p == null) return;
-                      _sendMoveIfNeeded(p);
-                    }
-                  : null,
-                onPointerUp: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
-                  ? (event) {
-                      final p = normalize(event.localPosition);
-                      if (p == null) return;
-                      _sendInputEvent(
-                        _rightButtonPressed ? 'right_up' : 'left_up',
-                        normalizedX: p.dx,
-                        normalizedY: p.dy,
-                      );
-                      _rightButtonPressed = false;
-                    }
-                  : null,
-                onPointerSignal: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
-                  ? (event) {
-                      if (event is PointerScrollEvent) {
-                        _sendInputEvent('wheel', wheelDelta: event.scrollDelta.dy.toInt());
-                      }
-                    }
-                  : null,
-              child: Image.memory(
-                _remoteScreenFrame!,
-                width: double.infinity,
-                height: double.infinity,
-                fit: _fillRemoteViewport ? BoxFit.cover : BoxFit.contain,
-                gaplessPlayback: true,
-              ),
-            );
-          },
+                  final inX = (local.dx - offsetX);
+                  final inY = (local.dy - offsetY);
+                  if (!_fillRemoteViewport && (inX < 0 || inY < 0 || inX > drawW || inY > drawH)) {
+                    return null;
+                  }
+
+                  final nx = (inX / drawW).clamp(0.0, 1.0);
+                  final ny = (inY / drawH).clamp(0.0, 1.0);
+                  return Offset(nx, ny);
+                }
+
+                return Listener(
+                  onPointerDown: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                      ? (event) {
+                          _revealOverlayTemporarily();
+                          final p = normalize(event.localPosition);
+                          if (p == null) return;
+                          _rightButtonPressed = event.buttons == kSecondaryMouseButton;
+                          _sendInputEvent(
+                            _rightButtonPressed ? 'right_down' : 'left_down',
+                            normalizedX: p.dx,
+                            normalizedY: p.dy,
+                          );
+                          _remoteControlFocusNode.requestFocus();
+                        }
+                      : (_) => _revealOverlayTemporarily(),
+                  onPointerHover: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                      ? (event) {
+                          final now = DateTime.now().millisecondsSinceEpoch;
+                          if (now - _lastPointerMoveMs < 35) return;
+                          _lastPointerMoveMs = now;
+                          final p = normalize(event.localPosition);
+                          if (p == null) return;
+                          _sendMoveIfNeeded(p);
+                        }
+                      : null,
+                  onPointerMove: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                      ? (event) {
+                          final now = DateTime.now().millisecondsSinceEpoch;
+                          if (now - _lastPointerMoveMs < 35) return;
+                          _lastPointerMoveMs = now;
+                          final p = normalize(event.localPosition);
+                          if (p == null) return;
+                          _sendMoveIfNeeded(p);
+                        }
+                      : null,
+                  onPointerUp: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                      ? (event) {
+                          final p = normalize(event.localPosition);
+                          if (p == null) return;
+                          _sendInputEvent(
+                            _rightButtonPressed ? 'right_up' : 'left_up',
+                            normalizedX: p.dx,
+                            normalizedY: p.dy,
+                          );
+                          _rightButtonPressed = false;
+                        }
+                      : null,
+                  onPointerSignal: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                      ? (event) {
+                          if (event is PointerScrollEvent) {
+                            _sendInputEvent('wheel', wheelDelta: event.scrollDelta.dy.toInt());
+                          }
+                        }
+                      : null,
+                  child: Image.memory(
+                    _remoteScreenFrame!,
+                    width: double.infinity,
+                    height: double.infinity,
+                    fit: _fillRemoteViewport ? BoxFit.cover : BoxFit.contain,
+                    gaplessPlayback: true,
+                  ),
+                );
+              },
+            ),
+          ),
         ),
-      ),
+        // Pause overlay
+        if (_isSessionPaused)
+          Positioned.fill(
+            child: Container(
+              color: Colors.black.withValues(alpha: 0.6),
+              alignment: Alignment.center,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.pause, size: 64, color: Colors.white),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Session Paused',
+                    style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 32),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      ElevatedButton.icon(
+                        onPressed: _togglePauseSession,
+                        icon: const Icon(Icons.play_circle),
+                        label: const Text('Resume'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green,
+                          foregroundColor:Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      ElevatedButton.icon(
+                        onPressed: () => _closeSession(notifyPeer: true),
+                        icon: const Icon(Icons.close),
+                        label: const Text('Disconnect'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
     );
   }
 
@@ -1765,7 +1857,110 @@ switch ($action) {
             ),
           ],
         ),
+        const SizedBox(height: 14),
+        Text('File Paths', style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: colors['cardBg']!,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: colors['border']!),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Screenshots: $_screenshotPath',
+                style: TextStyle(color: colors['textSecondary']!, fontSize: 11),
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Recordings: $_recordingsPath',
+                style: TextStyle(color: colors['textSecondary']!, fontSize: 11),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: _buildActionButton(
+                Icons.folder,
+                'Change Paths',
+                _showPathCustomizationDialog,
+                colors,
+              ),
+            ),
+          ],
+        ),
       ],
+    );
+  }
+
+  void _showPathCustomizationDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        String tempScreenshot = _screenshotPath;
+        String tempRecordings = _recordingsPath;
+        return AlertDialog(
+          title: const Text('Customize File Paths'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Screenshots Path:', style: TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: TextEditingController(text: tempScreenshot),
+                  decoration: const InputDecoration(hintText: 'Enter screenshots path'),
+                  onChanged: (v) => tempScreenshot = v,
+                ),
+                const SizedBox(height: 16),
+                const Text('Recordings Path:', style: TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: TextEditingController(text: tempRecordings),
+                  decoration: const InputDecoration(hintText: 'Enter recordings path'),
+                  onChanged: (v) => tempRecordings = v,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                if (tempScreenshot.isNotEmpty && tempRecordings.isNotEmpty) {
+                  try {
+                    io.Directory(tempScreenshot).createSync(recursive: true);
+                    io.Directory(tempRecordings).createSync(recursive: true);
+                    setState(() {
+                      _screenshotPath = tempScreenshot;
+                      _recordingsPath = tempRecordings;
+                    });
+                    _showMessage(context, 'Paths updated successfully', _getColors(context));
+                    Navigator.pop(ctx);
+                  } catch (e) {
+                    _showMessage(context, 'Error creating directories: $e', _getColors(context));
+                  }
+                } else {
+                  _showMessage(context, 'Both paths cannot be empty', _getColors(context));
+                }
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -1783,12 +1978,7 @@ switch ($action) {
           ),
           items: const [
             DropdownMenuItem(value: 'Full Screen', child: Text('Full Screen')),
-            DropdownMenuItem(value: 'Windowed Adapted', child: Text('Windowed Adapted')),
-            DropdownMenuItem(value: 'Adapted Resolution', child: Text('Adapted Resolution')),
-            DropdownMenuItem(value: 'Auto', child: Text('Auto')),
-            DropdownMenuItem(value: '540p', child: Text('540p')),
-            DropdownMenuItem(value: '720p', child: Text('720p')),
-            DropdownMenuItem(value: '1080p', child: Text('1080p')),
+            DropdownMenuItem(value: 'Adapter', child: Text('Adapter')),
           ],
           onChanged: (v) {
             if (v != null) _setResolutionPreset(v);
@@ -1803,6 +1993,7 @@ switch ($action) {
             labelStyle: TextStyle(color: Colors.lightBlueAccent, fontWeight: FontWeight.w700),
           ),
           items: const [
+            DropdownMenuItem(value: 'Auto', child: Text('Auto (connection-based)')),
             DropdownMenuItem(value: 'Low', child: Text('Low (performance)')),
             DropdownMenuItem(value: 'Medium', child: Text('Medium')),
             DropdownMenuItem(value: 'High', child: Text('High (quality)')),
@@ -2200,6 +2391,13 @@ switch ($action) {
     );
     if (!mounted || dir == null || dir.isEmpty) return;
     setState(() => _receiveTargetPath = dir);
+    
+    // Request list of files from remote machine for browsing
+    _sendSessionPayload(
+      messageType: 'list_files',
+      payload: {'path': ''},
+    );
+    
     _showMessage(context, 'Receive folder set: $dir', _getColors(context));
   }
 
@@ -2211,10 +2409,13 @@ switch ($action) {
       return;
     }
 
-    final screenshotsDir = _ensureOutputDirectory('screenshots');
-    final outputPath = '${screenshotsDir.path}\\remote_screenshot_${_timestampForFile()}.jpg';
-
     try {
+      final screenshotsDir = io.Directory(_screenshotPath);
+      if (!screenshotsDir.existsSync()) {
+        screenshotsDir.createSync(recursive: true);
+      }
+      final outputPath = '${screenshotsDir.path}\\remote_screenshot_${_timestampForFile()}.jpg';
+
       await io.File(outputPath).writeAsBytes(_remoteScreenFrame!, flush: true);
       if (!mounted) return;
       final time = DateTime.now().toIso8601String();
@@ -2390,9 +2591,12 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
       _recordingTimer?.cancel();
       _recordingTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
         if (!_isRecording || _remoteScreenFrame == null || _remoteScreenFrame!.isEmpty) return;
-        final dir = _ensureOutputDirectory('recordings');
-        final path = '${dir.path}\\frame_${_timestampForFile()}_${_recordedFrames.length + 1}.jpg';
         try {
+          final dir = io.Directory(_recordingsPath);
+          if (!dir.existsSync()) {
+            dir.createSync(recursive: true);
+          }
+          final path = '${dir.path}\\frame_${_timestampForFile()}_${_recordedFrames.length + 1}.jpg';
           await io.File(path).writeAsBytes(_remoteScreenFrame!, flush: true);
           if (!mounted) return;
           setState(() {
@@ -2418,7 +2622,7 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
     _showMessage(
       context,
       next
-          ? 'Recording started (saved to ~/BimStreaming/recordings)'
+          ? 'Recording started (saved to $_recordingsPath)'
           : 'Recording stopped. ${_recordedFrames.length} frames saved.',
       _getColors(context),
     );
@@ -2486,6 +2690,16 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
       messageType: 'privacy_mode',
       payload: {'enabled': _isBlackoutMode},
     );
+    
+    // Also send system action to machine B to hide/show display
+    if (_isBlackoutMode) {
+      // Hide display - black out the system screen
+      _applySystemAction({'action': 'privacy_mode_on'});
+    } else {
+      // Show display - restore the system screen
+      _applySystemAction({'action': 'privacy_mode_off'});
+    }
+    
     _showMessage(context, _isBlackoutMode ? tr('privacy_mode_enabled') : tr('privacy_mode_disabled'), _getColors(context));
   }
 
@@ -2528,6 +2742,31 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
         case 'reboot':
           await io.Process.start('shutdown', ['/r', '/t', '3']);
           break;
+        case 'privacy_mode_on':
+          // Turn off display - black out the system screen on machine B
+          await io.Process.run('powershell', [
+            '-NoProfile',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-Command',
+            r'''
+[DllImport("user32.dll")]
+public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+$null = Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);' -Name NativeMethods -PassThru
+[NativeMethods]::PostMessage([IntPtr](-1), 0x0112, [IntPtr](0xF170), [IntPtr](2))
+''',
+          ]);
+          break;
+        case 'privacy_mode_off':
+          // Turn on display - restore the system screen on machine B
+          await io.Process.run('powershell', [
+            '-NoProfile',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-Command',
+            r'''Move-Mouse'''
+          ]);
+          break;
       }
     } catch (_) {
       // Keep session alive even if local policy blocks command execution.
@@ -2539,47 +2778,54 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
       return null;
     }
 
-    final recordingsDir = _ensureOutputDirectory('recordings');
-    final listPath = '${recordingsDir.path}\\frames_${_timestampForFile()}.txt';
-    final outPath = '${recordingsDir.path}\\session_${_timestampForFile()}.mp4';
-
-    final buffer = StringBuffer();
-    for (final frame in _recordedFrames) {
-      final p = (frame['path'] ?? '').replaceAll('\\', '/').replaceAll("'", "''");
-      if (p.isEmpty) continue;
-      buffer.writeln("file '$p'");
-      buffer.writeln('duration ${1 / _recordingFps}');
-    }
-
     try {
-      await io.File(listPath).writeAsString(buffer.toString());
-      final result = await io.Process.run(
-        'ffmpeg',
-        [
-          '-y',
-          '-f',
-          'concat',
-          '-safe',
-          '0',
-          '-i',
-          listPath,
-          '-vf',
-          'fps=$_recordingFps',
-          '-pix_fmt',
-          'yuv420p',
-          outPath,
-        ],
-      );
+      final recordingsDir = io.Directory(_recordingsPath);
+      if (!recordingsDir.existsSync()) {
+        recordingsDir.createSync(recursive: true);
+      }
+      final listPath = '${recordingsDir.path}\\frames_${_timestampForFile()}.txt';
+      final outPath = '${recordingsDir.path}\\session_${_timestampForFile()}.mp4';
 
-      if (result.exitCode == 0 && io.File(outPath).existsSync()) {
-        return outPath;
+      final buffer = StringBuffer();
+      for (final frame in _recordedFrames) {
+        final p = (frame['path'] ?? '').replaceAll('\\', '/').replaceAll("'", "''");
+        if (p.isEmpty) continue;
+        buffer.writeln("file '$p'");
+        buffer.writeln('duration ${1 / _recordingFps}');
+      }
+
+      try {
+        await io.File(listPath).writeAsString(buffer.toString());
+        final result = await io.Process.run(
+          'ffmpeg',
+          [
+            '-y',
+            '-f',
+            'concat',
+            '-safe',
+            '0',
+            '-i',
+            listPath,
+            '-vf',
+            'fps=$_recordingFps',
+            '-pix_fmt',
+            'yuv420p',
+            outPath,
+          ],
+        );
+
+        if (result.exitCode == 0 && io.File(outPath).existsSync()) {
+          return outPath;
+        }
+      } catch (_) {
+        // ffmpeg might not be installed.
+      } finally {
+        try {
+          io.File(listPath).deleteSync();
+        } catch (_) {}
       }
     } catch (_) {
-      // ffmpeg might not be installed.
-    } finally {
-      try {
-        io.File(listPath).deleteSync();
-      } catch (_) {}
+      // Ignore errors
     }
     return null;
   }
