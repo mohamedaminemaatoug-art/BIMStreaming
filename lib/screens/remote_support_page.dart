@@ -90,6 +90,10 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   int _localCaptureTop = 0;
   int _localCaptureWidth = 0;
   int _localCaptureHeight = 0;
+  int _remoteCaptureLeft = 0;
+  int _remoteCaptureTop = 0;
+  int _remoteCaptureWidth = 0;
+  int _remoteCaptureHeight = 0;
   bool _fillRemoteViewport = false;
   int _lastAppliedMoveMs = 0;
   double? _lastSentMoveX;
@@ -626,6 +630,15 @@ Write-Output $count
               if (si is num && si.toInt() >= 0) {
                 _selectedRemoteScreenIndex = si.toInt();
               }
+              // Extract remote capture bounds for mouse coordinate mapping
+              final rcl = payload['captureLeft'];
+              final rct = payload['captureTop'];
+              final rcw = payload['captureWidth'];
+              final rch = payload['captureHeight'];
+              if (rcl is num) _remoteCaptureLeft = rcl.toInt();
+              if (rct is num) _remoteCaptureTop = rct.toInt();
+              if (rcw is num) _remoteCaptureWidth = rcw.toInt();
+              if (rch is num) _remoteCaptureHeight = rch.toInt();
               _framesReceived++;
               if (_framesReceived % 30 == 0) {
                 print('[ScreenShare] Frame received #$_framesReceived (${frameData.length} chars b64) from $fromUserId');
@@ -897,10 +910,10 @@ switch ($action) {
         .replaceAll('__X__', x == null ? '-1' : x.toStringAsFixed(6))
         .replaceAll('__Y__', y == null ? '-1' : y.toStringAsFixed(6))
         .replaceAll('__WHEEL__', wheelDelta.toString())
-  .replaceAll('__CAP_LEFT__', _localCaptureLeft.toString())
-  .replaceAll('__CAP_TOP__', _localCaptureTop.toString())
-  .replaceAll('__CAP_WIDTH__', _localCaptureWidth.toString())
-  .replaceAll('__CAP_HEIGHT__', _localCaptureHeight.toString())
+  .replaceAll('__CAP_LEFT__', _remoteCaptureLeft.toString())
+  .replaceAll('__CAP_TOP__', _remoteCaptureTop.toString())
+  .replaceAll('__CAP_WIDTH__', _remoteCaptureWidth.toString())
+  .replaceAll('__CAP_HEIGHT__', _remoteCaptureHeight.toString())
         .replaceAll('__KEY__', key.replaceAll("'", "''"));
 
     try {
