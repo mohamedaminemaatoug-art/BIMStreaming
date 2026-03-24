@@ -116,9 +116,6 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   String _receiveTargetPath = '';
   int _reconnectAttempts = 0;
   int _recordingFps = 1;
-  String _scalingMode = 'Best fit';
-  String _optimalResolution = '1920x1080';
-  int _localScreenWidth = 1920;
   List<String> _remoteFileList = [];
 
   String tr(String key) => widget.translate(key);
@@ -168,34 +165,6 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
         _screenshotPath = io.Directory.systemTemp.path;
         _recordingsPath = io.Directory.systemTemp.path;
       }
-    }
-    _getLocalScreenResolution();
-  }
-
-  Future<void> _getLocalScreenResolution() async {
-    if (!io.Platform.isWindows) return;
-    final script = r'''
-Add-Type -AssemblyName System.Windows.Forms
-$screen = [System.Windows.Forms.Screen]::PrimaryScreen
-Write-Output "$($screen.Bounds.Width)x$($screen.Bounds.Height)"
-''';
-    try {
-      final result = await io.Process.run(
-        'powershell',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
-      );
-      if (result.exitCode == 0) {
-        final resolution = '${result.stdout}'.trim();
-        if (resolution.contains('x')) {
-          setState(() => _optimalResolution = resolution);
-          final parts = resolution.split('x');
-          if (parts.length == 2) {
-            _localScreenWidth = int.tryParse(parts[0]) ?? 1920;
-          }
-        }
-      }
-    } catch (_) {
-      // Keep defaults
     }
   }
 
@@ -337,23 +306,28 @@ Write-Output $count
   void _setResolutionPreset(String preset) {
     setState(() {
       _captureResolutionLabel = preset;
-      if (preset.contains('Optimal')) {
-        _fillRemoteViewport = true;
-        _captureMaxWidth = _localScreenWidth;
-      } else if (preset.contains('1680')) {
-        _captureMaxWidth = 1680;
-      } else if (preset.contains('1600')) {
-        _captureMaxWidth = 1600;
-      } else if (preset.contains('1440')) {
-        _captureMaxWidth = 1440;
-      } else if (preset.contains('1400')) {
-        _captureMaxWidth = 1400;
-      } else if (preset.contains('1366')) {
-        _captureMaxWidth = 1366;
-      } else if (preset.contains('1360')) {
-        _captureMaxWidth = 1360;
-      } else if (preset.contains('1280')) {
-        _captureMaxWidth = 1280;
+      switch (preset) {
+        case 'Full Screen':
+          _fillRemoteViewport = true;
+          break;
+        case 'Windowed Adapted':
+          _fillRemoteViewport = false;
+          break;
+        case 'Adapted Resolution':
+          _fillRemoteViewport = false;
+          _captureMaxWidth = _defaultCaptureMaxWidth;
+          break;
+        case '720p':
+          _captureMaxWidth = 1280;
+          break;
+        case '1080p':
+          _captureMaxWidth = 1920;
+          break;
+        case '540p':
+          _captureMaxWidth = 960;
+          break;
+        default:
+          _captureMaxWidth = _defaultCaptureMaxWidth;
       }
     });
     _sendDisplayConfig();
@@ -416,7 +390,6 @@ Write-Output $count
         'screenIndex': _selectedRemoteScreenIndex,
         'resolution': _captureResolutionLabel,
         'quality': _qualityLabel,
-        'scaling': _scalingMode,
       },
     );
   }
@@ -2132,143 +2105,46 @@ switch ($action) {
   }
 
   Widget _buildPresetSelectors(Map<String, Color> colors) {
-    final resolutionOptions = [
-      'Optimal resolution ($_optimalResolution)',
-      '1680 x 1050',
-      '1600 x 900',
-      '1440 x 900',
-      '1400 x 1050',
-      '1366 x 768',
-      '1360 x 768',
-      '1280 x 1024',
-      '1280 x 960',
-      '1280 x 800',
-      '1280 x 768',
-      '1280 x 720',
-    ];
-
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _buildScreenTabs(colors),
-        const SizedBox(height: 14),
-        Text('Resolution', style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600, fontSize: 13)),
         const SizedBox(height: 8),
-        Container(
-          decoration: BoxDecoration(
-            color: colors['bg']!,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: colors['border']!),
+        DropdownButtonFormField<String>(
+          initialValue: _captureResolutionLabel,
+          style: const TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.w700),
+          decoration: const InputDecoration(
+            labelText: 'Resolution',
+            labelStyle: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.w700),
           ),
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: resolutionOptions.map((option) {
-              final isOptimal = option.contains('Optimal');
-              return Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                child: Row(
-                  children: [
-                    Radio<String>(
-                      value: option,
-                      groupValue: _captureResolutionLabel,
-                      onChanged: (value) {
-                        if (value != null) _setResolutionPreset(value);
-                      },
-                      activeColor: colors['accent']!,
-                    ),
-                    Expanded(
-                      child: Text(
-                        option,
-                        style: TextStyle(
-                          color: isOptimal ? colors['accent']! : colors['text']!,
-                          fontSize: 12,
-                          fontWeight: isOptimal ? FontWeight.w600 : FontWeight.normal,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }).toList(),
-          ),
+          items: const [
+            DropdownMenuItem(value: 'Full Screen', child: Text('Full Screen')),
+            DropdownMenuItem(value: 'Windowed Adapted', child: Text('Windowed Adapted')),
+            DropdownMenuItem(value: 'Adapted Resolution', child: Text('Adapted Resolution')),
+            DropdownMenuItem(value: 'Auto', child: Text('Auto')),
+            DropdownMenuItem(value: '540p', child: Text('540p')),
+            DropdownMenuItem(value: '720p', child: Text('720p')),
+            DropdownMenuItem(value: '1080p', child: Text('1080p')),
+          ],
+          onChanged: (v) {
+            if (v != null) _setResolutionPreset(v);
+          },
         ),
-        const SizedBox(height: 14),
-        Text('Scaling', style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600, fontSize: 13)),
         const SizedBox(height: 8),
-        Container(
-          decoration: BoxDecoration(
-            color: colors['bg']!,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: colors['border']!),
+        DropdownButtonFormField<String>(
+          initialValue: _qualityLabel,
+          style: const TextStyle(color: Colors.lightBlueAccent, fontWeight: FontWeight.w700),
+          decoration: const InputDecoration(
+            labelText: 'Quality',
+            labelStyle: TextStyle(color: Colors.lightBlueAccent, fontWeight: FontWeight.w700),
           ),
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: ['Best fit', 'Original', 'Scaled'].map((mode) {
-              return Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                child: Row(
-                  children: [
-                    Radio<String>(
-                      value: mode,
-                      groupValue: _scalingMode,
-                      onChanged: (value) {
-                        if (value != null) {
-                          setState(() => _scalingMode = value);
-                          _sendDisplayConfig();
-                        }
-                      },
-                      activeColor: colors['accent']!,
-                    ),
-                    Expanded(
-                      child: Text(
-                        mode,
-                        style: TextStyle(color: colors['text']!, fontSize: 12),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }).toList(),
-          ),
-        ),
-        const SizedBox(height: 14),
-        Text('Quality', style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600, fontSize: 13)),
-        const SizedBox(height: 8),
-        Container(
-          decoration: BoxDecoration(
-            color: colors['bg']!,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: colors['border']!),
-          ),
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: ['Auto (connection-based)', 'Low (performance)', 'Medium', 'High (quality)'].map((quality) {
-              return Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                child: Row(
-                  children: [
-                    Radio<String>(
-                      value: quality,
-                      groupValue: _qualityLabel,
-                      onChanged: (value) {
-                        if (value != null) _setQualityPreset(value);
-                      },
-                      activeColor: colors['accent']!,
-                    ),
-                    Expanded(
-                      child: Text(
-                        quality,
-                        style: TextStyle(color: colors['text']!, fontSize: 12),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }).toList(),
-          ),
+          items: const [
+            DropdownMenuItem(value: 'Low', child: Text('Low (performance)')),
+            DropdownMenuItem(value: 'Medium', child: Text('Medium')),
+            DropdownMenuItem(value: 'High', child: Text('High (quality)')),
+          ],
+          onChanged: (v) {
+            if (v != null) _setQualityPreset(v);
+          },
         ),
       ],
     );
