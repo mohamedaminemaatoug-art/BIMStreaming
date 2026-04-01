@@ -1,11 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
+import 'dart:ffi' as ffi;
+import 'dart:ffi';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:image/image.dart' as img;
+import 'package:win32/win32.dart';
 import '../services/signaling_client_service.dart';
 
 class RemoteSupportPage extends StatefulWidget {
@@ -200,8 +204,8 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   Future<void> _refreshLocalScreenInfo() async {
     if (!io.Platform.isWindows) return;
     final script = r'''
-Add-Type -AssemblyName System.Windows.Forms
-$count = [System.Windows.Forms.Screen]::AllScreens.Count
+  [void][Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms')
+  $count = [System.Windows.Forms.Screen]::AllScreens.Count
 Write-Output $count
 ''';
     try {
@@ -312,7 +316,8 @@ Write-Output $count
       _captureResolutionLabel = preset;
       switch (preset) {
         case 'Full Screen':
-          _fillRemoteViewport = true;
+          // Keep the complete remote image visible (no edge cropping).
+          _fillRemoteViewport = false;
           break;
         case 'Windowed Adapted':
           _fillRemoteViewport = false;
@@ -550,7 +555,7 @@ Write-Output $count
           if (resolution == '1080p') _captureMaxWidth = 1920;
           if (resolution == '540p') _captureMaxWidth = 960;
           if (resolution == 'Adapted Resolution') _captureMaxWidth = _defaultCaptureMaxWidth;
-          _fillRemoteViewport = resolution == 'Full Screen';
+          _fillRemoteViewport = false;
         }
         if (quality.isNotEmpty) {
           _qualityLabel = quality;
@@ -1033,85 +1038,95 @@ switch ($action) {
   }
 
   Widget _buildControllerView(Map<String, Color> colors) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () {
-        _revealOverlayTemporarily();
-        if (_panelMode != 'none') {
-          setState(() => _panelMode = 'none');
-        }
-      },
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: Listener(
-              onPointerSignal: (event) {
-                if (event is PointerScrollEvent && event.position.dy <= 70) {
-                  _revealOverlayTemporarily();
-                }
-              },
-              child: _buildRemoteCanvas(colors),
-            ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = constraints.maxWidth < 1200;
+        final overlayLeft = isCompact ? 12.0 : 70.0;
+        final panelLeft = isCompact ? 12.0 : 74.0;
+        final panelWidth =
+            (constraints.maxWidth - panelLeft - 12.0).clamp(260.0, 360.0);
+
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () {
+            _revealOverlayTemporarily();
+            if (_panelMode != 'none') {
+              setState(() => _panelMode = 'none');
+            }
+          },
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: Listener(
+                  onPointerSignal: (event) {
+                    if (event is PointerScrollEvent && event.position.dy <= 70) {
+                      _revealOverlayTemporarily();
+                    }
+                  },
+                  child: _buildRemoteCanvas(colors),
+                ),
+              ),
+              if (_showTopOverlay)
+                Positioned(
+                  top: 10,
+                  left: overlayLeft,
+                  right: 12,
+                  child: _buildTopOverlayBar(colors),
+                ),
+              if (_showLeftFloatingButtons)
+                Positioned(
+                  top: 84,
+                  left: 12,
+                  child: _buildFloatingButtons(colors),
+                ),
+              if (_panelMode != 'none')
+                Positioned(
+                  top: 76,
+                  left: panelLeft,
+                  bottom: 20,
+                  width: panelWidth,
+                  child: _buildContextPanel(colors),
+                ),
+              if (_isDeviceLocked)
+                Positioned.fill(
+                  child: Container(
+                    color: Colors.black.withValues(alpha: 0.35),
+                    alignment: Alignment.center,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                      decoration: BoxDecoration(
+                        color: Colors.black87,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Text(
+                        'Lock mode enabled: remote user controls are restricted',
+                        style: TextStyle(color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ),
+              if (_isSessionPaused)
+                Positioned.fill(
+                  child: Container(
+                    color: Colors.black.withValues(alpha: 0.45),
+                    alignment: Alignment.center,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.black87,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Text(
+                        'Session paused. Remote screen is frozen.',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
-          if (_showTopOverlay)
-            Positioned(
-              top: 10,
-              left: 70,
-              right: 16,
-              child: _buildTopOverlayBar(colors),
-            ),
-          if (_showLeftFloatingButtons)
-            Positioned(
-              top: 84,
-              left: 12,
-              child: _buildFloatingButtons(colors),
-            ),
-          if (_panelMode != 'none')
-            Positioned(
-              top: 76,
-              left: 74,
-              bottom: 20,
-              width: 360,
-              child: _buildContextPanel(colors),
-            ),
-          if (_isDeviceLocked)
-            Positioned.fill(
-              child: Container(
-                color: Colors.black.withValues(alpha: 0.35),
-                alignment: Alignment.center,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-                  decoration: BoxDecoration(
-                    color: Colors.black87,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Text(
-                    'Lock mode enabled: remote user controls are restricted',
-                    style: TextStyle(color: Colors.white),
-                  ),
-                ),
-              ),
-            ),
-          if (_isSessionPaused)
-            Positioned.fill(
-              child: Container(
-                color: Colors.black.withValues(alpha: 0.45),
-                alignment: Alignment.center,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                  decoration: BoxDecoration(
-                    color: Colors.black87,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Text(
-                    'Session paused. Remote screen is frozen.',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -1210,43 +1225,46 @@ switch ($action) {
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: colors['border']!),
       ),
-      child: Row(
-        children: [
-          Icon(Icons.circle, size: 9, color: _isConnected ? Colors.green : Colors.redAccent),
-          const SizedBox(width: 6),
-          Text(_connectionStatus, style: TextStyle(color: colors['text']!, fontSize: 12)),
-          const SizedBox(width: 10),
-          Text('Session $_sessionTime', style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
-          const SizedBox(width: 10),
-          Icon(_isEncrypted ? Icons.lock : Icons.lock_open, size: 12, color: _isEncrypted ? Colors.green : Colors.orange),
-          const SizedBox(width: 4),
-          Text(_encryptionType, style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
-          const SizedBox(width: 10),
-          Text('Ping $_pingMs ms', style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
-          const SizedBox(width: 10),
-          Text(_bandwidthText, style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
-          const Spacer(),
-          _buildSmallOverlayButton(Icons.screenshot_monitor, _takeScreenshot, colors),
-          const SizedBox(width: 6),
-          _buildSmallOverlayButton(
-            _isRecording ? Icons.stop_circle : Icons.fiber_manual_record,
-            _toggleRecording,
-            colors,
-            isActive: _isRecording,
-          ),
-          const SizedBox(width: 6),
-          _buildSmallOverlayButton(
-            _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
-            _toggleFullScreen,
-            colors,
-          ),
-          const SizedBox(width: 6),
-          _buildSmallOverlayButton(Icons.minimize, () => _minimizeWindow(), colors),
-          const SizedBox(width: 6),
-          _buildSmallOverlayButton(Icons.filter_none, () => _restoreWindow(), colors),
-          const SizedBox(width: 6),
-          _buildSmallOverlayButton(Icons.close, () => _closeSession(), colors, isDanger: true),
-        ],
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            Icon(Icons.circle, size: 9, color: _isConnected ? Colors.green : Colors.redAccent),
+            const SizedBox(width: 6),
+            Text(_connectionStatus, style: TextStyle(color: colors['text']!, fontSize: 12)),
+            const SizedBox(width: 10),
+            Text('Session $_sessionTime', style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
+            const SizedBox(width: 10),
+            Icon(_isEncrypted ? Icons.lock : Icons.lock_open, size: 12, color: _isEncrypted ? Colors.green : Colors.orange),
+            const SizedBox(width: 4),
+            Text(_encryptionType, style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
+            const SizedBox(width: 10),
+            Text('Ping $_pingMs ms', style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
+            const SizedBox(width: 10),
+            Text(_bandwidthText, style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
+            const SizedBox(width: 14),
+            _buildSmallOverlayButton(Icons.screenshot_monitor, _takeScreenshot, colors),
+            const SizedBox(width: 6),
+            _buildSmallOverlayButton(
+              _isRecording ? Icons.stop_circle : Icons.fiber_manual_record,
+              _toggleRecording,
+              colors,
+              isActive: _isRecording,
+            ),
+            const SizedBox(width: 6),
+            _buildSmallOverlayButton(
+              _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
+              _toggleFullScreen,
+              colors,
+            ),
+            const SizedBox(width: 6),
+            _buildSmallOverlayButton(Icons.minimize, () => _minimizeWindow(), colors),
+            const SizedBox(width: 6),
+            _buildSmallOverlayButton(Icons.filter_none, () => _restoreWindow(), colors),
+            const SizedBox(width: 6),
+            _buildSmallOverlayButton(Icons.close, () => _closeSession(), colors, isDanger: true),
+          ],
+        ),
       ),
     );
   }
@@ -2631,108 +2649,78 @@ switch ($action) {
   Future<Uint8List?> _captureLocalScreenToJpegBytes() async {
     if (!io.Platform.isWindows) return null;
 
-    // Use stable paths so antivirus exclusions can target one precise location.
-    final stableDir = io.Directory('${io.Platform.environment['LOCALAPPDATA']}\\BIMStreaming\\screenshare');
-    if (!stableDir.existsSync()) {
-      stableDir.createSync(recursive: true);
-    }
-    final outputPath = '${stableDir.path}\\frame.jpg';
-    final scriptPath = '${stableDir.path}\\capture.ps1';
-    final escapedOutput = outputPath.replaceAll("'", "''");
-
-    // Script écrit dans un fichier (.ps1) pour éviter tout problème d'encodage en ligne de commande
-    final scriptContent = r'''Add-Type -AssemblyName System.Windows.Forms,System.Drawing
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public static class NativeDpi {
-  [DllImport("user32.dll")]
-  public static extern bool SetProcessDPIAware();
-}
-"@
-[NativeDpi]::SetProcessDPIAware() | Out-Null
-$all=[System.Windows.Forms.Screen]::AllScreens
-$idx=SCREEN_INDEX
-if ($idx -lt 0) { $idx = 0 }
-if ($idx -ge $all.Count) { $idx = 0 }
-$b=$all[$idx].Bounds
-$src=New-Object System.Drawing.Bitmap $b.Width,$b.Height
-$g=[System.Drawing.Graphics]::FromImage($src)
-$g.CopyFromScreen($b.Left,$b.Top,0,0,$src.Size)
-$maxW=MAX_WIDTH
-$tw=$src.Width
-$th=$src.Height
-if ($tw -gt $maxW) {
-  $ratio=[double]$maxW/[double]$tw
-  $tw=[int]([Math]::Round($tw*$ratio))
-  $th=[int]([Math]::Round($th*$ratio))
-}
-$sc=New-Object System.Drawing.Bitmap $tw,$th
-$g2=[System.Drawing.Graphics]::FromImage($sc)
-$g2.InterpolationMode=[System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-$g2.DrawImage($src,0,0,$tw,$th)
-$encoder=[System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
-$params=New-Object System.Drawing.Imaging.EncoderParameters(1)
-$params.Param[0]=New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, JPEG_QUALITY)
-$sc.Save('OUTPUT_PATH',$encoder,$params)
-Write-Output "$tw,$th,$($b.Left),$($b.Top),$($b.Width),$($b.Height)"
-$params.Dispose()
-$g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
-'''
-        .replaceAll('OUTPUT_PATH', escapedOutput)
-        .replaceAll('MAX_WIDTH', _captureMaxWidth.toString())
-        .replaceAll('SCREEN_INDEX', _selectedLocalScreenIndex.toString())
-        .replaceAll('JPEG_QUALITY', '${_captureJpegQuality}L');
-
-    await io.File(scriptPath).writeAsString(scriptContent);
-
     try {
-      final result = await io.Process.run(
-        'powershell',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
-      );
-      if (result.exitCode != 0) {
-        final err = '${result.stderr}'.trim();
-        print('[ScreenShare] PS1 failed (exit=${result.exitCode}): $err');
-        if (mounted) setState(() => _captureError = 'PS1 exit=${result.exitCode}: ${err.substring(0, err.length.clamp(0, 80))}');
+      // Use safe PowerShell capture without Add-Type (antivirus friendly)
+      final tempFile = io.File('${io.Directory.systemTemp.path}\\bim_screen_${DateTime.now().millisecondsSinceEpoch}.jpg');
+      final psScript = '''
+  Add-Type -AssemblyName System.Drawing
+  Add-Type -AssemblyName System.Windows.Forms
+  \$path = "${tempFile.path.replaceAll('\\', '\\\\')}";
+  \$bitmap = New-Object System.Drawing.Bitmap([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width, [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height);
+  \$graphics = [System.Drawing.Graphics]::FromImage(\$bitmap);
+  \$graphics.CopyFromScreen(0,0,0,0, \$bitmap.Size);
+  \$bitmap.Save(\$path);
+  \$graphics.Dispose();
+  \$bitmap.Dispose();
+  ''';
+
+      try {
+        final result = await io.Process.run(
+          'powershell.exe',
+          ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psScript],
+          runInShell: false,
+        );
+
+        if (result.exitCode != 0) {
+          print('[ScreenShare] PS error: ${result.stderr}');
+          return null;
+        }
+
+        if (!await tempFile.exists()) {
+          return null;
+        }
+
+        final imageBytes = await tempFile.readAsBytes();
+        final decoded = img.decodeImage(imageBytes);
+        await tempFile.delete().catchError((_) {});
+
+        if (decoded == null || decoded.width < 1 || decoded.height < 1) {
+          if (mounted) setState(() => _captureError = 'Image decode failed');
+          return null;
+        }
+
+        img.Image frame = decoded;
+        if (frame.width > _captureMaxWidth) {
+          final resizedHeight = (frame.height * (_captureMaxWidth / frame.width)).round();
+          frame = img.copyResize(
+            frame,
+            width: _captureMaxWidth,
+            height: resizedHeight,
+            interpolation: img.Interpolation.cubic,
+          );
+        }
+
+        final jpegBytes = Uint8List.fromList(
+          img.encodeJpg(frame, quality: _captureJpegQuality),
+        );
+
+        _localFrameWidth = frame.width;
+        _localFrameHeight = frame.height;
+        _localCaptureLeft = 0;
+        _localCaptureTop = 0;
+        _localCaptureWidth = frame.width;
+        _localCaptureHeight = frame.height;
+
+        return jpegBytes;
+      } catch (e) {
+        print('[ScreenShare] PowerShell capture error: $e');
         return null;
       }
-      final file = io.File(outputPath);
-      if (!file.existsSync()) {
-        print('[ScreenShare] Output JPEG not found: $outputPath');
-        if (mounted) setState(() => _captureError = 'file not found');
-        return null;
-      }
-      final out = '${result.stdout}'.trim();
-      final line = out.split(RegExp(r'[\r\n]+')).firstWhere(
-        (l) => l.contains(','),
-        orElse: () => '',
-      );
-      if (line.isNotEmpty) {
-        final parts = line.split(',');
-        if (parts.length >= 2) {
-          final w = int.tryParse(parts[0].trim()) ?? 0;
-          final h = int.tryParse(parts[1].trim()) ?? 0;
-          if (w > 0 && h > 0) {
-            _localFrameWidth = w;
-            _localFrameHeight = h;
-          }
-        }
-        if (parts.length >= 6) {
-          _localCaptureLeft = int.tryParse(parts[2].trim()) ?? _localCaptureLeft;
-          _localCaptureTop = int.tryParse(parts[3].trim()) ?? _localCaptureTop;
-          _localCaptureWidth = int.tryParse(parts[4].trim()) ?? _localCaptureWidth;
-          _localCaptureHeight = int.tryParse(parts[5].trim()) ?? _localCaptureHeight;
-        }
-      }
-      final bytes = await file.readAsBytes();
-      return bytes;
-    } catch (e) {
-      print('[ScreenShare] Exception: $e');
+    } catch (e, st) {
+      print('[ScreenShare] Screen capture exception: $e');
+      print(st);
       if (mounted) setState(() => _captureError = e.toString());
       return null;
-    } finally {
-      try { io.File(outputPath).deleteSync(); } catch (_) {}
     }
   }
 

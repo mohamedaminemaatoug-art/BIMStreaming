@@ -19,7 +19,11 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   if (!kIsWeb && io.Platform.isWindows) {
     await windowManager.ensureInitialized();
-    await windowManager.waitUntilReadyToShow(const WindowOptions(), () async {});
+    await windowManager.waitUntilReadyToShow(const WindowOptions(), () async {
+      await windowManager.show();
+      await windowManager.focus();
+      await windowManager.maximize();
+    });
   }
   runApp(const BimStreamingApp());
 }
