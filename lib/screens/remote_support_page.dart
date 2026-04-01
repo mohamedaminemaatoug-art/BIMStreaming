@@ -1482,6 +1482,93 @@ switch ($action) {
     );
   }
 
+  Widget _buildRemoteAgentView(Map<String, Color> colors) {
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: Container(
+            color: Colors.black,
+            child: Container(
+              margin: EdgeInsets.zero,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.redAccent, width: 4),
+              ),
+              child: Stack(
+                children: [
+                  Positioned.fill(child: _buildRemoteCanvas(colors)),
+                  Positioned(
+                    top: 14,
+                    left: 14,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      color: Colors.redAccent,
+                      child: Text(
+                        'Connected with: ${widget.deviceId}',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                  if (_isLockedForRemoteUser)
+                    Positioned.fill(
+                      child: Container(
+                        color: Colors.black87,
+                        alignment: Alignment.center,
+                        child: const Text(
+                          'This machine is locked by remote operator',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                  if (_isSessionPausedRemote)
+                    Positioned.fill(
+                      child: Container(
+                        color: Colors.black.withValues(alpha: 0.6),
+                        alignment: Alignment.center,
+                        child: const Text(
+                          'Session paused by remote operator',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        Positioned(
+          right: 2,
+          top: 2,
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.35),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.minimize, color: Colors.white),
+                  tooltip: 'Minimize',
+                  onPressed: () => _minimizeWindow(),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.filter_none, color: Colors.white),
+                  tooltip: 'Restore',
+                  onPressed: () => _restoreWindow(),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white),
+                  tooltip: 'Close session',
+                  onPressed: () => _closeSession(),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildTopOverlayBar(Map<String, Color> colors) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
