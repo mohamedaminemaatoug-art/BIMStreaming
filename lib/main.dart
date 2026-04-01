@@ -21,8 +21,8 @@ void main() async {
     await windowManager.ensureInitialized();
     await windowManager.waitUntilReadyToShow(const WindowOptions(), () async {
       await windowManager.show();
-      await windowManager.focus();
       await windowManager.maximize();
+      await windowManager.focus();
     });
   }
   runApp(const BimStreamingApp());

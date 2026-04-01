@@ -1,16 +1,30 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
-import 'dart:ffi' as ffi;
-import 'dart:ffi';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:window_manager/window_manager.dart';
-import 'package:image/image.dart' as img;
-import 'package:win32/win32.dart';
 import '../services/signaling_client_service.dart';
+
+class _ViewportGeometry {
+  final double viewWidth;
+  final double viewHeight;
+  final double drawWidth;
+  final double drawHeight;
+  final double offsetX;
+  final double offsetY;
+
+  const _ViewportGeometry({
+    required this.viewWidth,
+    required this.viewHeight,
+    required this.drawWidth,
+    required this.drawHeight,
+    required this.offsetX,
+    required this.offsetY,
+  });
+}
 
 class RemoteSupportPage extends StatefulWidget {
   final String deviceName;
@@ -43,6 +57,7 @@ class RemoteSupportPage extends StatefulWidget {
 class _RemoteSupportPageState extends State<RemoteSupportPage> {
   static const Duration _screenShareInterval = Duration(milliseconds: 120);
   static const int _defaultCaptureMaxWidth = 1600;
+  static const int _transportTargetBytes = 1200 * 1024;
   static const int _defaultJpegQuality = 70;
 
   bool _isConnected = true;
@@ -98,7 +113,6 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   int _remoteCaptureTop = 0;
   int _remoteCaptureWidth = 0;
   int _remoteCaptureHeight = 0;
-  bool _fillRemoteViewport = false;
   int _lastAppliedMoveMs = 0;
   double? _lastSentMoveX;
   double? _lastSentMoveY;
@@ -113,6 +127,8 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   String _recordingsPath = '';
   int _selectedRemoteScreenIndex = 0;
   int _selectedLocalScreenIndex = 0;
+  int _localPrimaryScreenIndex = 0;
+  bool _localScreenSelectionInitialized = false;
   int _remoteScreenCount = 1;
   int _localScreenCount = 1;
   int _pingMs = 0;
@@ -125,12 +141,23 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   int _reconnectAttempts = 0;
   int _recordingFps = 1;
   List<String> _remoteFileList = [];
+  int _lastCaptureStatusSentMs = 0;
+  DateTime _sessionStartedAt = DateTime.now();
+  DateTime? _lastFrameReceivedAt;
+  bool _showViewportDebugOverlay = true;
+  bool _autoFitWindowToRemoteAspect = true;
+  bool _isApplyingAutoWindowFit = false;
+  double _lastAppliedRemoteAspect = 0;
+  DateTime? _lastAutoWindowFitAt;
+  int _lastRemoteFrameBytes = 0;
+  String _lastRemoteCaptureMode = '';
 
   String tr(String key) => widget.translate(key);
 
   @override
   void initState() {
     super.initState();
+    _sessionStartedAt = DateTime.now();
     _initializeUserPaths();
     _syncFullScreenState();
     _startSessionTimer();
@@ -205,8 +232,16 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     if (!io.Platform.isWindows) return;
     final script = r'''
   [void][Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms')
-  $count = [System.Windows.Forms.Screen]::AllScreens.Count
-Write-Output $count
+  $screens = [System.Windows.Forms.Screen]::AllScreens
+  $count = $screens.Count
+  $primaryIndex = 0
+  for ($i = 0; $i -lt $count; $i++) {
+    if ($screens[$i].Primary) {
+      $primaryIndex = $i
+      break
+    }
+  }
+  Write-Output "$count,$primaryIndex"
 ''';
     try {
       final result = await io.Process.run(
@@ -214,12 +249,32 @@ Write-Output $count
         ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
       );
       if (result.exitCode != 0) return;
-      final count = int.tryParse('${result.stdout}'.trim()) ?? 1;
+      final line = '${result.stdout}'.trim().split(RegExp(r'[\r\n]+')).firstWhere(
+        (l) => l.contains(','),
+        orElse: () => '',
+      );
+      int count = 1;
+      int primaryIndex = 0;
+      if (line.isNotEmpty) {
+        final parts = line.split(',');
+        if (parts.isNotEmpty) {
+          count = int.tryParse(parts[0].trim()) ?? 1;
+        }
+        if (parts.length >= 2) {
+          primaryIndex = int.tryParse(parts[1].trim()) ?? 0;
+        }
+      } else {
+        count = int.tryParse('${result.stdout}'.trim()) ?? 1;
+      }
       if (!mounted) return;
       setState(() {
         _localScreenCount = count < 1 ? 1 : count;
-        if (_selectedLocalScreenIndex >= _localScreenCount) {
-          _selectedLocalScreenIndex = 0;
+        _localPrimaryScreenIndex = primaryIndex.clamp(0, _localScreenCount - 1);
+        if (!_localScreenSelectionInitialized) {
+          _selectedLocalScreenIndex = _localPrimaryScreenIndex;
+          _localScreenSelectionInitialized = true;
+        } else if (_selectedLocalScreenIndex < 0 || _selectedLocalScreenIndex >= _localScreenCount) {
+          _selectedLocalScreenIndex = _localPrimaryScreenIndex;
         }
       });
     } catch (_) {
@@ -283,6 +338,18 @@ Write-Output $count
         _connectionQualityText = q;
         _lastNetFrameCounter = _framesReceived;
         _lastNetSampleAt = now;
+        if (!widget.sendLocalScreen && _remoteScreenFrame == null) {
+          final noFrameYet = _framesReceived == 0;
+          final elapsed = now.difference(_sessionStartedAt).inSeconds;
+          final sinceLastFrame = _lastFrameReceivedAt == null
+              ? elapsed
+              : now.difference(_lastFrameReceivedAt!).inSeconds;
+          if (noFrameYet && elapsed >= 8 && _captureError.isEmpty) {
+            _captureError = 'No frame received from remote device (check capture/script permissions).';
+          } else if (!noFrameYet && sinceLastFrame >= 8 && _captureError.isEmpty) {
+            _captureError = 'Remote stream stalled (no frame received for ${sinceLastFrame}s).';
+          }
+        }
       });
       await _refreshPing();
       _applyAutoQuality();
@@ -316,14 +383,16 @@ Write-Output $count
       _captureResolutionLabel = preset;
       switch (preset) {
         case 'Full Screen':
-          // Keep the complete remote image visible (no edge cropping).
-          _fillRemoteViewport = false;
+          // Keep full desktop bounds (virtual screen) while preserving transport-safe frame size.
+          _captureMaxWidth = _defaultCaptureMaxWidth;
           break;
         case 'Windowed Adapted':
-          _fillRemoteViewport = false;
+          _captureMaxWidth = _defaultCaptureMaxWidth;
           break;
         case 'Adapted Resolution':
-          _fillRemoteViewport = false;
+          _captureMaxWidth = _defaultCaptureMaxWidth;
+          break;
+        case 'Auto':
           _captureMaxWidth = _defaultCaptureMaxWidth;
           break;
         case '720p':
@@ -451,14 +520,14 @@ Write-Output $count
     if (rawData is! Map) return;
 
     final data = Map<String, dynamic>.from(rawData);
-    final messageSessionId = (data['sessionId'] ?? data['session_id'] ?? '').toString();
-    final expectedSessionId = (widget.sessionId ?? '').toString();
+    final messageSessionId = (data['sessionId'] ?? data['session_id'] ?? '').toString().trim();
+    final expectedSessionId = (widget.sessionId ?? '').toString().trim();
     if (expectedSessionId.isNotEmpty && messageSessionId.isNotEmpty && messageSessionId != expectedSessionId) {
       return;
     }
 
-    final fromUserId = (data['fromUserId'] ?? data['from'] ?? '').toString();
-    if (fromUserId.isEmpty || fromUserId == widget.currentUserId) {
+    final fromUserId = (data['fromUserId'] ?? data['from'] ?? '').toString().trim();
+    if (fromUserId.isEmpty || fromUserId == (widget.currentUserId ?? '').trim()) {
       return;
     }
 
@@ -551,17 +620,39 @@ Write-Output $count
         }
         if (resolution.isNotEmpty) {
           _captureResolutionLabel = resolution;
+          if (resolution == 'Full Screen') _captureMaxWidth = _defaultCaptureMaxWidth;
+          if (resolution == 'Windowed Adapted') _captureMaxWidth = _defaultCaptureMaxWidth;
           if (resolution == '720p') _captureMaxWidth = 1280;
           if (resolution == '1080p') _captureMaxWidth = 1920;
           if (resolution == '540p') _captureMaxWidth = 960;
           if (resolution == 'Adapted Resolution') _captureMaxWidth = _defaultCaptureMaxWidth;
-          _fillRemoteViewport = false;
+          if (resolution == 'Auto') _captureMaxWidth = _defaultCaptureMaxWidth;
         }
         if (quality.isNotEmpty) {
           _qualityLabel = quality;
           if (quality == 'Low') _captureJpegQuality = 45;
           if (quality == 'Medium') _captureJpegQuality = _defaultJpegQuality;
           if (quality == 'High') _captureJpegQuality = 85;
+        }
+      }
+      return;
+    }
+
+    if (messageType == 'capture_status') {
+      if (!widget.sendLocalScreen) {
+        final status = (payload['status'] ?? '').toString();
+        final detail = (payload['detail'] ?? '').toString();
+        if (status == 'ok') {
+          // Do not clear receiver-side diagnostics until at least one frame is actually received.
+          if (_framesReceived > 0) {
+            setState(() {
+              _captureError = '';
+            });
+          }
+        } else if (detail.isNotEmpty) {
+          setState(() {
+            _captureError = detail;
+          });
         }
       }
       return;
@@ -625,9 +716,17 @@ Write-Output $count
               final fh = payload['frameHeight'];
               final sc = payload['screenCount'];
               final si = payload['screenIndex'];
+              final fb = payload['frameBytes'];
+              final mode = (payload['captureMode'] ?? '').toString();
               if (fw is num && fh is num && fw > 0 && fh > 0) {
                 _remoteFrameWidth = fw.toInt();
                 _remoteFrameHeight = fh.toInt();
+              }
+              if (fb is num && fb.toInt() > 0) {
+                _lastRemoteFrameBytes = fb.toInt();
+              }
+              if (mode.isNotEmpty) {
+                _lastRemoteCaptureMode = mode;
               }
               if (sc is num && sc.toInt() > 0) {
                 _remoteScreenCount = sc.toInt();
@@ -644,9 +743,20 @@ Write-Output $count
               if (rct is num) _remoteCaptureTop = rct.toInt();
               if (rcw is num) _remoteCaptureWidth = rcw.toInt();
               if (rch is num) _remoteCaptureHeight = rch.toInt();
+              if (_remoteCaptureWidth <= 0 && _remoteFrameWidth > 0) {
+                _remoteCaptureWidth = _remoteFrameWidth;
+              }
+              if (_remoteCaptureHeight <= 0 && _remoteFrameHeight > 0) {
+                _remoteCaptureHeight = _remoteFrameHeight;
+              }
+              _lastFrameReceivedAt = DateTime.now();
+              _captureError = '';
               _framesReceived++;
               if (_framesReceived % 30 == 0) {
-                print('[ScreenShare] Frame received #$_framesReceived (${frameData.length} chars b64) from $fromUserId');
+                print('[ScreenShare] RX #$_framesReceived frame=${_remoteFrameWidth}x$_remoteFrameHeight capture=${_remoteCaptureLeft},${_remoteCaptureTop},${_remoteCaptureWidth}x$_remoteCaptureHeight from=$fromUserId');
+              }
+              if (!widget.sendLocalScreen) {
+                _scheduleAutoFitWindowToRemoteAspect();
               }
             } catch (e) {
               print('[ScreenShare] Decode error: $e');
@@ -836,6 +946,44 @@ Write-Output $count
         : 0;
     final key = (payload['key'] ?? '').toString();
 
+    if (action == 'move' && x != null && y != null) {
+      final moveScript = r'''
+[void][Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms')
+[void][Reflection.Assembly]::LoadWithPartialName('System.Drawing')
+$x = __X__
+$y = __Y__
+$capLeft = __CAP_LEFT__
+$capTop = __CAP_TOP__
+$capWidth = __CAP_WIDTH__
+$capHeight = __CAP_HEIGHT__
+
+$bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+if ($capWidth -gt 0 -and $capHeight -gt 0) {
+  $bounds = New-Object System.Drawing.Rectangle($capLeft, $capTop, $capWidth, $capHeight)
+}
+
+$px = $bounds.Left + [int]([double]($bounds.Width - 1) * $x)
+$py = $bounds.Top + [int]([double]($bounds.Height - 1) * $y)
+[System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point($px, $py)
+'''
+          .replaceAll('__X__', x.toStringAsFixed(6))
+          .replaceAll('__Y__', y.toStringAsFixed(6))
+          .replaceAll('__CAP_LEFT__', _localCaptureLeft.toString())
+          .replaceAll('__CAP_TOP__', _localCaptureTop.toString())
+          .replaceAll('__CAP_WIDTH__', _localCaptureWidth.toString())
+          .replaceAll('__CAP_HEIGHT__', _localCaptureHeight.toString());
+
+      try {
+        await io.Process.run(
+          'powershell',
+          ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', moveScript],
+        );
+      } catch (_) {
+        // Ignore move injection failures silently to keep session alive.
+      }
+      return;
+    }
+
     final script = r'''
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -915,10 +1063,10 @@ switch ($action) {
         .replaceAll('__X__', x == null ? '-1' : x.toStringAsFixed(6))
         .replaceAll('__Y__', y == null ? '-1' : y.toStringAsFixed(6))
         .replaceAll('__WHEEL__', wheelDelta.toString())
-  .replaceAll('__CAP_LEFT__', _remoteCaptureLeft.toString())
-  .replaceAll('__CAP_TOP__', _remoteCaptureTop.toString())
-  .replaceAll('__CAP_WIDTH__', _remoteCaptureWidth.toString())
-  .replaceAll('__CAP_HEIGHT__', _remoteCaptureHeight.toString())
+  .replaceAll('__CAP_LEFT__', _localCaptureLeft.toString())
+  .replaceAll('__CAP_TOP__', _localCaptureTop.toString())
+  .replaceAll('__CAP_WIDTH__', _localCaptureWidth.toString())
+  .replaceAll('__CAP_HEIGHT__', _localCaptureHeight.toString())
         .replaceAll('__KEY__', key.replaceAll("'", "''"));
 
     try {
@@ -931,23 +1079,39 @@ switch ($action) {
     }
   }
 
-  void _sendSessionPayload({
+  bool _sendSessionPayload({
     required String messageType,
     required Map<String, dynamic> payload,
   }) {
     if (!_canSignal) {
       print('[RemoteSupportPage] Cannot signal: signalingService=${widget.signalingService}, userId=${widget.currentUserId}, sessionId=${widget.sessionId}');
-      return;
+      return false;
+    }
+    final targetUserId = widget.deviceId.trim();
+    final sid = (widget.sessionId ?? '').toString().trim();
+    if (targetUserId.isEmpty || sid.isEmpty) {
+      if (mounted && _captureError.isEmpty && messageType == 'screen_frame') {
+        setState(() {
+          _captureError = 'Signaling target/session invalid (empty id).';
+        });
+      }
+      return false;
     }
     if (messageType != 'screen_frame' && messageType != 'input_event') {
-      print('[RemoteSupportPage] Sending $messageType to ${widget.deviceId} via session ${widget.sessionId}');
+      print('[RemoteSupportPage] Sending $messageType to $targetUserId via session $sid');
     }
-    widget.signalingService!.sendSessionMessage(
-      sessionId: (widget.sessionId ?? '').toString(),
-      toUserId: widget.deviceId,
+    final sent = widget.signalingService!.sendSessionMessage(
+      sessionId: sid,
+      toUserId: targetUserId,
       messageType: messageType,
       payload: payload,
     );
+    if (!sent && mounted && _captureError.isEmpty && messageType == 'screen_frame') {
+      setState(() {
+        _captureError = 'Unable to send frame: signaling disconnected/routing failed.';
+      });
+    }
+    return sent;
   }
 
   void _sendMoveIfNeeded(Offset p) {
@@ -1002,6 +1166,69 @@ switch ($action) {
     _showMessage(context, _isFullScreen ? tr('full_screen') : tr('exit_full_screen'), _getColors(context));
   }
 
+  void _scheduleAutoFitWindowToRemoteAspect() {
+    if (widget.sendLocalScreen || !_autoFitWindowToRemoteAspect) return;
+    if (_remoteFrameWidth <= 0 || _remoteFrameHeight <= 0) return;
+    unawaited(_applyAutoFitWindowToRemoteAspect());
+  }
+
+  Future<void> _applyAutoFitWindowToRemoteAspect() async {
+    if (_isApplyingAutoWindowFit || !mounted || widget.sendLocalScreen) return;
+    if (_remoteFrameWidth <= 0 || _remoteFrameHeight <= 0) return;
+
+    final remoteAspect = _remoteFrameWidth / _remoteFrameHeight;
+    if (remoteAspect <= 0) return;
+
+    final now = DateTime.now();
+    final elapsedMs = _lastAutoWindowFitAt == null
+        ? 999999
+        : now.difference(_lastAutoWindowFitAt!).inMilliseconds;
+    final aspectDelta = (remoteAspect - _lastAppliedRemoteAspect).abs();
+    if (_lastAppliedRemoteAspect > 0 && aspectDelta < 0.01 && elapsedMs < 3000) {
+      return;
+    }
+    if (elapsedMs < 1200) {
+      return;
+    }
+
+    _isApplyingAutoWindowFit = true;
+    try {
+      final baseSize = await windowManager.getSize();
+      final isFs = await windowManager.isFullScreen();
+      if (isFs) {
+        await windowManager.setFullScreen(false);
+        if (mounted) {
+          setState(() => _isFullScreen = false);
+        }
+      }
+
+      final maxW = baseSize.width;
+      final maxH = baseSize.height;
+      if (maxW <= 0 || maxH <= 0) return;
+
+      double targetW = maxW;
+      double targetH = targetW / remoteAspect;
+      if (targetH > maxH) {
+        targetH = maxH;
+        targetW = targetH * remoteAspect;
+      }
+
+      const edgeFactor = 0.96;
+      targetW = (targetW * edgeFactor).clamp(920.0, maxW);
+      targetH = (targetH * edgeFactor).clamp(520.0, maxH);
+
+      await windowManager.setSize(Size(targetW, targetH), animate: true);
+      await windowManager.center(animate: true);
+      _lastAppliedRemoteAspect = remoteAspect;
+      _lastAutoWindowFitAt = now;
+      print('[ScreenShare] Auto-fit receiver window to aspect ${remoteAspect.toStringAsFixed(4)} size=${targetW.toStringAsFixed(0)}x${targetH.toStringAsFixed(0)}');
+    } catch (e) {
+      print('[ScreenShare] Auto-fit window failed: $e');
+    } finally {
+      _isApplyingAutoWindowFit = false;
+    }
+  }
+
   @override
   void dispose() {
     _sessionTimer?.cancel();
@@ -1038,129 +1265,110 @@ switch ($action) {
   }
 
   Widget _buildControllerView(Map<String, Color> colors) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final isCompact = constraints.maxWidth < 1200;
-        final overlayLeft = isCompact ? 12.0 : 70.0;
-        final panelLeft = isCompact ? 12.0 : 74.0;
-        final panelWidth =
-            (constraints.maxWidth - panelLeft - 12.0).clamp(260.0, 360.0);
-
-        return GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () {
-            _revealOverlayTemporarily();
-            if (_panelMode != 'none') {
-              setState(() => _panelMode = 'none');
-            }
-          },
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: Listener(
-                  onPointerSignal: (event) {
-                    if (event is PointerScrollEvent && event.position.dy <= 70) {
-                      _revealOverlayTemporarily();
-                    }
-                  },
-                  child: _buildRemoteCanvas(colors),
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        _revealOverlayTemporarily();
+        if (_panelMode != 'none') {
+          setState(() => _panelMode = 'none');
+        }
+      },
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: Listener(
+              onPointerSignal: (event) {
+                if (event is PointerScrollEvent && event.position.dy <= 70) {
+                  _revealOverlayTemporarily();
+                }
+              },
+              child: _buildRemoteCanvas(colors),
+            ),
+          ),
+          if (_showTopOverlay)
+            Positioned(
+              top: 10,
+              left: 70,
+              right: 16,
+              child: _buildTopOverlayBar(colors),
+            ),
+          if (_showLeftFloatingButtons)
+            Positioned(
+              top: 84,
+              left: 12,
+              child: _buildFloatingButtons(colors),
+            ),
+          if (_panelMode != 'none')
+            Positioned(
+              top: 76,
+              left: 74,
+              bottom: 20,
+              width: 360,
+              child: _buildContextPanel(colors),
+            ),
+          if (_isDeviceLocked)
+            Positioned.fill(
+              child: Container(
+                color: Colors.black.withValues(alpha: 0.35),
+                alignment: Alignment.center,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: Colors.black87,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Text(
+                    'Lock mode enabled: remote user controls are restricted',
+                    style: TextStyle(color: Colors.white),
+                  ),
                 ),
               ),
-              if (_showTopOverlay)
-                Positioned(
-                  top: 10,
-                  left: overlayLeft,
-                  right: 12,
-                  child: _buildTopOverlayBar(colors),
-                          return MouseRegion(
-                            onHover: (event) {
-                              if (event.position.dy <= 42) {
-                                _revealOverlayTemporarily();
-                              }
-                            },
-                            onEnter: (_) => _revealOverlayTemporarily(),
-                            child: GestureDetector(
-                              behavior: HitTestBehavior.opaque,
-                              onTap: () {
-                                if (_panelMode != 'none') {
-                                  setState(() => _panelMode = 'none');
-                                }
-                                _revealOverlayTemporarily();
-                              },
-                              child: Stack(
-                                children: [
-                                  Positioned.fill(
-                                    child: Listener(
-                                      onPointerSignal: (event) {
-                                        if (event is PointerScrollEvent && event.position.dy <= 70) {
-                                          _revealOverlayTemporarily();
-                                        }
-                                      },
-                                      child: _buildRemoteCanvas(colors),
-                                    ),
-                                  ),
-                                  if (_showTopOverlay)
-                                    Positioned(
-                                      top: 10,
-                                      left: overlayLeft,
-                                      right: 12,
-                                      child: _buildTopOverlayBar(colors),
-                                    ),
-                                  if (_showLeftFloatingButtons)
-                                    Positioned(
-                                      top: 84,
-                                      left: 12,
-                                      child: _buildFloatingButtons(colors),
-                                    ),
-                                  if (_panelMode != 'none')
-                                    Positioned(
-                                      top: 76,
-                                      left: panelLeft,
-                                      bottom: 20,
-                                      width: panelWidth,
-                                      child: _buildContextPanel(colors),
-                                    ),
-                                  if (_isDeviceLocked)
-                                    Positioned.fill(
-                                      child: Container(
-                                        color: Colors.black.withValues(alpha: 0.35),
-                                        alignment: Alignment.center,
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-                                          decoration: BoxDecoration(
-                                            color: Colors.black87,
-                                            borderRadius: BorderRadius.circular(10),
-                                          ),
-                                          child: const Text(
-                                            'Lock mode enabled: remote user controls are restricted',
-                                            style: TextStyle(color: Colors.white),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  if (_isSessionPaused)
-                                    Positioned.fill(
-                                      child: Container(
-                                        color: Colors.black.withValues(alpha: 0.45),
-                                        alignment: Alignment.center,
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                                          decoration: BoxDecoration(
-                                            color: Colors.black87,
-                                            borderRadius: BorderRadius.circular(10),
-                                          ),
-                                          child: const Text(
-                                            'Session paused. Remote screen is frozen.',
-                                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                ],
-                              ),
-                            ),
-                          );
-                        },
+            ),
+          if (_isSessionPaused)
+            Positioned.fill(
+              child: Container(
+                color: Colors.black.withValues(alpha: 0.45),
+                alignment: Alignment.center,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.black87,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Text(
+                    'Session paused. Remote screen is frozen.',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRemoteAgentView(Map<String, Color> colors) {
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: Container(
+            color: Colors.black,
+            child: Container(
+              margin: EdgeInsets.zero,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.redAccent, width: 4),
+              ),
+              child: Stack(
+                children: [
+                  Positioned.fill(child: _buildRemoteCanvas(colors)),
+                  Positioned(
+                    top: 14,
+                    left: 14,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      color: Colors.redAccent,
+                      child: Text(
+                        'Connected with: ${widget.deviceId}',
                         style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
                       ),
                     ),
@@ -1234,46 +1442,57 @@ switch ($action) {
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: colors['border']!),
       ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            Icon(Icons.circle, size: 9, color: _isConnected ? Colors.green : Colors.redAccent),
-            const SizedBox(width: 6),
-            Text(_connectionStatus, style: TextStyle(color: colors['text']!, fontSize: 12)),
-            const SizedBox(width: 10),
-            Text('Session $_sessionTime', style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
-            const SizedBox(width: 10),
-            Icon(_isEncrypted ? Icons.lock : Icons.lock_open, size: 12, color: _isEncrypted ? Colors.green : Colors.orange),
-            const SizedBox(width: 4),
-            Text(_encryptionType, style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
-            const SizedBox(width: 10),
-            Text('Ping $_pingMs ms', style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
-            const SizedBox(width: 10),
-            Text(_bandwidthText, style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
-            const SizedBox(width: 14),
-            _buildSmallOverlayButton(Icons.screenshot_monitor, _takeScreenshot, colors),
-            const SizedBox(width: 6),
-            _buildSmallOverlayButton(
-              _isRecording ? Icons.stop_circle : Icons.fiber_manual_record,
-              _toggleRecording,
-              colors,
-              isActive: _isRecording,
-            ),
-            const SizedBox(width: 6),
-            _buildSmallOverlayButton(
-              _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
-              _toggleFullScreen,
-              colors,
-            ),
-            const SizedBox(width: 6),
-            _buildSmallOverlayButton(Icons.minimize, () => _minimizeWindow(), colors),
-            const SizedBox(width: 6),
-            _buildSmallOverlayButton(Icons.filter_none, () => _restoreWindow(), colors),
-            const SizedBox(width: 6),
-            _buildSmallOverlayButton(Icons.close, () => _closeSession(), colors, isDanger: true),
-          ],
-        ),
+      child: Row(
+        children: [
+          Icon(Icons.circle, size: 9, color: _isConnected ? Colors.green : Colors.redAccent),
+          const SizedBox(width: 6),
+          Text(_connectionStatus, style: TextStyle(color: colors['text']!, fontSize: 12)),
+          const SizedBox(width: 10),
+          Text('Session $_sessionTime', style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
+          const SizedBox(width: 10),
+          Icon(_isEncrypted ? Icons.lock : Icons.lock_open, size: 12, color: _isEncrypted ? Colors.green : Colors.orange),
+          const SizedBox(width: 4),
+          Text(_encryptionType, style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
+          const SizedBox(width: 10),
+          Text('Ping $_pingMs ms', style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
+          const SizedBox(width: 10),
+          Text(_bandwidthText, style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
+          const Spacer(),
+          _buildSmallOverlayButton(Icons.screenshot_monitor, _takeScreenshot, colors),
+          const SizedBox(width: 6),
+          _buildSmallOverlayButton(
+            _isRecording ? Icons.stop_circle : Icons.fiber_manual_record,
+            _toggleRecording,
+            colors,
+            isActive: _isRecording,
+          ),
+          const SizedBox(width: 6),
+          _buildSmallOverlayButton(
+            _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
+            _toggleFullScreen,
+            colors,
+          ),
+          const SizedBox(width: 6),
+          _buildSmallOverlayButton(
+            _autoFitWindowToRemoteAspect ? Icons.aspect_ratio : Icons.crop_free,
+            () {
+              setState(() {
+                _autoFitWindowToRemoteAspect = !_autoFitWindowToRemoteAspect;
+              });
+              if (_autoFitWindowToRemoteAspect) {
+                _scheduleAutoFitWindowToRemoteAspect();
+              }
+            },
+            colors,
+            isActive: _autoFitWindowToRemoteAspect,
+          ),
+          const SizedBox(width: 6),
+          _buildSmallOverlayButton(Icons.minimize, () => _minimizeWindow(), colors),
+          const SizedBox(width: 6),
+          _buildSmallOverlayButton(Icons.filter_none, () => _restoreWindow(), colors),
+          const SizedBox(width: 6),
+          _buildSmallOverlayButton(Icons.close, () => _closeSession(), colors, isDanger: true),
+        ],
       ),
     );
   }
@@ -1434,121 +1653,124 @@ switch ($action) {
                 }
               }
             },
-            child: Builder(
-              builder: (localContext) {
+            child: LayoutBuilder(
+              builder: (localContext, constraints) {
+                final geometry = _computeViewportGeometry(
+                  constraints.maxWidth,
+                  constraints.maxHeight,
+                );
+
                 Offset? normalize(Offset local) {
-                  final box = localContext.findRenderObject();
-                  if (box is! RenderBox) return null;
-                  final w = box.size.width;
-                  final h = box.size.height;
-                  if (w <= 0 || h <= 0) return null;
-
-                  final frameAspect = _remoteFrameWidth / _remoteFrameHeight;
-                  final viewAspect = w / h;
-                  double drawW;
-                  double drawH;
-                  double offsetX = 0;
-                  double offsetY = 0;
-
-                  if (_fillRemoteViewport) {
-                    if (frameAspect > viewAspect) {
-                      drawH = h;
-                      drawW = h * frameAspect;
-                      offsetX = (w - drawW) / 2;
-                    } else {
-                      drawW = w;
-                      drawH = w / frameAspect;
-                      offsetY = (h - drawH) / 2;
-                    }
-                  } else {
-                    if (frameAspect > viewAspect) {
-                      drawW = w;
-                      drawH = w / frameAspect;
-                      offsetY = (h - drawH) / 2;
-                    } else {
-                      drawH = h;
-                      drawW = h * frameAspect;
-                      offsetX = (w - drawW) / 2;
-                    }
-                  }
-
-                  final inX = (local.dx - offsetX);
-                  final inY = (local.dy - offsetY);
-                  if (!_fillRemoteViewport && (inX < 0 || inY < 0 || inX > drawW || inY > drawH)) {
+                  final inX = (local.dx - geometry.offsetX);
+                  final inY = (local.dy - geometry.offsetY);
+                  if (inX < 0 || inY < 0 || inX > geometry.drawWidth || inY > geometry.drawHeight) {
                     return null;
                   }
-
-                  final nx = (inX / drawW).clamp(0.0, 1.0);
-                  final ny = (inY / drawH).clamp(0.0, 1.0);
+                  final nx = (inX / geometry.drawWidth).clamp(0.0, 1.0);
+                  final ny = (inY / geometry.drawHeight).clamp(0.0, 1.0);
                   return Offset(nx, ny);
                 }
 
-                return Listener(
-                  onPointerDown: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
-                      ? (event) {
-                          _revealOverlayTemporarily();
-                          final p = normalize(event.localPosition);
-                          if (p == null) return;
-                          _rightButtonPressed = event.buttons == kSecondaryMouseButton;
-                          _sendInputEvent(
-                            _rightButtonPressed ? 'right_down' : 'left_down',
-                            normalizedX: p.dx,
-                            normalizedY: p.dy,
-                          );
-                          _remoteControlFocusNode.requestFocus();
-                        }
-                      : (_) => _revealOverlayTemporarily(),
-                  onPointerHover: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
-                      ? (event) {
-                          final now = DateTime.now().millisecondsSinceEpoch;
-                          if (now - _lastPointerMoveMs < 35) return;
-                          _lastPointerMoveMs = now;
-                          final p = normalize(event.localPosition);
-                          if (p == null) return;
-                          _sendMoveIfNeeded(p);
-                        }
-                      : null,
-                  onPointerMove: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
-                      ? (event) {
-                          final now = DateTime.now().millisecondsSinceEpoch;
-                          if (now - _lastPointerMoveMs < 35) return;
-                          _lastPointerMoveMs = now;
-                          final p = normalize(event.localPosition);
-                          if (p == null) return;
-                          _sendMoveIfNeeded(p);
-                        }
-                      : null,
-                  onPointerUp: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
-                      ? (event) {
-                          final p = normalize(event.localPosition);
-                          if (p == null) return;
-                          _sendInputEvent(
-                            _rightButtonPressed ? 'right_up' : 'left_up',
-                            normalizedX: p.dx,
-                            normalizedY: p.dy,
-                          );
-                          _rightButtonPressed = false;
-                        }
-                      : null,
-                  onPointerSignal: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
-                      ? (event) {
-                          if (event is PointerScrollEvent) {
-                            _sendInputEvent('wheel', wheelDelta: event.scrollDelta.dy.toInt());
-                          }
-                        }
-                      : null,
-                  child: Image.memory(
-                    _remoteScreenFrame!,
-                    width: double.infinity,
-                    height: double.infinity,
-                    fit: _fillRemoteViewport ? BoxFit.cover : BoxFit.contain,
-                    gaplessPlayback: true,
-                  ),
+                return Stack(
+                  children: [
+                    Listener(
+                      onPointerDown: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                          ? (event) {
+                              _revealOverlayTemporarily();
+                              final p = normalize(event.localPosition);
+                              if (p == null) return;
+                              _rightButtonPressed = event.buttons == kSecondaryMouseButton;
+                              _sendInputEvent(
+                                _rightButtonPressed ? 'right_down' : 'left_down',
+                                normalizedX: p.dx,
+                                normalizedY: p.dy,
+                              );
+                              _remoteControlFocusNode.requestFocus();
+                            }
+                          : (_) => _revealOverlayTemporarily(),
+                      onPointerHover: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                          ? (event) {
+                              final now = DateTime.now().millisecondsSinceEpoch;
+                              if (now - _lastPointerMoveMs < 35) return;
+                              _lastPointerMoveMs = now;
+                              final p = normalize(event.localPosition);
+                              if (p == null) return;
+                              _sendMoveIfNeeded(p);
+                            }
+                          : null,
+                      onPointerMove: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                          ? (event) {
+                              final now = DateTime.now().millisecondsSinceEpoch;
+                              if (now - _lastPointerMoveMs < 35) return;
+                              _lastPointerMoveMs = now;
+                              final p = normalize(event.localPosition);
+                              if (p == null) return;
+                              _sendMoveIfNeeded(p);
+                            }
+                          : null,
+                      onPointerUp: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                          ? (event) {
+                              final p = normalize(event.localPosition);
+                              if (p == null) return;
+                              _sendInputEvent(
+                                _rightButtonPressed ? 'right_up' : 'left_up',
+                                normalizedX: p.dx,
+                                normalizedY: p.dy,
+                              );
+                              _rightButtonPressed = false;
+                            }
+                          : null,
+                      onPointerSignal: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                          ? (event) {
+                              if (event is PointerScrollEvent) {
+                                _sendInputEvent('wheel', wheelDelta: event.scrollDelta.dy.toInt());
+                              }
+                            }
+                          : null,
+                      child: Image.memory(
+                        _remoteScreenFrame!,
+                        width: double.infinity,
+                        height: double.infinity,
+                        fit: BoxFit.contain,
+                        gaplessPlayback: true,
+                      ),
+                    ),
+                    if (!widget.sendLocalScreen && _showViewportDebugOverlay)
+                      Positioned(
+                        left: geometry.offsetX,
+                        top: geometry.offsetY,
+                        width: geometry.drawWidth,
+                        height: geometry.drawHeight,
+                        child: IgnorePointer(
+                          child: Container(
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.cyanAccent.withValues(alpha: 0.85), width: 1),
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (!widget.sendLocalScreen && _showViewportDebugOverlay)
+                      Positioned(
+                        left: 12,
+                        bottom: 12,
+                        child: _buildViewportDebugOverlay(geometry),
+                      ),
+                  ],
                 );
               },
             ),
           ),
         ),
+        if (!widget.sendLocalScreen)
+          Positioned(
+            top: 12,
+            right: 12,
+            child: IconButton.filledTonal(
+              tooltip: _showViewportDebugOverlay ? 'Hide debug overlay' : 'Show debug overlay',
+              onPressed: () => setState(() => _showViewportDebugOverlay = !_showViewportDebugOverlay),
+              icon: Icon(_showViewportDebugOverlay ? Icons.bug_report : Icons.bug_report_outlined),
+            ),
+          ),
         // Pause overlay
         if (_isSessionPaused)
           Positioned.fill(
@@ -1598,6 +1820,77 @@ switch ($action) {
             ),
           ),
       ],
+    );
+  }
+
+  _ViewportGeometry _computeViewportGeometry(double viewW, double viewH) {
+    final safeW = viewW <= 0 ? 1.0 : viewW;
+    final safeH = viewH <= 0 ? 1.0 : viewH;
+    final frameW = _remoteFrameWidth <= 0 ? 1 : _remoteFrameWidth;
+    final frameH = _remoteFrameHeight <= 0 ? 1 : _remoteFrameHeight;
+    final frameAspect = frameW / frameH;
+    final viewAspect = safeW / safeH;
+    double drawW;
+    double drawH;
+    double offsetX = 0;
+    double offsetY = 0;
+
+    if (frameAspect > viewAspect) {
+      drawW = safeW;
+      drawH = safeW / frameAspect;
+      offsetY = (safeH - drawH) / 2;
+    } else {
+      drawH = safeH;
+      drawW = safeH * frameAspect;
+      offsetX = (safeW - drawW) / 2;
+    }
+
+    return _ViewportGeometry(
+      viewWidth: safeW,
+      viewHeight: safeH,
+      drawWidth: drawW,
+      drawHeight: drawH,
+      offsetX: offsetX,
+      offsetY: offsetY,
+    );
+  }
+
+  Widget _buildViewportDebugOverlay(_ViewportGeometry geometry) {
+    final lastFrameAgeSeconds = _lastFrameReceivedAt == null
+        ? -1
+        : DateTime.now().difference(_lastFrameReceivedAt!).inSeconds;
+    final lines = <String>[
+      'DEBUG VIEWPORT',
+      'viewport: ${geometry.viewWidth.toStringAsFixed(0)}x${geometry.viewHeight.toStringAsFixed(0)}',
+      'drawRect: ${geometry.drawWidth.toStringAsFixed(0)}x${geometry.drawHeight.toStringAsFixed(0)} @ (${geometry.offsetX.toStringAsFixed(1)}, ${geometry.offsetY.toStringAsFixed(1)})',
+      'frame: ${_remoteFrameWidth}x$_remoteFrameHeight bytes=$_lastRemoteFrameBytes',
+      'capture: ${_remoteCaptureLeft},${_remoteCaptureTop},${_remoteCaptureWidth}x$_remoteCaptureHeight mode=${_lastRemoteCaptureMode.isEmpty ? '-': _lastRemoteCaptureMode}',
+      'autoFitWindow: ${_autoFitWindowToRemoteAspect ? 'on' : 'off'} lastAspect=${_lastAppliedRemoteAspect.toStringAsFixed(4)}',
+      'mouse(last normalized): x=${(_lastSentMoveX ?? -1).toStringAsFixed(3)} y=${(_lastSentMoveY ?? -1).toStringAsFixed(3)}',
+      'frames RX=$_framesReceived lastFrameAge=${lastFrameAgeSeconds < 0 ? '-': '${lastFrameAgeSeconds}s'}',
+    ];
+
+    final panelWidth = (geometry.viewWidth - 24).clamp(260.0, 560.0);
+
+    return IgnorePointer(
+      child: Container(
+        width: panelWidth,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.75),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.cyanAccent.withValues(alpha: 0.85)),
+        ),
+        child: Text(
+          lines.join('\n'),
+          style: const TextStyle(
+            color: Colors.cyanAccent,
+            fontSize: 11,
+            fontFamily: 'Consolas',
+            height: 1.25,
+          ),
+        ),
+      ),
     );
   }
 
@@ -2246,7 +2539,19 @@ switch ($action) {
         _buildMetricLine('Frames RX', '$_framesReceived', colors),
         _buildMetricLine('Frames TX', '$_framesSent', colors),
         const SizedBox(height: 10),
-        _buildActionButton(Icons.refresh, 'Refresh Diagnostics', () => _refreshPing(), colors),
+        _buildActionButton(
+          Icons.refresh,
+          'Refresh Diagnostics',
+          () async {
+            _showMessage(context, 'Refreshing diagnostics...', _getColors(context));
+            await _refreshPing();
+            _applyAutoQuality();
+            if (mounted) {
+              _showMessage(context, 'Diagnostics updated: $_connectionQualityText', _getColors(context));
+            }
+          },
+          colors,
+        ),
       ],
     );
   }
@@ -2606,21 +2911,44 @@ switch ($action) {
     if (!_canSignal || !_isScreenSharing || _isCapturing) return;
     _isCapturing = true;
     try {
-      final bytes = await _captureLocalScreenToJpegBytes();
+      int attemptWidth = _captureMaxWidth;
+      int attemptQuality = _captureJpegQuality;
+      Uint8List? bytes = await _captureLocalScreenToJpegBytes(
+        maxWidthOverride: attemptWidth,
+        jpegQualityOverride: attemptQuality,
+      );
+      for (int attempt = 0; attempt < 3; attempt++) {
+        if (bytes == null || bytes.isEmpty || bytes.length <= _transportTargetBytes) {
+          break;
+        }
+        attemptWidth = attemptWidth <= 0 ? 1280 : (attemptWidth * 0.82).round();
+        if (attemptWidth < 960) attemptWidth = 960;
+        attemptQuality = (attemptQuality - 10).clamp(40, 90);
+        bytes = await _captureLocalScreenToJpegBytes(
+          maxWidthOverride: attemptWidth,
+          jpegQualityOverride: attemptQuality,
+        );
+      }
       if (!mounted) return;
       if (bytes == null || bytes.isEmpty) {
         print('[ScreenShare] Capture returned null/empty');
         if (mounted) setState(() => _captureError = 'capture null');
+        _sendCaptureStatus(
+          'error',
+          _captureError.isNotEmpty ? _captureError : 'Capture failed (empty frame)',
+        );
         return;
       }
+      final frameBytes = bytes;
       const maxFrameBytes = 8 * 1024 * 1024;
-      if (bytes.length > maxFrameBytes) {
-        print('[ScreenShare] Frame too large: ${bytes.length} bytes');
-        if (mounted) setState(() => _captureError = 'too large: ${bytes.length}');
+      if (frameBytes.length > maxFrameBytes) {
+        print('[ScreenShare] Frame too large: ${frameBytes.length} bytes');
+        if (mounted) setState(() => _captureError = 'too large: ${frameBytes.length}');
+        _sendCaptureStatus('error', _captureError);
         return;
       }
-      final b64 = base64Encode(bytes);
-      _sendSessionPayload(
+      final b64 = base64Encode(frameBytes);
+      final sent = _sendSessionPayload(
         messageType: 'screen_frame',
         payload: {
           'frameData': b64,
@@ -2628,96 +2956,163 @@ switch ($action) {
           'frameHeight': _localFrameHeight,
           'screenCount': _localScreenCount,
           'screenIndex': _selectedLocalScreenIndex,
+          'captureMode': _captureResolutionLabel,
+          'frameBytes': frameBytes.length,
           'captureLeft': _localCaptureLeft,
           'captureTop': _localCaptureTop,
           'captureWidth': _localCaptureWidth,
           'captureHeight': _localCaptureHeight,
         },
       );
-      if (mounted) setState(() { _framesSent++; _captureError = ''; });
-      if (_framesSent % 30 == 0) {
-        print('[ScreenShare] Sent frame #$_framesSent (${bytes.length} bytes) ${_localFrameWidth}x$_localFrameHeight');
+      if (!sent) {
+        _sendCaptureStatus('error', _captureError.isNotEmpty ? _captureError : 'Signaling send failed');
+        return;
       }
+      if (mounted) setState(() { _framesSent++; _captureError = ''; });
+      _sendCaptureStatus('ok', '');
+      if (_framesSent % 30 == 0) {
+        print('[ScreenShare] TX #$_framesSent bytes=${frameBytes.length} frame=${_localFrameWidth}x$_localFrameHeight screen=${_selectedLocalScreenIndex}/${_localScreenCount} capture=${_localCaptureLeft},${_localCaptureTop},${_localCaptureWidth}x$_localCaptureHeight mode=${_captureResolutionLabel} quality=$attemptQuality maxW=$attemptWidth');
+      }
+    } catch (e) {
+      if (mounted) setState(() => _captureError = 'send frame error: $e');
+      _sendCaptureStatus('error', _captureError);
     } finally {
       _isCapturing = false;
     }
   }
 
-  Future<Uint8List?> _captureLocalScreenToJpegBytes() async {
+  void _sendCaptureStatus(String status, String detail) {
+    if (!widget.sendLocalScreen) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (status == 'ok' && now - _lastCaptureStatusSentMs < 5000) {
+      return;
+    }
+    if (status != 'ok' && now - _lastCaptureStatusSentMs < 1500) {
+      return;
+    }
+    _lastCaptureStatusSentMs = now;
+    _sendSessionPayload(
+      messageType: 'capture_status',
+      payload: {
+        'status': status,
+        'detail': detail,
+      },
+    );
+  }
+
+  Future<Uint8List?> _captureLocalScreenToJpegBytes({
+    int? maxWidthOverride,
+    int? jpegQualityOverride,
+  }) async {
     if (!io.Platform.isWindows) return null;
 
+    // Use stable paths so antivirus exclusions can target one precise location.
+    final stableDir = io.Directory('${io.Platform.environment['LOCALAPPDATA']}\\BIMStreaming\\screenshare');
+    if (!stableDir.existsSync()) {
+      stableDir.createSync(recursive: true);
+    }
+    final outputPath = '${stableDir.path}\\frame.jpg';
+    final scriptPath = '${stableDir.path}\\capture.ps1';
+    final escapedOutput = outputPath.replaceAll("'", "''");
+
+    // Script écrit dans un fichier (.ps1) pour éviter tout problème d'encodage en ligne de commande
+    final scriptContent = r'''[void][Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms')
+[void][Reflection.Assembly]::LoadWithPartialName('System.Drawing')
+$all=[System.Windows.Forms.Screen]::AllScreens
+$idx=SCREEN_INDEX
+if ($idx -lt 0) { $idx = 0 }
+if ($idx -ge $all.Count) { $idx = 0 }
+$useVirtual = USE_VIRTUAL_BOUNDS
+if ($useVirtual -eq 1) {
+  $vb = [System.Windows.Forms.SystemInformation]::VirtualScreen
+  $b = New-Object System.Drawing.Rectangle($vb.Left, $vb.Top, $vb.Width, $vb.Height)
+} else {
+  $b=$all[$idx].Bounds
+}
+$src=New-Object System.Drawing.Bitmap $b.Width,$b.Height
+$g=[System.Drawing.Graphics]::FromImage($src)
+$g.CopyFromScreen($b.Left,$b.Top,0,0,$src.Size)
+$maxW=MAX_WIDTH
+$tw=$src.Width
+$th=$src.Height
+if ($maxW -gt 0 -and $tw -gt $maxW) {
+  $ratio=[double]$maxW/[double]$tw
+  $tw=[int]([Math]::Round($tw*$ratio))
+  $th=[int]([Math]::Round($th*$ratio))
+}
+$sc=New-Object System.Drawing.Bitmap $tw,$th
+$g2=[System.Drawing.Graphics]::FromImage($sc)
+$g2.InterpolationMode=[System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+$g2.DrawImage($src,0,0,$tw,$th)
+$encoder=[System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
+$params=New-Object System.Drawing.Imaging.EncoderParameters(1)
+$params.Param[0]=New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, JPEG_QUALITY)
+$sc.Save('OUTPUT_PATH',$encoder,$params)
+Write-Output "$tw,$th,$($b.Left),$($b.Top),$($b.Width),$($b.Height)"
+$params.Dispose()
+$g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
+'''
+        .replaceAll('OUTPUT_PATH', escapedOutput)
+  .replaceAll('MAX_WIDTH', (maxWidthOverride ?? _captureMaxWidth).toString())
+        .replaceAll('SCREEN_INDEX', _selectedLocalScreenIndex.toString())
+  .replaceAll('USE_VIRTUAL_BOUNDS', _captureResolutionLabel == 'Full Screen' ? '1' : '0')
+  .replaceAll('JPEG_QUALITY', '${jpegQualityOverride ?? _captureJpegQuality}L');
+
+    await io.File(scriptPath).writeAsString(scriptContent);
+
     try {
-      // Use safe PowerShell capture without Add-Type (antivirus friendly)
-      final tempFile = io.File('${io.Directory.systemTemp.path}\\bim_screen_${DateTime.now().millisecondsSinceEpoch}.jpg');
-      final psScript = '''
-  Add-Type -AssemblyName System.Drawing
-  Add-Type -AssemblyName System.Windows.Forms
-  \$path = "${tempFile.path.replaceAll('\\', '\\\\')}";
-  \$bitmap = New-Object System.Drawing.Bitmap([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width, [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height);
-  \$graphics = [System.Drawing.Graphics]::FromImage(\$bitmap);
-  \$graphics.CopyFromScreen(0,0,0,0, \$bitmap.Size);
-  \$bitmap.Save(\$path);
-  \$graphics.Dispose();
-  \$bitmap.Dispose();
-  ''';
-
-      try {
-        final result = await io.Process.run(
-          'powershell.exe',
-          ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psScript],
-          runInShell: false,
-        );
-
-        if (result.exitCode != 0) {
-          print('[ScreenShare] PS error: ${result.stderr}');
-          return null;
-        }
-
-        if (!await tempFile.exists()) {
-          return null;
-        }
-
-        final imageBytes = await tempFile.readAsBytes();
-        final decoded = img.decodeImage(imageBytes);
-        await tempFile.delete().catchError((_) {});
-
-        if (decoded == null || decoded.width < 1 || decoded.height < 1) {
-          if (mounted) setState(() => _captureError = 'Image decode failed');
-          return null;
-        }
-
-        img.Image frame = decoded;
-        if (frame.width > _captureMaxWidth) {
-          final resizedHeight = (frame.height * (_captureMaxWidth / frame.width)).round();
-          frame = img.copyResize(
-            frame,
-            width: _captureMaxWidth,
-            height: resizedHeight,
-            interpolation: img.Interpolation.cubic,
-          );
-        }
-
-        final jpegBytes = Uint8List.fromList(
-          img.encodeJpg(frame, quality: _captureJpegQuality),
-        );
-
-        _localFrameWidth = frame.width;
-        _localFrameHeight = frame.height;
-        _localCaptureLeft = 0;
-        _localCaptureTop = 0;
-        _localCaptureWidth = frame.width;
-        _localCaptureHeight = frame.height;
-
-        return jpegBytes;
-      } catch (e) {
-        print('[ScreenShare] PowerShell capture error: $e');
+      final result = await io.Process.run(
+        'powershell',
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
+      );
+      if (result.exitCode != 0) {
+        final err = '${result.stderr}'.trim();
+        print('[ScreenShare] PS1 failed (exit=${result.exitCode}): $err');
+        if (mounted) setState(() => _captureError = 'PS1 exit=${result.exitCode}: ${err.substring(0, err.length.clamp(0, 180))}');
         return null;
       }
-    } catch (e, st) {
-      print('[ScreenShare] Screen capture exception: $e');
-      print(st);
+      final file = io.File(outputPath);
+      if (!file.existsSync()) {
+        print('[ScreenShare] Output JPEG not found: $outputPath');
+        if (mounted) setState(() => _captureError = 'file not found');
+        return null;
+      }
+      final out = '${result.stdout}'.trim();
+      final line = out.split(RegExp(r'[\r\n]+')).firstWhere(
+        (l) => l.contains(','),
+        orElse: () => '',
+      );
+      if (line.isNotEmpty) {
+        final parts = line.split(',');
+        if (parts.length >= 2) {
+          final w = int.tryParse(parts[0].trim()) ?? 0;
+          final h = int.tryParse(parts[1].trim()) ?? 0;
+          if (w > 0 && h > 0) {
+            _localFrameWidth = w;
+            _localFrameHeight = h;
+          }
+        }
+        if (parts.length >= 6) {
+          _localCaptureLeft = int.tryParse(parts[2].trim()) ?? _localCaptureLeft;
+          _localCaptureTop = int.tryParse(parts[3].trim()) ?? _localCaptureTop;
+          _localCaptureWidth = int.tryParse(parts[4].trim()) ?? _localCaptureWidth;
+          _localCaptureHeight = int.tryParse(parts[5].trim()) ?? _localCaptureHeight;
+        }
+      }
+      if (_localCaptureWidth <= 0 && _localFrameWidth > 0) {
+        _localCaptureWidth = _localFrameWidth;
+      }
+      if (_localCaptureHeight <= 0 && _localFrameHeight > 0) {
+        _localCaptureHeight = _localFrameHeight;
+      }
+      final bytes = await file.readAsBytes();
+      return bytes;
+    } catch (e) {
+      print('[ScreenShare] Exception: $e');
       if (mounted) setState(() => _captureError = e.toString());
       return null;
+    } finally {
+      try { io.File(outputPath).deleteSync(); } catch (_) {}
     }
   }
 

@@ -47,10 +47,15 @@ class SignalingClientService {
   Future<bool> connect({required String userId}) async {
     disconnect();
     try {
-      final uri = Uri.parse('$_wsBaseUrl?user_id=${Uri.encodeQueryComponent(userId)}');
+      final normalizedUserId = userId.trim();
+      if (normalizedUserId.isEmpty) {
+        _connected = false;
+        return false;
+      }
+      final uri = Uri.parse('$_wsBaseUrl?user_id=${Uri.encodeQueryComponent(normalizedUserId)}');
       _channel = WebSocketChannel.connect(uri);
       await _channel!.ready;
-      _currentUserId = userId;
+      _currentUserId = normalizedUserId;
       _connected = true;
       _channel!.stream.listen(
         _onMessage,
@@ -92,12 +97,18 @@ class SignalingClientService {
       return {'success': false, 'message': 'signaling disconnected'};
     }
 
+    final from = fromUserId.trim();
+    final to = toUserId.trim();
+    if (from.isEmpty || to.isEmpty) {
+      return {'success': false, 'message': 'invalid users'};
+    }
+
     final sessionId = 'S-${DateTime.now().millisecondsSinceEpoch}';
     _channel!.sink.add(jsonEncode({
       'type': 'connection_request',
       'session_id': sessionId,
-      'from': fromUserId,
-      'to': toUserId,
+      'from': from,
+      'to': to,
       'payload': {'from_name': fromName},
     }));
     return {'success': true, 'sessionId': sessionId};
@@ -113,11 +124,18 @@ class SignalingClientService {
       return {'success': false, 'message': 'signaling disconnected'};
     }
 
+    final sid = sessionId.trim();
+    final from = fromUserId.trim();
+    final to = toUserId.trim();
+    if (sid.isEmpty || from.isEmpty || to.isEmpty) {
+      return {'success': false, 'message': 'invalid session/users'};
+    }
+
     _channel!.sink.add(jsonEncode({
       'type': accepted ? 'connection_accept' : 'connection_reject',
-      'session_id': sessionId,
-      'from': fromUserId,
-      'to': toUserId,
+      'session_id': sid,
+      'from': from,
+      'to': to,
       'payload': {},
     }));
     return {'success': true};
@@ -133,12 +151,18 @@ class SignalingClientService {
       return false;
     }
 
+    final sid = sessionId.trim();
+    final to = toUserId.trim();
+    if (sid.isEmpty || to.isEmpty) {
+      return false;
+    }
+
     _channel!.sink.add(jsonEncode({
       'type': 'session_message',
       'data': {
-        'sessionId': sessionId,
+        'sessionId': sid,
         'fromUserId': _currentUserId,
-        'toUserId': toUserId,
+        'toUserId': to,
         'messageType': messageType,
         'payload': payload,
       },
