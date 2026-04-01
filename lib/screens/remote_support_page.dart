@@ -15,240 +15,220 @@ class _ViewportGeometry {
   final double drawHeight;
   final double offsetX;
   final double offsetY;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = constraints.maxWidth < 1200;
+        final overlayLeft = isCompact ? 12.0 : 70.0;
+        final panelLeft = isCompact ? 12.0 : 74.0;
+        final panelWidth = (constraints.maxWidth - panelLeft - 12.0).clamp(260.0, 360.0);
 
-  const _ViewportGeometry({
-    required this.viewWidth,
-    required this.viewHeight,
-    required this.drawWidth,
-    required this.drawHeight,
-    required this.offsetX,
-    required this.offsetY,
-  });
-}
-
-class RemoteSupportPage extends StatefulWidget {
-  final String deviceName;
-  final String deviceId;
-  final bool sendLocalScreen;
-  final VoidCallback? onExitToRemoteControl;
-  final String? sessionId;
-  final String? currentUserId;
-  final SignalingClientService? signalingService;
-  final bool isDarkMode;
-  final String Function(String) translate;
-
-  const RemoteSupportPage({
-    super.key,
-    required this.deviceName,
-    required this.deviceId,
-    required this.sendLocalScreen,
-    this.onExitToRemoteControl,
-    this.sessionId,
-    this.currentUserId,
-    this.signalingService,
-    required this.isDarkMode,
-    required this.translate,
-  });
-
-  @override
-  State<RemoteSupportPage> createState() => _RemoteSupportPageState();
-}
-
-class _RemoteSupportPageState extends State<RemoteSupportPage> {
-  static const Duration _screenShareInterval = Duration(milliseconds: 120);
-  static const int _defaultCaptureMaxWidth = 1600;
-  static const int _transportTargetBytes = 1200 * 1024;
-  static const int _defaultJpegQuality = 70;
-
-  bool _isConnected = true;
-  String _connectionStatus = 'Connected';
-  bool _isEncrypted = true;
-  String _sessionTime = '00:00:00';
-  String _encryptionType = 'AES-256 Encrypted';
-  bool _isFullScreen = false;
-  bool _isRecording = false;
-  bool _audioEnabled = true;
-  bool _isBlackoutMode = false;
-  bool _isPrivacyModeForRemote = false;
-  bool _isLockedForRemoteUser = false;
-  bool _isDeviceLocked = false;
-  bool _isRebooting = false;
-  bool _isScreenSharing = false;
-  bool _isCapturing = false;
-  bool _isSessionPaused = false;
-  bool _isSessionPausedRemote = false;
-  bool _keyboardInputEnabledForUser2 = true;
-  bool _mouseInputEnabledForUser2 = true;
-  int _framesSent = 0;
-  int _framesReceived = 0;
-  String _captureError = '';
-  String _panelMode = 'none';
-  final TextEditingController _composerController = TextEditingController();
-  final List<String> _chatMessages = [];
-  final ScrollController _chatScrollController = ScrollController();
-  final List<Map<String, String>> _transfers = [];
-  final List<Map<String, String>> _recordedFrames = [];
-  Uint8List? _remoteScreenFrame;
-  Timer? _sessionTimer;
-  Timer? _screenShareTimer;
-  Timer? _overlayHideTimer;
-  Timer? _diagnosticsTimer;
-  Timer? _recordingTimer;
-  Timer? _reconnectTimer;
-  StreamSubscription<SignalEvent>? _signalSubscription;
-  int _sessionSeconds = 0;
-  final FocusNode _remoteControlFocusNode = FocusNode();
-  int _lastPointerMoveMs = 0;
-  bool _rightButtonPressed = false;
-  bool _isClosingSession = false;
-  int _remoteFrameWidth = 16;
-  int _remoteFrameHeight = 9;
-  int _localFrameWidth = 0;
-  int _localFrameHeight = 0;
-  int _localCaptureLeft = 0;
-  int _localCaptureTop = 0;
-  int _localCaptureWidth = 0;
-  int _localCaptureHeight = 0;
-  int _remoteCaptureLeft = 0;
-  int _remoteCaptureTop = 0;
-  int _remoteCaptureWidth = 0;
-  int _remoteCaptureHeight = 0;
-  int _lastAppliedMoveMs = 0;
-  double? _lastSentMoveX;
-  double? _lastSentMoveY;
-  bool _showTopOverlay = true;
-  bool _showLeftFloatingButtons = true;
-  int _captureMaxWidth = _defaultCaptureMaxWidth;
-  int _captureJpegQuality = _defaultJpegQuality;
-  String _captureResolutionLabel = 'Full Screen';
-  String _qualityLabel = 'Medium';
-  String _autoQualityMode = 'Auto';
-  String _screenshotPath = '';
-  String _recordingsPath = '';
-  int _selectedRemoteScreenIndex = 0;
-  int _selectedLocalScreenIndex = 0;
-  int _localPrimaryScreenIndex = 0;
-  bool _localScreenSelectionInitialized = false;
-  int _remoteScreenCount = 1;
-  int _localScreenCount = 1;
-  int _pingMs = 0;
-  String _bandwidthText = '0 kb/s';
-  String _connectionQualityText = 'Stable';
-  int _lastNetFrameCounter = 0;
-  DateTime? _lastNetSampleAt;
-  String _transferMode = 'send';
-  String _receiveTargetPath = '';
-  int _reconnectAttempts = 0;
-  int _recordingFps = 1;
-  List<String> _remoteFileList = [];
-  int _lastCaptureStatusSentMs = 0;
-  DateTime _sessionStartedAt = DateTime.now();
-  DateTime? _lastFrameReceivedAt;
-  bool _showViewportDebugOverlay = true;
-  bool _autoFitWindowToRemoteAspect = true;
-  bool _isApplyingAutoWindowFit = false;
-  double _lastAppliedRemoteAspect = 0;
-  DateTime? _lastAutoWindowFitAt;
-  int _lastRemoteFrameBytes = 0;
-  String _lastRemoteCaptureMode = '';
-
-  String tr(String key) => widget.translate(key);
-
-  @override
-  void initState() {
-    super.initState();
-    _sessionStartedAt = DateTime.now();
-    _initializeUserPaths();
-    _syncFullScreenState();
-    _startSessionTimer();
-    _connectSessionSignalIfAvailable();
-    _startAutomaticScreenShareIfPossible();
-    _startDiagnosticsTimer();
-    _revealOverlayTemporarily();
-    _refreshLocalScreenInfo();
-    _autoEnterFullscreenForController();
-    _pinRemoteAgentWindowIfNeeded();
-    if (!widget.sendLocalScreen) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          _remoteControlFocusNode.requestFocus();
-        }
-      });
-    }
+        return MouseRegion(
+          onHover: (event) {
+            if (event.position.dy <= 42) {
+              _revealOverlayTemporarily();
+            }
+          },
+          onEnter: (_) => _revealOverlayTemporarily(),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              if (_panelMode != 'none') {
+                setState(() => _panelMode = 'none');
+              }
+              _revealOverlayTemporarily();
+            },
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: Listener(
+                    onPointerSignal: (event) {
+                      if (event is PointerScrollEvent && event.position.dy <= 70) {
+                        _revealOverlayTemporarily();
+                      }
+                    },
+                    child: _buildRemoteCanvas(colors),
+                  ),
+                ),
+                if (_showTopOverlay)
+                  Positioned(
+                    top: 10,
+                    left: overlayLeft,
+                    right: 12,
+                    child: _buildTopOverlayBar(colors),
+                  ),
+                if (_showLeftFloatingButtons)
+                  Positioned(
+                    top: 84,
+                    left: 12,
+                    child: _buildFloatingButtons(colors),
+                  ),
+                if (_panelMode != 'none')
+                  Positioned(
+                    top: 76,
+                    left: panelLeft,
+                    bottom: 20,
+                    width: panelWidth,
+                    child: _buildContextPanel(colors),
+                  ),
+                if (_isDeviceLocked)
+                  Positioned.fill(
+                    child: Container(
+                      color: Colors.black.withValues(alpha: 0.35),
+                      alignment: Alignment.center,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                        decoration: BoxDecoration(
+                          color: Colors.black87,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Text(
+                          'Lock mode enabled: remote user controls are restricted',
+                          style: TextStyle(color: Colors.white),
+                        ),
+                      ),
+                    ),
+                  ),
+                if (_isSessionPaused)
+                  Positioned.fill(
+                    child: Container(
+                      color: Colors.black.withValues(alpha: 0.45),
+                      alignment: Alignment.center,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.black87,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Text(
+                          'Session paused. Remote screen is frozen.',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                  ),
+                Positioned(
+                  right: 2,
+                  top: 2,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.35),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.minimize, color: Colors.white),
+                          tooltip: 'Minimize',
+                          onPressed: () => _minimizeWindow(),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.filter_none, color: Colors.white),
+                          tooltip: 'Restore',
+                          onPressed: () => _restoreWindow(),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close, color: Colors.white),
+                          tooltip: 'Close session',
+                          onPressed: () => _closeSession(),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
-  void _initializeUserPaths() {
-    try {
-      final userProfile = io.Platform.environment['USERPROFILE'] ?? '';
-      if (userProfile.isNotEmpty) {
-        _screenshotPath = '$userProfile\\screenshot';
-        _recordingsPath = '$userProfile\\records';
-        io.Directory(_screenshotPath).createSync(recursive: true);
-        io.Directory(_recordingsPath).createSync(recursive: true);
-      }
-    } catch (_) {
-      // Fall back to BimStreaming defaults if path creation fails
-      final baseDir = io.Directory('${io.Platform.environment['USERPROFILE'] ?? '.'}\\BimStreaming');
-      try {
-        baseDir.createSync(recursive: true);
-        _screenshotPath = '${baseDir.path}\\screenshot';
-        _recordingsPath = '${baseDir.path}\\records';
-        io.Directory(_screenshotPath).createSync(recursive: true);
-        io.Directory(_recordingsPath).createSync(recursive: true);
-      } catch (_) {
-        // Use temp directory as last resort
-        _screenshotPath = io.Directory.systemTemp.path;
-        _recordingsPath = io.Directory.systemTemp.path;
-      }
-    }
-  }
-
-  Future<void> _autoEnterFullscreenForController() async {
-    if (widget.sendLocalScreen) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted) return;
-      final isFs = await windowManager.isFullScreen();
-      if (!isFs) {
-        await windowManager.setFullScreen(true);
-      }
-      if (!mounted) return;
-      setState(() => _isFullScreen = true);
-      _revealOverlayTemporarily();
-    });
-  }
-
-  Future<void> _pinRemoteAgentWindowIfNeeded() async {
-    if (!widget.sendLocalScreen) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted) return;
-      await windowManager.setAlwaysOnTop(true);
-      await windowManager.setFullScreen(true);
-      if (!mounted) return;
-      setState(() => _isFullScreen = true);
-    });
-  }
-
-  Future<void> _refreshLocalScreenInfo() async {
-    if (!io.Platform.isWindows) return;
-    final script = r'''
-  [void][Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms')
-  $screens = [System.Windows.Forms.Screen]::AllScreens
-  $count = $screens.Count
-  $primaryIndex = 0
-  for ($i = 0; $i -lt $count; $i++) {
-    if ($screens[$i].Primary) {
-      $primaryIndex = $i
-      break
-    }
-  }
-  Write-Output "$count,$primaryIndex"
-''';
-    try {
-      final result = await io.Process.run(
-        'powershell',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
-      );
-      if (result.exitCode != 0) return;
+  Widget _buildRemoteAgentView(Map<String, Color> colors) {
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: Container(
+            color: Colors.black,
+            child: Container(
+              margin: EdgeInsets.zero,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.redAccent, width: 4),
+              ),
+              child: Stack(
+                children: [
+                  Positioned.fill(child: _buildRemoteCanvas(colors)),
+                  Positioned(
+                    top: 14,
+                    left: 14,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      color: Colors.redAccent,
+                      child: Text(
+                        'Connected with: ${widget.deviceId}',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                  if (_isLockedForRemoteUser)
+                    Positioned.fill(
+                      child: Container(
+                        color: Colors.black87,
+                        alignment: Alignment.center,
+                        child: const Text(
+                          'This machine is locked by remote operator',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                  if (_isSessionPausedRemote)
+                    Positioned.fill(
+                      child: Container(
+                        color: Colors.black.withValues(alpha: 0.6),
+                        alignment: Alignment.center,
+                        child: const Text(
+                          'Session paused by remote operator',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        Positioned(
+          right: 2,
+          top: 2,
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.35),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.minimize, color: Colors.white),
+                  tooltip: 'Minimize',
+                  onPressed: () => _minimizeWindow(),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.filter_none, color: Colors.white),
+                  tooltip: 'Restore',
+                  onPressed: () => _restoreWindow(),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white),
+                  tooltip: 'Close session',
+                  onPressed: () => _closeSession(),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
       final line = '${result.stdout}'.trim().split(RegExp(r'[\r\n]+')).firstWhere(
         (l) => l.contains(','),
         orElse: () => '',
@@ -1265,6 +1245,7 @@ switch ($action) {
   }
 
   Widget _buildControllerView(Map<String, Color> colors) {
+<<<<<<< HEAD
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () {
@@ -1370,67 +1351,134 @@ switch ($action) {
                       child: Text(
                         'Connected with: ${widget.deviceId}',
                         style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+=======
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = constraints.maxWidth < 1200;
+        final overlayLeft = isCompact ? 12.0 : 70.0;
+        final panelLeft = isCompact ? 12.0 : 74.0;
+        final panelWidth = (constraints.maxWidth - panelLeft - 12.0).clamp(260.0, 360.0);
+
+        return MouseRegion(
+          onHover: (event) {
+            if (event.position.dy <= 42) {
+              _revealOverlayTemporarily();
+            }
+          },
+          onEnter: (_) => _revealOverlayTemporarily(),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              if (_panelMode != 'none') {
+                setState(() => _panelMode = 'none');
+              }
+              _revealOverlayTemporarily();
+            },
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: Listener(
+                    onPointerSignal: (event) {
+                      if (event is PointerScrollEvent && event.position.dy <= 70) {
+                        _revealOverlayTemporarily();
+                      }
+                    },
+                    child: _buildRemoteCanvas(colors),
+                  ),
+                ),
+                if (_showTopOverlay)
+                  Positioned(
+                    top: 10,
+                    left: overlayLeft,
+                    right: 12,
+                    child: _buildTopOverlayBar(colors),
+                  ),
+                if (_showLeftFloatingButtons)
+                  Positioned(
+                    top: 84,
+                    left: 12,
+                    child: _buildFloatingButtons(colors),
+                  ),
+                if (_panelMode != 'none')
+                  Positioned(
+                    top: 76,
+                    left: panelLeft,
+                    bottom: 20,
+                    width: panelWidth,
+                    child: _buildContextPanel(colors),
+                  ),
+                if (_isDeviceLocked)
+                  Positioned.fill(
+                    child: Container(
+                      color: Colors.black.withValues(alpha: 0.35),
+                      alignment: Alignment.center,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                        decoration: BoxDecoration(
+                          color: Colors.black87,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Text(
+                          'Lock mode enabled: remote user controls are restricted',
+                          style: TextStyle(color: Colors.white),
+                        ),
+>>>>>>> f4ae1fd (Fix remote support view syntax)
                       ),
                     ),
                   ),
-                  if (_isLockedForRemoteUser)
-                    Positioned.fill(
+                if (_isSessionPaused)
+                  Positioned.fill(
+                    child: Container(
+                      color: Colors.black.withValues(alpha: 0.45),
+                      alignment: Alignment.center,
                       child: Container(
-                        color: Colors.black87,
-                        alignment: Alignment.center,
+                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.black87,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
                         child: const Text(
-                          'This machine is locked by remote operator',
+                          'Session paused. Remote screen is frozen.',
                           style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
                         ),
                       ),
                     ),
-                  if (_isSessionPausedRemote)
-                    Positioned.fill(
-                      child: Container(
-                        color: Colors.black.withValues(alpha: 0.6),
-                        alignment: Alignment.center,
-                        child: const Text(
-                          'Session paused by remote operator',
-                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-                        ),
-                      ),
+                  ),
+                Positioned(
+                  right: 2,
+                  top: 2,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.35),
+                      borderRadius: BorderRadius.circular(8),
                     ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        Positioned(
-          right: 2,
-          top: 2,
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.35),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.minimize, color: Colors.white),
-                  tooltip: 'Minimize',
-                  onPressed: () => _minimizeWindow(),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.filter_none, color: Colors.white),
-                  tooltip: 'Restore',
-                  onPressed: () => _restoreWindow(),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white),
-                  tooltip: 'Close session',
-                  onPressed: () => _closeSession(),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.minimize, color: Colors.white),
+                          tooltip: 'Minimize',
+                          onPressed: () => _minimizeWindow(),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.filter_none, color: Colors.white),
+                          tooltip: 'Restore',
+                          onPressed: () => _restoreWindow(),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close, color: Colors.white),
+                          tooltip: 'Close session',
+                          onPressed: () => _closeSession(),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ],
             ),
           ),
-        ),
-      ],
+        );
+      },
     );
   }
 
