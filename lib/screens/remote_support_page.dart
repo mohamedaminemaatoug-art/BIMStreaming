@@ -1072,86 +1072,95 @@ switch ($action) {
                   left: overlayLeft,
                   right: 12,
                   child: _buildTopOverlayBar(colors),
-                ),
-              if (_showLeftFloatingButtons)
-                Positioned(
-                  top: 84,
-                  left: 12,
-                  child: _buildFloatingButtons(colors),
-                ),
-              if (_panelMode != 'none')
-                Positioned(
-                  top: 76,
-                  left: panelLeft,
-                  bottom: 20,
-                  width: panelWidth,
-                  child: _buildContextPanel(colors),
-                ),
-              if (_isDeviceLocked)
-                Positioned.fill(
-                  child: Container(
-                    color: Colors.black.withValues(alpha: 0.35),
-                    alignment: Alignment.center,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-                      decoration: BoxDecoration(
-                        color: Colors.black87,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Text(
-                        'Lock mode enabled: remote user controls are restricted',
-                        style: TextStyle(color: Colors.white),
-                      ),
-                    ),
-                  ),
-                ),
-              if (_isSessionPaused)
-                Positioned.fill(
-                  child: Container(
-                    color: Colors.black.withValues(alpha: 0.45),
-                    alignment: Alignment.center,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: Colors.black87,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Text(
-                        'Session paused. Remote screen is frozen.',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildRemoteAgentView(Map<String, Color> colors) {
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: Container(
-            color: Colors.black,
-            child: Container(
-              margin: EdgeInsets.zero,
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.redAccent, width: 4),
-              ),
-              child: Stack(
-                children: [
-                  Positioned.fill(child: _buildRemoteCanvas(colors)),
-                  Positioned(
-                    top: 14,
-                    left: 14,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      color: Colors.redAccent,
-                      child: Text(
-                        'Connected with: ${widget.deviceId}',
+                          return MouseRegion(
+                            onHover: (event) {
+                              if (event.position.dy <= 42) {
+                                _revealOverlayTemporarily();
+                              }
+                            },
+                            onEnter: (_) => _revealOverlayTemporarily(),
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: () {
+                                if (_panelMode != 'none') {
+                                  setState(() => _panelMode = 'none');
+                                }
+                                _revealOverlayTemporarily();
+                              },
+                              child: Stack(
+                                children: [
+                                  Positioned.fill(
+                                    child: Listener(
+                                      onPointerSignal: (event) {
+                                        if (event is PointerScrollEvent && event.position.dy <= 70) {
+                                          _revealOverlayTemporarily();
+                                        }
+                                      },
+                                      child: _buildRemoteCanvas(colors),
+                                    ),
+                                  ),
+                                  if (_showTopOverlay)
+                                    Positioned(
+                                      top: 10,
+                                      left: overlayLeft,
+                                      right: 12,
+                                      child: _buildTopOverlayBar(colors),
+                                    ),
+                                  if (_showLeftFloatingButtons)
+                                    Positioned(
+                                      top: 84,
+                                      left: 12,
+                                      child: _buildFloatingButtons(colors),
+                                    ),
+                                  if (_panelMode != 'none')
+                                    Positioned(
+                                      top: 76,
+                                      left: panelLeft,
+                                      bottom: 20,
+                                      width: panelWidth,
+                                      child: _buildContextPanel(colors),
+                                    ),
+                                  if (_isDeviceLocked)
+                                    Positioned.fill(
+                                      child: Container(
+                                        color: Colors.black.withValues(alpha: 0.35),
+                                        alignment: Alignment.center,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                                          decoration: BoxDecoration(
+                                            color: Colors.black87,
+                                            borderRadius: BorderRadius.circular(10),
+                                          ),
+                                          child: const Text(
+                                            'Lock mode enabled: remote user controls are restricted',
+                                            style: TextStyle(color: Colors.white),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  if (_isSessionPaused)
+                                    Positioned.fill(
+                                      child: Container(
+                                        color: Colors.black.withValues(alpha: 0.45),
+                                        alignment: Alignment.center,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                                          decoration: BoxDecoration(
+                                            color: Colors.black87,
+                                            borderRadius: BorderRadius.circular(10),
+                                          ),
+                                          child: const Text(
+                                            'Session paused. Remote screen is frozen.',
+                                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
                         style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
                       ),
                     ),
@@ -2237,19 +2246,7 @@ switch ($action) {
         _buildMetricLine('Frames RX', '$_framesReceived', colors),
         _buildMetricLine('Frames TX', '$_framesSent', colors),
         const SizedBox(height: 10),
-        _buildActionButton(
-          Icons.refresh,
-          'Refresh Diagnostics',
-          () async {
-            _showMessage(context, 'Refreshing diagnostics...', _getColors(context));
-            await _refreshPing();
-            _applyAutoQuality();
-            if (mounted) {
-              _showMessage(context, 'Diagnostics updated: $_connectionQualityText', _getColors(context));
-            }
-          },
-          colors,
-        ),
+        _buildActionButton(Icons.refresh, 'Refresh Diagnostics', () => _refreshPing(), colors),
       ],
     );
   }
