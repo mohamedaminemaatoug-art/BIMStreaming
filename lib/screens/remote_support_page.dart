@@ -57,6 +57,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   bool _isRebooting = false;
   bool _isScreenSharing = false;
   bool _isCapturing = false;
+  bool _screenFrameCaptureRequested = false;
   bool _isSessionPaused = false;
   bool _isSessionPausedRemote = false;
   bool _keyboardInputEnabledForUser2 = true;
@@ -71,6 +72,12 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   final List<Map<String, String>> _transfers = [];
   final List<Map<String, String>> _recordedFrames = [];
   Uint8List? _remoteScreenFrame;
+  String? _pendingRemoteScreenFrameData;
+  int? _pendingRemoteFrameWidth;
+  int? _pendingRemoteFrameHeight;
+  int? _pendingRemoteScreenCount;
+  int? _pendingSelectedRemoteScreenIndex;
+  bool _remoteFrameUpdateScheduled = false;
   Timer? _sessionTimer;
   Timer? _screenShareTimer;
   Timer? _overlayHideTimer;
@@ -793,37 +800,71 @@ Write-Output $count
         case 'screen_frame':
           final frameData = (payload['frameData'] ?? '').toString();
           if (frameData.isNotEmpty) {
-            try {
-              _isConnected = true;
-              _connectionStatus = 'Connected';
-              if (_reconnectTimer != null) {
-                _stopReconnectLoop();
-              }
-              _remoteScreenFrame = base64Decode(frameData);
-              final fw = payload['frameWidth'];
-              final fh = payload['frameHeight'];
-              final sc = payload['screenCount'];
-              final si = payload['screenIndex'];
-              if (fw is num && fh is num && fw > 0 && fh > 0) {
-                _remoteFrameWidth = fw.toInt();
-                _remoteFrameHeight = fh.toInt();
-              }
-              if (sc is num && sc.toInt() > 0) {
-                _remoteScreenCount = sc.toInt();
-              }
-              if (si is num && si.toInt() >= 0) {
-                _selectedRemoteScreenIndex = si.toInt();
-              }
-              _framesReceived++;
-              if (_framesReceived % 30 == 0) {
-                print('[ScreenShare] Frame received #$_framesReceived (${frameData.length} chars b64) from $fromUserId');
-              }
-            } catch (e) {
-              print('[ScreenShare] Decode error: $e');
-              _remoteScreenFrame = null;
+            _isConnected = true;
+            _connectionStatus = 'Connected';
+            if (_reconnectTimer != null) {
+              _stopReconnectLoop();
             }
+            _pendingRemoteScreenFrameData = frameData;
+            final fw = payload['frameWidth'];
+            final fh = payload['frameHeight'];
+            final sc = payload['screenCount'];
+            final si = payload['screenIndex'];
+            if (fw is num && fh is num && fw > 0 && fh > 0) {
+              _pendingRemoteFrameWidth = fw.toInt();
+              _pendingRemoteFrameHeight = fh.toInt();
+            }
+            if (sc is num && sc.toInt() > 0) {
+              _pendingRemoteScreenCount = sc.toInt();
+            }
+            if (si is num && si.toInt() >= 0) {
+              _pendingSelectedRemoteScreenIndex = si.toInt();
+            }
+            _framesReceived++;
+            if (_framesReceived % 30 == 0) {
+              print('[ScreenShare] Frame received #$_framesReceived (queued latest only) from $fromUserId');
+            }
+            _scheduleRemoteFrameApply();
           }
           break;
+      }
+    });
+  }
+
+  void _scheduleRemoteFrameApply() {
+    if (_remoteFrameUpdateScheduled || !mounted) {
+      return;
+    }
+    _remoteFrameUpdateScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _remoteFrameUpdateScheduled = false;
+      if (!mounted) return;
+      final frameData = _pendingRemoteScreenFrameData;
+      if (frameData == null || frameData.isEmpty) return;
+      try {
+        final decoded = base64Decode(frameData);
+        setState(() {
+          _remoteScreenFrame = decoded;
+          final fw = _pendingRemoteFrameWidth;
+          final fh = _pendingRemoteFrameHeight;
+          final sc = _pendingRemoteScreenCount;
+          final si = _pendingSelectedRemoteScreenIndex;
+          if (fw != null && fh != null && fw > 0 && fh > 0) {
+            _remoteFrameWidth = fw;
+            _remoteFrameHeight = fh;
+          }
+          if (sc != null && sc > 0) {
+            _remoteScreenCount = sc;
+          }
+          if (si != null && si >= 0) {
+            _selectedRemoteScreenIndex = si;
+          }
+        });
+      } catch (e) {
+        print('[ScreenShare] Decode error: $e');
+        if (mounted) {
+          setState(() => _remoteScreenFrame = null);
+        }
       }
     });
   }
@@ -2034,6 +2075,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     _keyboardLayoutTimer?.cancel();
     _keyStateSyncTimer?.cancel();
     _signalSubscription?.cancel();
+    _remoteFrameUpdateScheduled = false;
     _composerController.dispose();
     _chatScrollController.dispose();
     _remoteControlFocusNode.dispose();
@@ -3543,7 +3585,11 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
   }
 
   Future<void> _sendScreenFrame() async {
-    if (!_canSignal || !_isScreenSharing || _isCapturing) return;
+    if (!_canSignal || !_isScreenSharing) return;
+    if (_isCapturing) {
+      _screenFrameCaptureRequested = true;
+      return;
+    }
     _isCapturing = true;
     try {
       final bytes = await _captureLocalScreenToJpegBytes();
@@ -3594,6 +3640,12 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
       _sendCaptureStatus('error', 'Capture/send exception: $e');
     } finally {
       _isCapturing = false;
+      if (_screenFrameCaptureRequested && mounted && _isScreenSharing && _canSignal) {
+        _screenFrameCaptureRequested = false;
+        unawaited(Future<void>.microtask(_sendScreenFrame));
+      } else {
+        _screenFrameCaptureRequested = false;
+      }
     }
   }
 
