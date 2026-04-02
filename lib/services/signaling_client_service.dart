@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
+import 'dart:math';
 
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -14,9 +15,18 @@ class SignalEvent {
 class SignalingClientService {
   SignalingClientService({
     String? wsBaseUrl,
-  }) : _wsBaseUrl = _resolveWsBaseUrl(wsBaseUrl);
+  }) :
+        _wsBaseUrl = _resolveWsBaseUrl(wsBaseUrl),
+        _clientInstanceId = _generateClientInstanceId();
 
   final String _wsBaseUrl;
+  final String _clientInstanceId;
+
+  static String _generateClientInstanceId() {
+    final now = DateTime.now().microsecondsSinceEpoch;
+    final random = Random.secure().nextInt(1 << 30);
+    return '$now-$random';
+  }
 
   static String _resolveWsBaseUrl(String? explicit) {
     if (explicit != null && explicit.trim().isNotEmpty) {
@@ -43,6 +53,7 @@ class SignalingClientService {
 
   Stream<SignalEvent> get events => _eventsController.stream;
   bool get isConnected => _connected;
+  String get clientInstanceId => _clientInstanceId;
 
   Future<bool> connect({required String userId}) async {
     disconnect();
@@ -109,7 +120,10 @@ class SignalingClientService {
       'session_id': sessionId,
       'from': from,
       'to': to,
-      'payload': {'from_name': fromName},
+      'payload': {
+        'from_name': fromName,
+        'fromInstanceId': _clientInstanceId,
+      },
     }));
     return {'success': true, 'sessionId': sessionId};
   }
@@ -136,7 +150,9 @@ class SignalingClientService {
       'session_id': sid,
       'from': from,
       'to': to,
-      'payload': {},
+      'payload': {
+        'fromInstanceId': _clientInstanceId,
+      },
     }));
     return {'success': true};
   }
@@ -162,6 +178,7 @@ class SignalingClientService {
       'data': {
         'sessionId': sid,
         'fromUserId': _currentUserId,
+        'fromInstanceId': _clientInstanceId,
         'toUserId': to,
         'messageType': messageType,
         'payload': payload,

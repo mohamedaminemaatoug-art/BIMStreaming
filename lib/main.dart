@@ -13,7 +13,7 @@ import 'package:bim_streaming/services/auth_service.dart';
 import 'package:bim_streaming/services/signaling_client_service.dart';
 import 'package:bim_streaming/screens/login_page.dart';
 import 'package:bim_streaming/screens/user_profile_page.dart';
-import 'package:bim_streaming/screens/remote_support_page.dart';
+import 'package:bim_streaming/screens/remote_support_page.dart' as remote;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -1350,7 +1350,7 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
   }) {
     _navigatorKey.currentState?.push(
       MaterialPageRoute(
-        builder: (context) => RemoteSupportPage(
+        builder: (context) => remote.RemoteSupportPage(
           deviceName: peerName,
           deviceId: peerId,
           sendLocalScreen: sendLocalScreen,
@@ -1428,11 +1428,15 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
     if (event.type == 'connection_request') {
       final sessionId = (event.data['session_id'] ?? '').toString();
       final fromUserId = (event.data['from'] ?? '').toString();
-      final payload = event.data['payload'] is Map<String, dynamic>
-          ? Map<String, dynamic>.from(event.data['payload'] as Map<String, dynamic>)
+      final payload = event.data['payload'] is Map
+          ? Map<String, dynamic>.from(event.data['payload'] as Map)
           : <String, dynamic>{};
+      final fromInstanceId = (payload['fromInstanceId'] ?? payload['from_instance'] ?? '').toString();
       final fromName = (payload['from_name'] ?? fromUserId).toString();
       if (sessionId.isEmpty || fromUserId.isEmpty) return;
+      if (fromInstanceId.isNotEmpty && fromInstanceId == _signalingService.clientInstanceId) {
+        return;
+      }
 
       final dialogContext = _navigatorKey.currentContext;
       if (dialogContext == null) return;
@@ -1482,6 +1486,13 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
     if (event.type == 'connection_accept') {
       final peerId = (event.data['from'] ?? '').toString();
       final sessionId = (event.data['session_id'] ?? '').toString();
+      final payload = event.data['payload'] is Map
+          ? Map<String, dynamic>.from(event.data['payload'] as Map)
+          : <String, dynamic>{};
+      final fromInstanceId = (payload['fromInstanceId'] ?? payload['from_instance'] ?? '').toString();
+      if (fromInstanceId.isNotEmpty && fromInstanceId == _signalingService.clientInstanceId) {
+        return;
+      }
       if (peerId.isEmpty) return;
       _showStubMessage(t['connection_accepted']!.replaceAll('{name}', peerId));
       _openSupportPageForPeer(
@@ -1495,6 +1506,13 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
 
     if (event.type == 'connection_reject') {
       final peerId = (event.data['from'] ?? '').toString();
+      final payload = event.data['payload'] is Map
+          ? Map<String, dynamic>.from(event.data['payload'] as Map)
+          : <String, dynamic>{};
+      final fromInstanceId = (payload['fromInstanceId'] ?? payload['from_instance'] ?? '').toString();
+      if (fromInstanceId.isNotEmpty && fromInstanceId == _signalingService.clientInstanceId) {
+        return;
+      }
       _showStubMessage(t['connection_rejected_by']!.replaceAll('{name}', peerId));
     }
   }

@@ -46,7 +46,7 @@ func (h *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 	h.hub.Register(userID, conn)
 	log.Printf("WS connected user=%s", userID)
 	defer func() {
-		h.hub.Unregister(userID)
+		h.hub.Unregister(userID, conn)
 		log.Printf("WS disconnected user=%s", userID)
 		_ = conn.Close()
 	}()

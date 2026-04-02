@@ -7,254 +7,258 @@ import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:window_manager/window_manager.dart';
 import '../services/signaling_client_service.dart';
+import '../services/remote_audio_service.dart';
 
-class _ViewportGeometry {
-  final double viewWidth;
-  final double viewHeight;
-  final double drawWidth;
-  final double drawHeight;
-  final double offsetX;
-  final double offsetY;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final isCompact = constraints.maxWidth < 1200;
-        final overlayLeft = isCompact ? 12.0 : 70.0;
-        final panelLeft = isCompact ? 12.0 : 74.0;
-        final panelWidth = (constraints.maxWidth - panelLeft - 12.0).clamp(260.0, 360.0);
+class RemoteSupportPage extends StatefulWidget {
+  final String deviceName;
+  final String deviceId;
+  final bool sendLocalScreen;
+  final VoidCallback? onExitToRemoteControl;
+  final String? sessionId;
+  final String? currentUserId;
+  final SignalingClientService? signalingService;
+  final bool isDarkMode;
+  final String Function(String) translate;
 
-        return MouseRegion(
-          onHover: (event) {
-            if (event.position.dy <= 42) {
-              _revealOverlayTemporarily();
-            }
-          },
-          onEnter: (_) => _revealOverlayTemporarily(),
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () {
-              if (_panelMode != 'none') {
-                setState(() => _panelMode = 'none');
-              }
-              _revealOverlayTemporarily();
-            },
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: Listener(
-                    onPointerSignal: (event) {
-                      if (event is PointerScrollEvent && event.position.dy <= 70) {
-                        _revealOverlayTemporarily();
-                      }
-                    },
-                    child: _buildRemoteCanvas(colors),
-                  ),
-                ),
-                if (_showTopOverlay)
-                  Positioned(
-                    top: 10,
-                    left: overlayLeft,
-                    right: 12,
-                    child: _buildTopOverlayBar(colors),
-                  ),
-                if (_showLeftFloatingButtons)
-                  Positioned(
-                    top: 84,
-                    left: 12,
-                    child: _buildFloatingButtons(colors),
-                  ),
-                if (_panelMode != 'none')
-                  Positioned(
-                    top: 76,
-                    left: panelLeft,
-                    bottom: 20,
-                    width: panelWidth,
-                    child: _buildContextPanel(colors),
-                  ),
-                if (_isDeviceLocked)
-                  Positioned.fill(
-                    child: Container(
-                      color: Colors.black.withValues(alpha: 0.35),
-                      alignment: Alignment.center,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-                        decoration: BoxDecoration(
-                          color: Colors.black87,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: const Text(
-                          'Lock mode enabled: remote user controls are restricted',
-                          style: TextStyle(color: Colors.white),
-                        ),
-                      ),
-                    ),
-                  ),
-                if (_isSessionPaused)
-                  Positioned.fill(
-                    child: Container(
-                      color: Colors.black.withValues(alpha: 0.45),
-                      alignment: Alignment.center,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                        decoration: BoxDecoration(
-                          color: Colors.black87,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: const Text(
-                          'Session paused. Remote screen is frozen.',
-                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                    ),
-                  ),
-                Positioned(
-                  right: 2,
-                  top: 2,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.35),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.minimize, color: Colors.white),
-                          tooltip: 'Minimize',
-                          onPressed: () => _minimizeWindow(),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.filter_none, color: Colors.white),
-                          tooltip: 'Restore',
-                          onPressed: () => _restoreWindow(),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.close, color: Colors.white),
-                          tooltip: 'Close session',
-                          onPressed: () => _closeSession(),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+  const RemoteSupportPage({
+    super.key,
+    required this.deviceName,
+    required this.deviceId,
+    required this.sendLocalScreen,
+    this.onExitToRemoteControl,
+    this.sessionId,
+    this.currentUserId,
+    this.signalingService,
+    required this.isDarkMode,
+    required this.translate,
+  });
+
+  @override
+  State<RemoteSupportPage> createState() => _RemoteSupportPageState();
+}
+
+class _RemoteSupportPageState extends State<RemoteSupportPage> {
+  static const int _defaultCaptureMaxWidth = 2560;
+  static const int _defaultJpegQuality = 88;
+  static const int _defaultCaptureIntervalMs = 45;
+
+  bool _isConnected = true;
+  String _connectionStatus = 'Connected';
+  bool _isEncrypted = true;
+  String _sessionTime = '00:00:00';
+  String _encryptionType = 'AES-256 Encrypted';
+  bool _isFullScreen = false;
+  bool _isRecording = false;
+  bool _audioEnabled = true;
+  bool _isBlackoutMode = false;
+  bool _isPrivacyModeForRemote = false;
+  bool _isLockedForRemoteUser = false;
+  bool _isDeviceLocked = false;
+  bool _isRebooting = false;
+  bool _isScreenSharing = false;
+  bool _isCapturing = false;
+  bool _isSessionPaused = false;
+  bool _isSessionPausedRemote = false;
+  bool _keyboardInputEnabledForUser2 = true;
+  bool _mouseInputEnabledForUser2 = true;
+  int _framesSent = 0;
+  int _framesReceived = 0;
+  String _captureError = '';
+  String _panelMode = 'none';
+  final TextEditingController _composerController = TextEditingController();
+  final List<String> _chatMessages = [];
+  final ScrollController _chatScrollController = ScrollController();
+  final List<Map<String, String>> _transfers = [];
+  final List<Map<String, String>> _recordedFrames = [];
+  Uint8List? _remoteScreenFrame;
+  Timer? _sessionTimer;
+  Timer? _screenShareTimer;
+  Timer? _overlayHideTimer;
+  Timer? _diagnosticsTimer;
+  Timer? _recordingTimer;
+  Timer? _reconnectTimer;
+  StreamSubscription<SignalEvent>? _signalSubscription;
+  int _sessionSeconds = 0;
+  final FocusNode _remoteControlFocusNode = FocusNode();
+  int _lastPointerMoveMs = 0;
+  bool _rightButtonPressed = false;
+  bool _isClosingSession = false;
+  int _remoteFrameWidth = 16;
+  int _remoteFrameHeight = 9;
+  int _localFrameWidth = 0;
+  int _localFrameHeight = 0;
+  int _localCaptureLeft = 0;
+  int _localCaptureTop = 0;
+  int _localCaptureWidth = 0;
+  int _localCaptureHeight = 0;
+  bool _fillRemoteViewport = false;
+  int _lastAppliedMoveMs = 0;
+  int _lastCaptureStatusSentMs = 0;
+  double? _lastSentMoveX;
+  double? _lastSentMoveY;
+  double _wheelAccumulator = 0.0;
+  Timer? _keyboardLayoutTimer;
+  Timer? _keyStateSyncTimer;
+  final Set<int> _pressedLogicalKeys = <int>{};
+  final Map<int, Timer> _repeatStartTimers = <int, Timer>{};
+  final Map<int, Timer> _repeatTickTimers = <int, Timer>{};
+  Future<void> _remoteInputQueue = Future<void>.value();
+  final Map<String, String> _sendKeysStrokeCache = <String, String>{};
+  String _localKeyboardLayout = 'unknown';
+  String _localKeyboardLayoutFamily = 'unknown';
+  String _remoteKeyboardLayout = 'unknown';
+  String _remoteKeyboardLayoutFamily = 'unknown';
+  bool _showTopOverlay = true;
+  bool _showLeftFloatingButtons = true;
+  bool _hideAllHud = false;
+  int _captureMaxWidth = _defaultCaptureMaxWidth;
+  int _captureJpegQuality = _defaultJpegQuality;
+  String _captureResolutionLabel = 'Full Screen';
+  String _qualityLabel = 'High';
+  String _autoQualityMode = 'Manual';
+  int _captureFrameIntervalMs = _defaultCaptureIntervalMs;
+  String _screenshotPath = '';
+  String _recordingsPath = '';
+  int _selectedRemoteScreenIndex = 0;
+  int _selectedLocalScreenIndex = 0;
+  int _remoteScreenCount = 1;
+  int _localScreenCount = 1;
+  int _pingMs = 0;
+  String _bandwidthText = '0 kb/s';
+  String _connectionQualityText = 'Stable';
+  int _lastNetFrameCounter = 0;
+  DateTime? _lastNetSampleAt;
+  late final RemoteAudioService _remoteAudioService;
+  bool _remoteAudioActive = false;
+  bool _remoteAudioPeerCompatible = false;
+  bool _remoteAudioCompatWarned = false;
+  Timer? _remoteAudioCompatTimer;
+  double _remoteAudioVolume = 0.8;
+  int _remoteAudioBitrateKbps = 96;
+  io.RawDatagramSocket? _audioUdpSocket;
+  io.InternetAddress? _audioPeerAddress;
+  int? _audioPeerPort;
+  bool _audioUdpReady = false;
+  String _audioUdpToken = '';
+  Timer? _audioUdpOfferTimer;
+  int _audioUdpOfferAttempts = 0;
+  bool _audioUdpAckSent = false;
+  String _transferMode = 'send';
+  String _receiveTargetPath = '';
+  int _reconnectAttempts = 0;
+  int _recordingFps = 1;
+
+  String tr(String key) => widget.translate(key);
+
+  @override
+  void initState() {
+    super.initState();
+    _audioUdpToken = _buildAudioUdpToken();
+    _remoteAudioService = RemoteAudioService(
+      isHost: widget.sendLocalScreen,
+      sendPayload: _sendRemoteAudioPayload,
+      pingProvider: () => _pingMs,
     );
+    _initializeUserPaths();
+    _syncFullScreenState();
+    _startSessionTimer();
+    _connectSessionSignalIfAvailable();
+    _startAutomaticScreenShareIfPossible();
+    _startDiagnosticsTimer();
+    _startKeyboardLayoutSync();
+    _startKeyStateSync();
+    _revealOverlayTemporarily();
+    _refreshLocalScreenInfo();
+    _autoEnterFullscreenForController();
+    _pinRemoteAgentWindowIfNeeded();
+    unawaited(_initAudioUdpSocket());
+    unawaited(_syncRemoteAudioPipeline());
+    _remoteControlFocusNode.addListener(() {
+      if (!_remoteControlFocusNode.hasFocus) {
+        _stopAllManagedRepeats();
+        _pressedLogicalKeys.clear();
+        _sendResetAllKeys();
+      }
+    });
+    if (!widget.sendLocalScreen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _remoteControlFocusNode.requestFocus();
+        }
+      });
+    }
   }
 
-  Widget _buildRemoteAgentView(Map<String, Color> colors) {
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: Container(
-            color: Colors.black,
-            child: Container(
-              margin: EdgeInsets.zero,
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.redAccent, width: 4),
-              ),
-              child: Stack(
-                children: [
-                  Positioned.fill(child: _buildRemoteCanvas(colors)),
-                  Positioned(
-                    top: 14,
-                    left: 14,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      color: Colors.redAccent,
-                      child: Text(
-                        'Connected with: ${widget.deviceId}',
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                  ),
-                  if (_isLockedForRemoteUser)
-                    Positioned.fill(
-                      child: Container(
-                        color: Colors.black87,
-                        alignment: Alignment.center,
-                        child: const Text(
-                          'This machine is locked by remote operator',
-                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                    ),
-                  if (_isSessionPausedRemote)
-                    Positioned.fill(
-                      child: Container(
-                        color: Colors.black.withValues(alpha: 0.6),
-                        alignment: Alignment.center,
-                        child: const Text(
-                          'Session paused by remote operator',
-                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        Positioned(
-          right: 2,
-          top: 2,
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.35),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.minimize, color: Colors.white),
-                  tooltip: 'Minimize',
-                  onPressed: () => _minimizeWindow(),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.filter_none, color: Colors.white),
-                  tooltip: 'Restore',
-                  onPressed: () => _restoreWindow(),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white),
-                  tooltip: 'Close session',
-                  onPressed: () => _closeSession(),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-      final line = '${result.stdout}'.trim().split(RegExp(r'[\r\n]+')).firstWhere(
-        (l) => l.contains(','),
-        orElse: () => '',
-      );
-      int count = 1;
-      int primaryIndex = 0;
-      if (line.isNotEmpty) {
-        final parts = line.split(',');
-        if (parts.isNotEmpty) {
-          count = int.tryParse(parts[0].trim()) ?? 1;
-        }
-        if (parts.length >= 2) {
-          primaryIndex = int.tryParse(parts[1].trim()) ?? 0;
-        }
-      } else {
-        count = int.tryParse('${result.stdout}'.trim()) ?? 1;
+  void _initializeUserPaths() {
+    try {
+      final userProfile = io.Platform.environment['USERPROFILE'] ?? '';
+      if (userProfile.isNotEmpty) {
+        _screenshotPath = '$userProfile\\screenshot';
+        _recordingsPath = '$userProfile\\records';
+        io.Directory(_screenshotPath).createSync(recursive: true);
+        io.Directory(_recordingsPath).createSync(recursive: true);
       }
+    } catch (_) {
+      // Fall back to BimStreaming defaults if path creation fails
+      final baseDir = io.Directory('${io.Platform.environment['USERPROFILE'] ?? '.'}\\BimStreaming');
+      try {
+        baseDir.createSync(recursive: true);
+        _screenshotPath = '${baseDir.path}\\screenshot';
+        _recordingsPath = '${baseDir.path}\\records';
+        io.Directory(_screenshotPath).createSync(recursive: true);
+        io.Directory(_recordingsPath).createSync(recursive: true);
+      } catch (_) {
+        // Use temp directory as last resort
+        _screenshotPath = io.Directory.systemTemp.path;
+        _recordingsPath = io.Directory.systemTemp.path;
+      }
+    }
+  }
+
+  Future<void> _autoEnterFullscreenForController() async {
+    if (widget.sendLocalScreen) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final isFs = await windowManager.isFullScreen();
+      if (!isFs) {
+        await windowManager.setFullScreen(true);
+      }
+      if (!mounted) return;
+      setState(() => _isFullScreen = true);
+      _revealOverlayTemporarily();
+    });
+  }
+
+  Future<void> _pinRemoteAgentWindowIfNeeded() async {
+    if (!widget.sendLocalScreen) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      await windowManager.setAlwaysOnTop(true);
+      await windowManager.setFullScreen(true);
+      if (!mounted) return;
+      setState(() => _isFullScreen = true);
+    });
+  }
+
+  Future<void> _refreshLocalScreenInfo() async {
+    if (!io.Platform.isWindows) return;
+    final script = r'''
+Add-Type -AssemblyName System.Windows.Forms
+$count = [System.Windows.Forms.Screen]::AllScreens.Count
+Write-Output $count
+''';
+    try {
+      final result = await _runPowerShell(
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+        timeout: const Duration(seconds: 4),
+      );
+      if (result.exitCode != 0) return;
+      final count = int.tryParse('${result.stdout}'.trim()) ?? 1;
       if (!mounted) return;
       setState(() {
         _localScreenCount = count < 1 ? 1 : count;
-        _localPrimaryScreenIndex = primaryIndex.clamp(0, _localScreenCount - 1);
-        if (!_localScreenSelectionInitialized) {
-          _selectedLocalScreenIndex = _localPrimaryScreenIndex;
-          _localScreenSelectionInitialized = true;
-        } else if (_selectedLocalScreenIndex < 0 || _selectedLocalScreenIndex >= _localScreenCount) {
-          _selectedLocalScreenIndex = _localPrimaryScreenIndex;
+        if (_selectedLocalScreenIndex >= _localScreenCount) {
+          _selectedLocalScreenIndex = 0;
         }
       });
     } catch (_) {
@@ -277,13 +281,22 @@ class _ViewportGeometry {
     }
     _isScreenSharing = true;
     _screenShareTimer?.cancel();
-    _screenShareTimer = Timer.periodic(_screenShareInterval, (_) {
+    _screenShareTimer = Timer.periodic(Duration(milliseconds: _captureFrameIntervalMs), (_) {
       _sendScreenFrame();
     });
     _sendScreenFrame();
   }
 
+  void _restartScreenShareTimerIfNeeded() {
+    if (!widget.sendLocalScreen || !_isScreenSharing) return;
+    _screenShareTimer?.cancel();
+    _screenShareTimer = Timer.periodic(Duration(milliseconds: _captureFrameIntervalMs), (_) {
+      _sendScreenFrame();
+    });
+  }
+
   void _revealOverlayTemporarily() {
+    if (_hideAllHud) return;
     if (!mounted) return;
     setState(() {
       _showTopOverlay = true;
@@ -297,6 +310,23 @@ class _ViewportGeometry {
         _showLeftFloatingButtons = false;
       });
     });
+  }
+
+  void _toggleHudVisibility() {
+    if (!mounted) return;
+    setState(() {
+      _hideAllHud = !_hideAllHud;
+      if (_hideAllHud) {
+        _showTopOverlay = false;
+        _showLeftFloatingButtons = false;
+        _panelMode = 'none';
+      }
+    });
+    if (_hideAllHud) {
+      _overlayHideTimer?.cancel();
+      return;
+    }
+    _revealOverlayTemporarily();
   }
 
   void _startDiagnosticsTimer() {
@@ -318,23 +348,73 @@ class _ViewportGeometry {
         _connectionQualityText = q;
         _lastNetFrameCounter = _framesReceived;
         _lastNetSampleAt = now;
-        if (!widget.sendLocalScreen && _remoteScreenFrame == null) {
-          final noFrameYet = _framesReceived == 0;
-          final elapsed = now.difference(_sessionStartedAt).inSeconds;
-          final sinceLastFrame = _lastFrameReceivedAt == null
-              ? elapsed
-              : now.difference(_lastFrameReceivedAt!).inSeconds;
-          if (noFrameYet && elapsed >= 8 && _captureError.isEmpty) {
-            _captureError = 'No frame received from remote device (check capture/script permissions).';
-          } else if (!noFrameYet && sinceLastFrame >= 8 && _captureError.isEmpty) {
-            _captureError = 'Remote stream stalled (no frame received for ${sinceLastFrame}s).';
-          }
-        }
       });
       await _refreshPing();
       _applyAutoQuality();
     });
     _refreshPing();
+  }
+
+  void _startKeyboardLayoutSync() {
+    _keyboardLayoutTimer?.cancel();
+    unawaited(_refreshKeyboardLayout(sendSync: true));
+    _keyboardLayoutTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      unawaited(_refreshKeyboardLayout(sendSync: true));
+    });
+  }
+
+  Future<void> _refreshKeyboardLayout({required bool sendSync}) async {
+    if (!io.Platform.isWindows) return;
+    final result = await _runPowerShell(
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        r"$v=(Get-ItemProperty -Path 'HKCU:\Keyboard Layout\Preload' -ErrorAction SilentlyContinue).'1'; if([string]::IsNullOrWhiteSpace($v)){$v='unknown'}; Write-Output $v",
+      ],
+      timeout: const Duration(seconds: 3),
+    );
+    var layout = '${result.stdout}'.trim();
+    if (layout.isEmpty) {
+      layout = 'unknown';
+    }
+    final family = _classifyLayoutFamily(layout);
+    final changed = layout != _localKeyboardLayout || family != _localKeyboardLayoutFamily;
+    if (!changed) return;
+    if (mounted) {
+      setState(() {
+        _localKeyboardLayout = layout;
+        _localKeyboardLayoutFamily = family;
+      });
+    } else {
+      _localKeyboardLayout = layout;
+      _localKeyboardLayoutFamily = family;
+    }
+    _sendKeysStrokeCache.clear();
+    if (sendSync && _canSignal) {
+      _sendInputEvent(
+        'layout_sync',
+        extra: {
+          'layout': _localKeyboardLayout,
+          'layoutFamily': _localKeyboardLayoutFamily,
+        },
+      );
+    }
+  }
+
+  String _classifyLayoutFamily(String layout) {
+    final normalized = layout.toLowerCase();
+    if (normalized.contains('040c') || normalized.contains('080c') || normalized.contains('0c0c') || normalized.contains('100c')) {
+      return 'azerty';
+    }
+    if (normalized.contains('0407') || normalized.contains('0807')) {
+      return 'qwertz';
+    }
+    if (normalized.contains('0409') || normalized.contains('0809') || normalized.contains('0c09') || normalized.contains('1009')) {
+      return 'qwerty';
+    }
+    return 'unknown';
   }
 
   Future<void> _refreshPing() async {
@@ -363,26 +443,12 @@ class _ViewportGeometry {
       _captureResolutionLabel = preset;
       switch (preset) {
         case 'Full Screen':
-          // Keep full desktop bounds (virtual screen) while preserving transport-safe frame size.
+          _fillRemoteViewport = true;
           _captureMaxWidth = _defaultCaptureMaxWidth;
           break;
-        case 'Windowed Adapted':
+        case 'Adapter':
+          _fillRemoteViewport = false;
           _captureMaxWidth = _defaultCaptureMaxWidth;
-          break;
-        case 'Adapted Resolution':
-          _captureMaxWidth = _defaultCaptureMaxWidth;
-          break;
-        case 'Auto':
-          _captureMaxWidth = _defaultCaptureMaxWidth;
-          break;
-        case '720p':
-          _captureMaxWidth = 1280;
-          break;
-        case '1080p':
-          _captureMaxWidth = 1920;
-          break;
-        case '540p':
-          _captureMaxWidth = 960;
           break;
         default:
           _captureMaxWidth = _defaultCaptureMaxWidth;
@@ -402,21 +468,33 @@ class _ViewportGeometry {
           break;
         case 'Low':
           _captureJpegQuality = 45;
+          _captureFrameIntervalMs = 75;
           _autoQualityMode = 'Manual';
           break;
         case 'Medium':
           _captureJpegQuality = _defaultJpegQuality;
+          _captureFrameIntervalMs = 55;
           _autoQualityMode = 'Manual';
           break;
         case 'High':
-          _captureJpegQuality = 85;
+          _captureJpegQuality = 92;
+          _captureFrameIntervalMs = 38;
+          _captureMaxWidth = _defaultCaptureMaxWidth;
+          _autoQualityMode = 'Manual';
+          break;
+        case 'Ultra':
+          _captureJpegQuality = 96;
+          _captureFrameIntervalMs = 28;
+          _captureMaxWidth = 3200;
           _autoQualityMode = 'Manual';
           break;
         default:
           _captureJpegQuality = _defaultJpegQuality;
+          _captureFrameIntervalMs = _defaultCaptureIntervalMs;
           _autoQualityMode = 'Manual';
       }
     });
+    _restartScreenShareTimerIfNeeded();
     _sendDisplayConfig();
   }
 
@@ -427,17 +505,26 @@ class _ViewportGeometry {
     // Good (ping <= 100ms): Medium quality
     // Fair (ping <= 180ms): Low quality
     // Poor (ping > 180ms): Very Low quality
-    final newQuality = _pingMs <= 50
-        ? 85  // High
-        : (_pingMs <= 100
-            ? _defaultJpegQuality  // Medium
-            : (_pingMs <= 180
-                ? 45  // Low
-                : 35)); // Very Low
-    if (_captureJpegQuality != newQuality) {
+    final newQuality = _pingMs <= 40
+        ? 96
+        : (_pingMs <= 80
+            ? 90
+            : (_pingMs <= 140
+                ? 75
+                : 55));
+    final newIntervalMs = _pingMs <= 40
+        ? 28
+        : (_pingMs <= 80
+            ? 38
+            : (_pingMs <= 140
+                ? 52
+                : 70));
+    if (_captureJpegQuality != newQuality || _captureFrameIntervalMs != newIntervalMs) {
       setState(() {
         _captureJpegQuality = newQuality;
+        _captureFrameIntervalMs = newIntervalMs;
       });
+      _restartScreenShareTimerIfNeeded();
     }
   }
 
@@ -500,15 +587,22 @@ class _ViewportGeometry {
     if (rawData is! Map) return;
 
     final data = Map<String, dynamic>.from(rawData);
-    final messageSessionId = (data['sessionId'] ?? data['session_id'] ?? '').toString().trim();
-    final expectedSessionId = (widget.sessionId ?? '').toString().trim();
+    final messageSessionId = (data['sessionId'] ?? data['session_id'] ?? '').toString();
+    final expectedSessionId = (widget.sessionId ?? '').toString();
     if (expectedSessionId.isNotEmpty && messageSessionId.isNotEmpty && messageSessionId != expectedSessionId) {
       return;
     }
 
-    final fromUserId = (data['fromUserId'] ?? data['from'] ?? '').toString().trim();
-    if (fromUserId.isEmpty || fromUserId == (widget.currentUserId ?? '').trim()) {
+    final fromUserId = (data['fromUserId'] ?? data['from'] ?? '').toString();
+    final fromInstanceId = (data['fromInstanceId'] ?? data['from_instance'] ?? '').toString();
+    if (fromUserId.isEmpty) {
       return;
+    }
+    if (fromUserId == widget.currentUserId) {
+      final localInstanceId = widget.signalingService?.clientInstanceId ?? '';
+      if (localInstanceId.isEmpty || fromInstanceId.isEmpty || fromInstanceId == localInstanceId) {
+        return;
+      }
     }
 
     final messageType = (data['messageType'] ?? '').toString();
@@ -516,9 +610,13 @@ class _ViewportGeometry {
         ? Map<String, dynamic>.from(data['payload'] as Map)
         : <String, dynamic>{};
 
+    if (messageType == 'screen_frame' && _audioEnabled && !_remoteAudioActive) {
+      unawaited(_syncRemoteAudioPipeline());
+    }
+
     if (messageType == 'input_event') {
       if (widget.sendLocalScreen) {
-        _applyRemoteInput(payload);
+        _enqueueRemoteInput(() => _applyRemoteInput(payload));
       }
       return;
     }
@@ -551,7 +649,18 @@ class _ViewportGeometry {
         setState(() {
           _audioEnabled = payload['enabled'] == true;
         });
+        unawaited(_syncRemoteAudioPipeline());
+      } else {
+        setState(() {
+          _audioEnabled = payload['enabled'] == true;
+        });
+        unawaited(_syncRemoteAudioPipeline());
       }
+      return;
+    }
+
+    if (messageType == 'remote_audio') {
+      unawaited(_handleRemoteAudioSignal(payload));
       return;
     }
 
@@ -600,19 +709,23 @@ class _ViewportGeometry {
         }
         if (resolution.isNotEmpty) {
           _captureResolutionLabel = resolution;
-          if (resolution == 'Full Screen') _captureMaxWidth = _defaultCaptureMaxWidth;
-          if (resolution == 'Windowed Adapted') _captureMaxWidth = _defaultCaptureMaxWidth;
           if (resolution == '720p') _captureMaxWidth = 1280;
           if (resolution == '1080p') _captureMaxWidth = 1920;
           if (resolution == '540p') _captureMaxWidth = 960;
           if (resolution == 'Adapted Resolution') _captureMaxWidth = _defaultCaptureMaxWidth;
-          if (resolution == 'Auto') _captureMaxWidth = _defaultCaptureMaxWidth;
+          _fillRemoteViewport = resolution == 'Full Screen';
         }
         if (quality.isNotEmpty) {
           _qualityLabel = quality;
           if (quality == 'Low') _captureJpegQuality = 45;
           if (quality == 'Medium') _captureJpegQuality = _defaultJpegQuality;
-          if (quality == 'High') _captureJpegQuality = 85;
+          if (quality == 'High') _captureJpegQuality = 92;
+          if (quality == 'Ultra') _captureJpegQuality = 96;
+          if (quality == 'Low') _captureFrameIntervalMs = 75;
+          if (quality == 'Medium') _captureFrameIntervalMs = 55;
+          if (quality == 'High') _captureFrameIntervalMs = 38;
+          if (quality == 'Ultra') _captureFrameIntervalMs = 28;
+          _restartScreenShareTimerIfNeeded();
         }
       }
       return;
@@ -622,18 +735,13 @@ class _ViewportGeometry {
       if (!widget.sendLocalScreen) {
         final status = (payload['status'] ?? '').toString();
         final detail = (payload['detail'] ?? '').toString();
-        if (status == 'ok') {
-          // Do not clear receiver-side diagnostics until at least one frame is actually received.
-          if (_framesReceived > 0) {
-            setState(() {
-              _captureError = '';
-            });
-          }
-        } else if (detail.isNotEmpty) {
-          setState(() {
+        setState(() {
+          if (status == 'ok') {
+            _captureError = '';
+          } else if (detail.isNotEmpty) {
             _captureError = detail;
-          });
-        }
+          }
+        });
       }
       return;
     }
@@ -696,17 +804,9 @@ class _ViewportGeometry {
               final fh = payload['frameHeight'];
               final sc = payload['screenCount'];
               final si = payload['screenIndex'];
-              final fb = payload['frameBytes'];
-              final mode = (payload['captureMode'] ?? '').toString();
               if (fw is num && fh is num && fw > 0 && fh > 0) {
                 _remoteFrameWidth = fw.toInt();
                 _remoteFrameHeight = fh.toInt();
-              }
-              if (fb is num && fb.toInt() > 0) {
-                _lastRemoteFrameBytes = fb.toInt();
-              }
-              if (mode.isNotEmpty) {
-                _lastRemoteCaptureMode = mode;
               }
               if (sc is num && sc.toInt() > 0) {
                 _remoteScreenCount = sc.toInt();
@@ -714,29 +814,9 @@ class _ViewportGeometry {
               if (si is num && si.toInt() >= 0) {
                 _selectedRemoteScreenIndex = si.toInt();
               }
-              // Extract remote capture bounds for mouse coordinate mapping
-              final rcl = payload['captureLeft'];
-              final rct = payload['captureTop'];
-              final rcw = payload['captureWidth'];
-              final rch = payload['captureHeight'];
-              if (rcl is num) _remoteCaptureLeft = rcl.toInt();
-              if (rct is num) _remoteCaptureTop = rct.toInt();
-              if (rcw is num) _remoteCaptureWidth = rcw.toInt();
-              if (rch is num) _remoteCaptureHeight = rch.toInt();
-              if (_remoteCaptureWidth <= 0 && _remoteFrameWidth > 0) {
-                _remoteCaptureWidth = _remoteFrameWidth;
-              }
-              if (_remoteCaptureHeight <= 0 && _remoteFrameHeight > 0) {
-                _remoteCaptureHeight = _remoteFrameHeight;
-              }
-              _lastFrameReceivedAt = DateTime.now();
-              _captureError = '';
               _framesReceived++;
               if (_framesReceived % 30 == 0) {
-                print('[ScreenShare] RX #$_framesReceived frame=${_remoteFrameWidth}x$_remoteFrameHeight capture=${_remoteCaptureLeft},${_remoteCaptureTop},${_remoteCaptureWidth}x$_remoteCaptureHeight from=$fromUserId');
-              }
-              if (!widget.sendLocalScreen) {
-                _scheduleAutoFitWindowToRemoteAspect();
+                print('[ScreenShare] Frame received #$_framesReceived (${frameData.length} chars b64) from $fromUserId');
               }
             } catch (e) {
               print('[ScreenShare] Decode error: $e');
@@ -751,6 +831,20 @@ class _ViewportGeometry {
   Future<void> _closeSession({bool notifyPeer = true}) async {
     if (_isClosingSession) return;
     _isClosingSession = true;
+
+    _stopAllManagedRepeats();
+    _pressedLogicalKeys.clear();
+    _sendResetAllKeys();
+    _audioUdpOfferTimer?.cancel();
+    _audioUdpOfferTimer = null;
+    _remoteAudioCompatTimer?.cancel();
+    _remoteAudioCompatTimer = null;
+    _audioUdpSocket?.close();
+    _audioUdpSocket = null;
+    _audioUdpReady = false;
+    await _remoteAudioService.stopHost();
+    await _remoteAudioService.stopClient();
+    _remoteAudioActive = false;
 
     if (notifyPeer) {
       _sendSessionPayload(
@@ -784,33 +878,6 @@ class _ViewportGeometry {
       }
     } catch (_) {
       // Best-effort window restore.
-    }
-  }
-
-  Future<void> _minimizeWindow() async {
-    try {
-      await windowManager.minimize();
-    } catch (_) {
-      // Ignore minimize failures.
-    }
-  }
-
-  Future<void> _restoreWindow() async {
-    try {
-      final isMin = await windowManager.isMinimized();
-      if (isMin) {
-        await windowManager.restore();
-      }
-      final isFs = await windowManager.isFullScreen();
-      if (isFs) {
-        await windowManager.setFullScreen(false);
-        if (mounted) {
-          setState(() => _isFullScreen = false);
-        }
-      }
-      await windowManager.setAlwaysOnTop(false);
-    } catch (_) {
-      // Ignore restore failures.
     }
   }
 
@@ -878,12 +945,314 @@ class _ViewportGeometry {
       _isConnected &&
       !widget.sendLocalScreen;
 
+  void _startKeyStateSync() {
+    _keyStateSyncTimer?.cancel();
+    _keyStateSyncTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) {
+      _sendKeyStateSync();
+    });
+  }
+
+  void _sendKeyStateSync() {
+    if (!_canSendRemoteInput) return;
+    final hw = HardwareKeyboard.instance;
+    _sendInputEvent(
+      'key_state_sync',
+      extra: {
+        'shift': hw.isShiftPressed,
+        'ctrl': hw.isControlPressed,
+        'alt': hw.isAltPressed,
+        'meta': hw.isMetaPressed,
+        'pressedCount': _pressedLogicalKeys.length,
+      },
+    );
+  }
+
+  void _sendResetAllKeys() {
+    if (!_canSendRemoteInput) return;
+    _sendInputEvent('reset_all_keys');
+  }
+
+  void _enqueueRemoteInput(Future<void> Function() task) {
+    _remoteInputQueue = _remoteInputQueue.then((_) => task()).catchError((_) {
+      // Keep later input events flowing if one injection fails.
+    });
+  }
+
+  void _sendWheelFromDelta(double deltaY) {
+    if (!_canSendRemoteInput) return;
+    _wheelAccumulator += deltaY;
+    const threshold = 20.0;
+    while (_wheelAccumulator.abs() >= threshold) {
+      final direction = _wheelAccumulator > 0 ? 1 : -1;
+      // Flutter dy > 0 means scroll down, while Win32 wheel < 0 is down.
+      final wheel = direction > 0 ? -120 : 120;
+      _sendInputEvent('wheel', wheelDelta: wheel);
+      _wheelAccumulator -= threshold * direction;
+    }
+  }
+
+  bool _isModifierLogical(LogicalKeyboardKey key) {
+    return key == LogicalKeyboardKey.shiftLeft ||
+        key == LogicalKeyboardKey.shiftRight ||
+        key == LogicalKeyboardKey.controlLeft ||
+        key == LogicalKeyboardKey.controlRight ||
+        key == LogicalKeyboardKey.altLeft ||
+        key == LogicalKeyboardKey.altRight ||
+        key == LogicalKeyboardKey.metaLeft ||
+        key == LogicalKeyboardKey.metaRight ||
+        key == LogicalKeyboardKey.capsLock;
+  }
+
+  bool _isManagedRepeatKey(LogicalKeyboardKey key) {
+    return key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.arrowRight ||
+        key == LogicalKeyboardKey.arrowUp ||
+        key == LogicalKeyboardKey.arrowDown ||
+        key == LogicalKeyboardKey.backspace ||
+        key == LogicalKeyboardKey.delete;
+  }
+
+  void _startManagedRepeat(KeyEvent event) {
+    if (!_canSendRemoteInput || !_isManagedRepeatKey(event.logicalKey)) return;
+    final logical = event.logicalKey.keyId;
+    _stopManagedRepeat(logical);
+    _repeatStartTimers[logical] = Timer(const Duration(milliseconds: 320), () {
+      _repeatStartTimers.remove(logical);
+      if (!_pressedLogicalKeys.contains(logical) || !_canSendRemoteInput) return;
+      _repeatTickTimers[logical] = Timer.periodic(const Duration(milliseconds: 42), (_) {
+        if (!_pressedLogicalKeys.contains(logical) || !_canSendRemoteInput) {
+          _stopManagedRepeat(logical);
+          return;
+        }
+        _sendKeyboardEvent(event, phase: 'down');
+      });
+    });
+  }
+
+  void _stopManagedRepeat(int logical) {
+    _repeatStartTimers.remove(logical)?.cancel();
+    _repeatTickTimers.remove(logical)?.cancel();
+  }
+
+  void _stopAllManagedRepeats() {
+    for (final t in _repeatStartTimers.values) {
+      t.cancel();
+    }
+    for (final t in _repeatTickTimers.values) {
+      t.cancel();
+    }
+    _repeatStartTimers.clear();
+    _repeatTickTimers.clear();
+  }
+
+  bool _sendRemoteAudioPayload(Map<String, dynamic> payload) {
+    if (_audioUdpReady && payload['kind'] == 'packet' && _audioUdpSocket != null && _audioPeerAddress != null && _audioPeerPort != null) {
+      final envelope = {
+        'type': 'remote_audio_udp',
+        'sessionId': (widget.sessionId ?? '').toString(),
+        'token': _audioUdpToken,
+        'payload': payload,
+      };
+      try {
+        final bytes = utf8.encode(jsonEncode(envelope));
+        final sent = _audioUdpSocket!.send(bytes, _audioPeerAddress!, _audioPeerPort!);
+        if (sent > 0) {
+          return true;
+        }
+      } catch (_) {
+        _audioUdpReady = false;
+      }
+    }
+    return _sendSessionPayload(messageType: 'remote_audio', payload: payload);
+  }
+
+  String _buildAudioUdpToken() {
+    final sid = (widget.sessionId ?? '').toString();
+    final a = (widget.currentUserId ?? '').toString();
+    final b = widget.deviceId;
+    final seed = '$sid|$a|$b|bim-audio-v1';
+    final hash = seed.codeUnits.fold<int>(0, (acc, v) => (acc * 131 + v) & 0x7fffffff);
+    return hash.toRadixString(16);
+  }
+
+  Future<void> _initAudioUdpSocket() async {
+    if (_audioUdpSocket != null) return;
+    try {
+      final socket = await io.RawDatagramSocket.bind(io.InternetAddress.anyIPv4, 0);
+      socket.readEventsEnabled = true;
+      socket.listen((event) {
+        if (event != io.RawSocketEvent.read) return;
+        final dg = socket.receive();
+        if (dg == null) return;
+        Map<String, dynamic> decoded;
+        try {
+          decoded = Map<String, dynamic>.from(jsonDecode(utf8.decode(dg.data)) as Map);
+        } catch (_) {
+          return;
+        }
+        if ((decoded['type'] ?? '') != 'remote_audio_udp') return;
+        if ((decoded['sessionId'] ?? '').toString() != (widget.sessionId ?? '').toString()) return;
+        if ((decoded['token'] ?? '').toString() != _audioUdpToken) return;
+        final payloadRaw = decoded['payload'];
+        if (payloadRaw is! Map) return;
+        final payload = Map<String, dynamic>.from(payloadRaw);
+        unawaited(_handleRemoteAudioPayload(payload));
+      });
+      _audioUdpSocket = socket;
+      _startAudioUdpOfferLoop();
+    } catch (_) {
+      _audioUdpSocket = null;
+    }
+  }
+
+  void _startAudioUdpOfferLoop() {
+    _audioUdpOfferTimer?.cancel();
+    _audioUdpOfferAttempts = 0;
+    _audioUdpAckSent = false;
+    _audioUdpOfferTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
+      if (_audioUdpReady || !_canSignal || _audioUdpSocket == null) {
+        if (_audioUdpReady) {
+          timer.cancel();
+        }
+        return;
+      }
+      if (_audioUdpOfferAttempts >= 12) {
+        timer.cancel();
+        return;
+      }
+      _audioUdpOfferAttempts++;
+      unawaited(() async {
+        final ip = await _pickLanIpAddress();
+        _sendSessionPayload(
+          messageType: 'remote_audio',
+          payload: {
+            'kind': 'udp_offer',
+            'ip': ip.address,
+            'port': _audioUdpSocket!.port,
+            'token': _audioUdpToken,
+          },
+        );
+      }());
+    });
+  }
+
+  Future<io.InternetAddress> _pickLanIpAddress() async {
+    try {
+      final interfaces = await io.NetworkInterface.list();
+      for (final iface in interfaces) {
+        for (final addr in iface.addresses) {
+          if (addr.type == io.InternetAddressType.IPv4 && !addr.isLoopback) {
+            return addr;
+          }
+        }
+      }
+    } catch (_) {
+      return io.InternetAddress.loopbackIPv4;
+    }
+    return io.InternetAddress.loopbackIPv4;
+  }
+
+  Future<void> _handleRemoteAudioSignal(Map<String, dynamic> payload) async {
+    _remoteAudioPeerCompatible = true;
+    final kind = (payload['kind'] ?? '').toString();
+    if (kind == 'cap_probe') {
+      _sendRemoteAudioPayload({'kind': 'cap_ack', 'version': 1});
+      return;
+    }
+    if (kind == 'cap_ack') {
+      return;
+    }
+    if (kind == 'udp_offer') {
+      final token = (payload['token'] ?? '').toString();
+      if (token != _audioUdpToken) return;
+      final ip = (payload['ip'] ?? '').toString();
+      final portRaw = payload['port'];
+      if (ip.isEmpty || portRaw is! num || portRaw.toInt() <= 0) return;
+      _audioPeerAddress = io.InternetAddress.tryParse(ip);
+      _audioPeerPort = portRaw.toInt();
+      if (_audioPeerAddress != null && _audioPeerPort != null) {
+        _audioUdpReady = true;
+      }
+      if (!_audioUdpAckSent && _audioUdpSocket != null) {
+        _audioUdpAckSent = true;
+        final localIp = await _pickLanIpAddress();
+        _sendSessionPayload(
+          messageType: 'remote_audio',
+          payload: {
+            'kind': 'udp_ack',
+            'ip': localIp.address,
+            'port': _audioUdpSocket!.port,
+            'token': _audioUdpToken,
+          },
+        );
+      }
+      return;
+    }
+
+    if (kind == 'udp_ack') {
+      final token = (payload['token'] ?? '').toString();
+      if (token != _audioUdpToken) return;
+      final ip = (payload['ip'] ?? '').toString();
+      final portRaw = payload['port'];
+      if (ip.isEmpty || portRaw is! num || portRaw.toInt() <= 0) return;
+      _audioPeerAddress = io.InternetAddress.tryParse(ip);
+      _audioPeerPort = portRaw.toInt();
+      if (_audioPeerAddress != null && _audioPeerPort != null) {
+        _audioUdpReady = true;
+      }
+      return;
+    }
+
+    await _handleRemoteAudioPayload(payload);
+  }
+
+  Future<void> _syncRemoteAudioPipeline() async {
+    if (!_isConnected || !_audioEnabled || !_canSignal) {
+      if (_remoteAudioActive) {
+        await _remoteAudioService.stopHost();
+        await _remoteAudioService.stopClient();
+        _remoteAudioActive = false;
+      }
+      _remoteAudioCompatTimer?.cancel();
+      _remoteAudioCompatTimer = null;
+      return;
+    }
+
+    _remoteAudioPeerCompatible = false;
+    _remoteAudioCompatWarned = false;
+    _sendRemoteAudioPayload({'kind': 'cap_probe', 'version': 1});
+    _remoteAudioCompatTimer?.cancel();
+    _remoteAudioCompatTimer = Timer(const Duration(seconds: 8), () {
+      if (!mounted || _remoteAudioPeerCompatible || _remoteAudioCompatWarned) return;
+      _remoteAudioCompatWarned = true;
+      _showMessage(
+        context,
+        'Remote peer does not support this audio patch yet. Update both apps to the same version.',
+        _getColors(context),
+      );
+    });
+
+    if (widget.sendLocalScreen) {
+      await _remoteAudioService.startHost(bitrateKbps: _remoteAudioBitrateKbps);
+    } else {
+      await _remoteAudioService.startClient(volume: _remoteAudioVolume);
+      // Request host config as soon as client enables audio.
+      _sendRemoteAudioPayload({'kind': 'config', 'bitrateKbps': _remoteAudioBitrateKbps});
+    }
+    _remoteAudioActive = true;
+  }
+
+  Future<void> _handleRemoteAudioPayload(Map<String, dynamic> payload) async {
+    await _remoteAudioService.handleIncoming(payload);
+  }
+
   void _sendInputEvent(
     String action, {
     double? normalizedX,
     double? normalizedY,
     int? wheelDelta,
     String? key,
+    Map<String, dynamic>? extra,
   }) {
     if (!_canSendRemoteInput) return;
     final payload = <String, dynamic>{'action': action};
@@ -891,7 +1260,58 @@ class _ViewportGeometry {
     if (normalizedY != null) payload['y'] = normalizedY.clamp(0.0, 1.0);
     if (wheelDelta != null) payload['wheelDelta'] = wheelDelta;
     if (key != null && key.isNotEmpty) payload['key'] = key;
+    if (extra != null && extra.isNotEmpty) payload.addAll(extra);
     _sendSessionPayload(messageType: 'input_event', payload: payload);
+  }
+
+  void _sendKeyboardEvent(KeyEvent event, {required String phase}) {
+    if (!_canSendRemoteInput) return;
+    final logicalId = event.logicalKey.keyId;
+    final physicalId = event.physicalKey.usbHidUsage;
+    final keyLabel = event.logicalKey.keyLabel.trim();
+    final debugName = (event.logicalKey.debugName ?? '').trim();
+    final keyName = keyLabel.isNotEmpty ? keyLabel : debugName;
+    final character = event.character ?? '';
+    final isSpace = character == ' ' || keyName.toLowerCase() == 'space';
+    final hw = HardwareKeyboard.instance;
+    final altGraphPressed = hw.logicalKeysPressed.contains(LogicalKeyboardKey.altGraph);
+    final isNumpad = keyName.toLowerCase().contains('numpad') || (physicalId >= 0x00070059 && physicalId <= 0x00070063);
+    final legacyKey = character.isNotEmpty
+      ? (isSpace ? 'Space' : character)
+        : (keyName.isNotEmpty ? keyName : event.logicalKey.keyLabel);
+    final modernPayload = <String, dynamic>{
+      'phase': phase,
+      'logicalKeyId': logicalId,
+      'physicalKey': physicalId,
+      'keyName': keyName,
+      'character': character,
+      'isNumpad': isNumpad,
+      'shift': hw.isShiftPressed,
+      'ctrl': hw.isControlPressed,
+      'alt': hw.isAltPressed,
+      'meta': hw.isMetaPressed,
+      'altGraph': altGraphPressed,
+      'sourceLayout': _localKeyboardLayout,
+      'sourceLayoutFamily': _localKeyboardLayoutFamily,
+      'targetLayout': _remoteKeyboardLayout,
+      'targetLayoutFamily': _remoteKeyboardLayoutFamily,
+      'protocol': 'keyboard_v2',
+    };
+
+    // Primary protocol for updated peers.
+    _sendInputEvent('key_event', extra: modernPayload);
+
+    // Backward compatibility for older peers that only understand key_press.
+    // Send only on key-down to avoid duplicate characters on old receivers.
+    if (phase == 'down' && legacyKey.isNotEmpty && !_isModifierKey({'keyName': keyName})) {
+      _sendInputEvent(
+        'key_press',
+        key: legacyKey,
+        extra: {
+          'legacyCompat': true,
+        },
+      );
+    }
   }
 
   Future<void> _applyRemoteInput(Map<String, dynamic> payload) async {
@@ -910,59 +1330,43 @@ class _ViewportGeometry {
     if (!_mouseInputEnabledForUser2 && mouseActions.contains(action)) {
       return;
     }
-    if (!_keyboardInputEnabledForUser2 && action == 'key_press') {
+    if (!_keyboardInputEnabledForUser2 && (action == 'key_press' || action == 'key_event')) {
+      return;
+    }
+    if (action == 'key_press' && payload['legacyCompat'] == true) {
+      // Ignore compatibility duplicate on updated receivers.
+      return;
+    }
+    if (action == 'reset_all_keys') {
+      await _resetRemoteInjectedKeys();
+      return;
+    }
+    if (action == 'key_state_sync') {
+      await _applyRemoteKeyStateSync(payload);
+      return;
+    }
+    if (action == 'layout_sync') {
+      _remoteKeyboardLayout = (payload['layout'] ?? 'unknown').toString();
+      _remoteKeyboardLayoutFamily = (payload['layoutFamily'] ?? 'unknown').toString();
+      _sendKeysStrokeCache.clear();
+      return;
+    }
+    if (action == 'key_event' || (action == 'key_press' && payload.containsKey('phase'))) {
+      await _applyRemoteKeyboardEvent(payload);
       return;
     }
     if (action == 'move') {
-      // Running a PowerShell process per event is expensive; throttle move apply.
       final now = DateTime.now().millisecondsSinceEpoch;
-      if (now - _lastAppliedMoveMs < 45) return;
+      if (now - _lastAppliedMoveMs < 12) return;
       _lastAppliedMoveMs = now;
     }
+
     final x = (payload['x'] is num) ? (payload['x'] as num).toDouble() : null;
     final y = (payload['y'] is num) ? (payload['y'] as num).toDouble() : null;
     final wheelDelta = (payload['wheelDelta'] is num)
         ? (payload['wheelDelta'] as num).toInt()
         : 0;
     final key = (payload['key'] ?? '').toString();
-
-    if (action == 'move' && x != null && y != null) {
-      final moveScript = r'''
-[void][Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms')
-[void][Reflection.Assembly]::LoadWithPartialName('System.Drawing')
-$x = __X__
-$y = __Y__
-$capLeft = __CAP_LEFT__
-$capTop = __CAP_TOP__
-$capWidth = __CAP_WIDTH__
-$capHeight = __CAP_HEIGHT__
-
-$bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-if ($capWidth -gt 0 -and $capHeight -gt 0) {
-  $bounds = New-Object System.Drawing.Rectangle($capLeft, $capTop, $capWidth, $capHeight)
-}
-
-$px = $bounds.Left + [int]([double]($bounds.Width - 1) * $x)
-$py = $bounds.Top + [int]([double]($bounds.Height - 1) * $y)
-[System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point($px, $py)
-'''
-          .replaceAll('__X__', x.toStringAsFixed(6))
-          .replaceAll('__Y__', y.toStringAsFixed(6))
-          .replaceAll('__CAP_LEFT__', _localCaptureLeft.toString())
-          .replaceAll('__CAP_TOP__', _localCaptureTop.toString())
-          .replaceAll('__CAP_WIDTH__', _localCaptureWidth.toString())
-          .replaceAll('__CAP_HEIGHT__', _localCaptureHeight.toString());
-
-      try {
-        await io.Process.run(
-          'powershell',
-          ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', moveScript],
-        );
-      } catch (_) {
-        // Ignore move injection failures silently to keep session alive.
-      }
-      return;
-    }
 
     final script = r'''
 Add-Type -AssemblyName System.Windows.Forms
@@ -1043,20 +1447,448 @@ switch ($action) {
         .replaceAll('__X__', x == null ? '-1' : x.toStringAsFixed(6))
         .replaceAll('__Y__', y == null ? '-1' : y.toStringAsFixed(6))
         .replaceAll('__WHEEL__', wheelDelta.toString())
-  .replaceAll('__CAP_LEFT__', _localCaptureLeft.toString())
-  .replaceAll('__CAP_TOP__', _localCaptureTop.toString())
-  .replaceAll('__CAP_WIDTH__', _localCaptureWidth.toString())
-  .replaceAll('__CAP_HEIGHT__', _localCaptureHeight.toString())
+        .replaceAll('__CAP_LEFT__', _localCaptureLeft.toString())
+        .replaceAll('__CAP_TOP__', _localCaptureTop.toString())
+        .replaceAll('__CAP_WIDTH__', _localCaptureWidth.toString())
+        .replaceAll('__CAP_HEIGHT__', _localCaptureHeight.toString())
         .replaceAll('__KEY__', key.replaceAll("'", "''"));
 
     try {
-      await io.Process.run(
-        'powershell',
+      await _runPowerShell(
         ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+        timeout: const Duration(seconds: 2),
       );
     } catch (_) {
       // Ignore remote input injection failures silently to keep session alive.
     }
+  }
+
+  Future<void> _applyRemoteKeyboardEvent(Map<String, dynamic> payload) async {
+    final phase = (payload['phase'] ?? 'down').toString();
+    if (phase != 'down' && phase != 'up') return;
+    final isModifier = _isModifierKey(payload);
+    if (phase == 'up' && !isModifier) {
+      // Non-modifier keys are injected as a full tap on key-down.
+      return;
+    }
+    final vkCode = _resolveVirtualKey(payload);
+    final keyStroke = _buildSendKeysStroke(payload);
+    final character = _mapCharacterForLayout((payload['character'] ?? '').toString(), payload);
+    final isNumpad = payload['isNumpad'] == true;
+    final useCtrl = payload['ctrl'] == true;
+    final useAlt = payload['alt'] == true;
+    final useMeta = payload['meta'] == true;
+    final useAltGraph = payload['altGraph'] == true;
+    final shouldSendUnicode =
+        phase == 'down' &&
+        !isModifier &&
+        !isNumpad &&
+        _isPrintableCharacter(character) &&
+        !(useCtrl || useMeta) &&
+        (useAltGraph || !useAlt);
+    final unicode = shouldSendUnicode ? character.runes.first : 0;
+
+    final script = r'''
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class NativeInput {
+  [StructLayout(LayoutKind.Sequential)]
+  public struct INPUT {
+    public uint type;
+    public InputUnion U;
+  }
+
+  [StructLayout(LayoutKind.Explicit)]
+  public struct InputUnion {
+    [FieldOffset(0)]
+    public KEYBDINPUT ki;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct KEYBDINPUT {
+    public ushort wVk;
+    public ushort wScan;
+    public uint dwFlags;
+    public uint time;
+    public UIntPtr dwExtraInfo;
+  }
+
+  [DllImport("user32.dll", SetLastError=true)]
+  public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+  [DllImport("user32.dll", SetLastError=true)]
+  public static extern uint MapVirtualKey(uint uCode, uint uMapType);
+}
+"@
+
+$phase = '__PHASE__'
+$vk = __VK__
+$unicode = __UNICODE__
+$sendUnicode = __SEND_UNICODE__
+$stroke = '__STROKE__'
+
+function Send-Key([int]$k, [bool]$up) {
+  $input = New-Object NativeInput+INPUT
+  $input.type = 1
+  $kb = New-Object NativeInput+KEYBDINPUT
+  $kb.wVk = [UInt16]$k
+  $kb.wScan = [UInt16][NativeInput]::MapVirtualKey([UInt32]$k, 0)
+  $flags = 0x0008
+  if ($up) { $flags = $flags -bor 0x0002 }
+  if ($k -in 0x25,0x26,0x27,0x28,0x21,0x22,0x23,0x24,0x2D,0x2E,0xA2,0xA3,0xA4,0xA5,0x90,0x91,0x6F,0x6A,0x6B,0x6D,0x6E) { $flags = $flags -bor 0x0001 }
+  $kb.dwFlags = $flags
+  $kb.time = 0
+  $kb.dwExtraInfo = [UIntPtr]::Zero
+  $input.U.ki = $kb
+  [void][NativeInput]::SendInput(1, @($input), [Runtime.InteropServices.Marshal]::SizeOf([type][NativeInput+INPUT]))
+}
+
+function Tap-Key([int]$k) {
+  Send-Key $k $false
+  Send-Key $k $true
+}
+
+function Send-Unicode([int]$codePoint) {
+  $down = New-Object NativeInput+INPUT
+  $down.type = 1
+  $kbDown = New-Object NativeInput+KEYBDINPUT
+  $kbDown.wVk = 0
+  $kbDown.wScan = [UInt16]$codePoint
+  $kbDown.dwFlags = 0x0004
+  $kbDown.time = 0
+  $kbDown.dwExtraInfo = [UIntPtr]::Zero
+  $down.U.ki = $kbDown
+
+  $up = New-Object NativeInput+INPUT
+  $up.type = 1
+  $kbUp = New-Object NativeInput+KEYBDINPUT
+  $kbUp.wVk = 0
+  $kbUp.wScan = [UInt16]$codePoint
+  $kbUp.dwFlags = 0x0004 -bor 0x0002
+  $kbUp.time = 0
+  $kbUp.dwExtraInfo = [UIntPtr]::Zero
+  $up.U.ki = $kbUp
+
+  [void][NativeInput]::SendInput(2, @($down, $up), [Runtime.InteropServices.Marshal]::SizeOf([type][NativeInput+INPUT]))
+}
+
+if ($sendUnicode -eq 1 -and $phase -eq 'down' -and $unicode -gt 0) {
+  Send-Unicode $unicode
+  return
+}
+
+if ($vk -gt 0) {
+  if ($phase -eq 'down') {
+    $modifiers = @(0x10, 0xA0, 0xA1, 0x11, 0xA2, 0xA3, 0x12, 0xA4, 0xA5, 0x5B, 0x5C)
+    if ($modifiers -contains $vk) {
+      Send-Key $vk $false
+    } else {
+      Tap-Key $vk
+    }
+  } elseif ($phase -eq 'up') {
+    Send-Key $vk $true
+  }
+  return
+}
+
+if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
+  [System.Windows.Forms.SendKeys]::SendWait($stroke)
+}
+'''
+        .replaceAll('__PHASE__', phase)
+        .replaceAll('__VK__', vkCode.toString())
+        .replaceAll('__UNICODE__', unicode.toString())
+        .replaceAll('__SEND_UNICODE__', shouldSendUnicode ? '1' : '0')
+        .replaceAll('__STROKE__', keyStroke.replaceAll("'", "''"));
+
+    try {
+      await _runPowerShell(
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+        timeout: const Duration(seconds: 2),
+      );
+    } catch (_) {
+      // Keep session alive on key injection failures.
+    }
+  }
+
+  Future<void> _applyRemoteKeyStateSync(Map<String, dynamic> payload) async {
+    final desiredShift = payload['shift'] == true;
+    final desiredCtrl = payload['ctrl'] == true;
+    final desiredAlt = payload['alt'] == true;
+    final desiredMeta = payload['meta'] == true;
+
+    await _applyRemoteKeyboardEvent({'phase': desiredShift ? 'down' : 'up', 'keyName': 'shift'});
+    await _applyRemoteKeyboardEvent({'phase': desiredCtrl ? 'down' : 'up', 'keyName': 'control'});
+    await _applyRemoteKeyboardEvent({'phase': desiredAlt ? 'down' : 'up', 'keyName': 'alt'});
+    await _applyRemoteKeyboardEvent({'phase': desiredMeta ? 'down' : 'up', 'keyName': 'meta'});
+  }
+
+  Future<void> _resetRemoteInjectedKeys() async {
+    await _applyRemoteKeyboardEvent({'phase': 'up', 'keyName': 'shift'});
+    await _applyRemoteKeyboardEvent({'phase': 'up', 'keyName': 'control'});
+    await _applyRemoteKeyboardEvent({'phase': 'up', 'keyName': 'alt'});
+    await _applyRemoteKeyboardEvent({'phase': 'up', 'keyName': 'meta'});
+  }
+
+  int _resolveVirtualKey(Map<String, dynamic> payload) {
+    final physical = payload['physicalKey'] is num ? (payload['physicalKey'] as num).toInt() : 0;
+    const physicalVkMap = {
+      0x00070059: 0x61,
+      0x0007005A: 0x62,
+      0x0007005B: 0x63,
+      0x0007005C: 0x64,
+      0x0007005D: 0x65,
+      0x0007005E: 0x66,
+      0x0007005F: 0x67,
+      0x00070060: 0x68,
+      0x00070061: 0x69,
+      0x00070062: 0x60,
+      0x00070063: 0x6E,
+      0x00070054: 0x6F,
+      0x00070055: 0x6A,
+      0x00070056: 0x6D,
+      0x00070057: 0x6B,
+      0x00070058: 0x0D,
+    };
+    if (physicalVkMap.containsKey(physical)) return physicalVkMap[physical]!;
+
+    final keyName = (payload['keyName'] ?? '').toString().toLowerCase();
+    if (keyName.isEmpty) return 0;
+    const vkMap = {
+      'shift left': 0xA0,
+      'shift right': 0xA1,
+      'shift': 0x10,
+      'control left': 0xA2,
+      'control right': 0xA3,
+      'control': 0x11,
+      'alt left': 0xA4,
+      'alt right': 0xA5,
+      'alt': 0x12,
+      'meta': 0x5B,
+      'meta left': 0x5B,
+      'meta right': 0x5C,
+      'enter': 0x0D,
+      'tab': 0x09,
+      'escape': 0x1B,
+      'backspace': 0x08,
+      'delete': 0x2E,
+      'insert': 0x2D,
+      'home': 0x24,
+      'end': 0x23,
+      'page up': 0x21,
+      'page down': 0x22,
+      'arrow left': 0x25,
+      'arrow up': 0x26,
+      'arrow right': 0x27,
+      'arrow down': 0x28,
+      'f1': 0x70,
+      'f2': 0x71,
+      'f3': 0x72,
+      'f4': 0x73,
+      'f5': 0x74,
+      'f6': 0x75,
+      'f7': 0x76,
+      'f8': 0x77,
+      'f9': 0x78,
+      'f10': 0x79,
+      'f11': 0x7A,
+      'f12': 0x7B,
+      'space': 0x20,
+      'caps lock': 0x14,
+      'minus': 0xBD,
+      'equal': 0xBB,
+      'bracket left': 0xDB,
+      'bracket right': 0xDD,
+      'backslash': 0xDC,
+      'semicolon': 0xBA,
+      'quote': 0xDE,
+      'comma': 0xBC,
+      'period': 0xBE,
+      'slash': 0xBF,
+      'backquote': 0xC0,
+      'numpad enter': 0x0D,
+      'numpad decimal': 0x6E,
+      'numpad divide': 0x6F,
+      'numpad multiply': 0x6A,
+      'numpad subtract': 0x6D,
+      'numpad add': 0x6B,
+    };
+    if (vkMap.containsKey(keyName)) return vkMap[keyName]!;
+
+    final keyLetter = RegExp(r'^key\s+([a-z])$').firstMatch(keyName);
+    if (keyLetter != null) {
+      return keyLetter.group(1)!.toUpperCase().codeUnitAt(0);
+    }
+
+    final digit = RegExp(r'^digit\s+([0-9])$').firstMatch(keyName);
+    if (digit != null) {
+      return digit.group(1)!.codeUnitAt(0);
+    }
+
+    final numpadDigit = RegExp(r'^numpad\s*([0-9])$').firstMatch(keyName);
+    if (numpadDigit != null) {
+      return 0x60 + int.parse(numpadDigit.group(1)!);
+    }
+
+    final label = (payload['character'] ?? '').toString();
+    if (label.length == 1) {
+      final c = label.codeUnitAt(0);
+      if ((c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5A) || (c >= 0x61 && c <= 0x7A)) {
+        return c >= 0x61 && c <= 0x7A ? c - 32 : c;
+      }
+    }
+    return 0;
+  }
+
+  String _buildSendKeysStroke(Map<String, dynamic> payload) {
+    final phase = (payload['phase'] ?? 'down').toString();
+    if (phase != 'down') return '';
+    if (_isModifierKey(payload)) return '';
+
+    final keyName = (payload['keyName'] ?? '').toString();
+    final character = (payload['character'] ?? '').toString();
+    final isNumpad = payload['isNumpad'] == true;
+    final ctrl = payload['ctrl'] == true;
+    final alt = payload['alt'] == true;
+    final shift = payload['shift'] == true;
+    final meta = payload['meta'] == true;
+    final altGraph = payload['altGraph'] == true;
+
+    final cacheKey = [
+      _localKeyboardLayout,
+      _localKeyboardLayoutFamily,
+      _remoteKeyboardLayout,
+      _remoteKeyboardLayoutFamily,
+      keyName,
+      character,
+      isNumpad,
+      ctrl,
+      alt,
+      shift,
+      meta,
+      altGraph,
+    ].join('|');
+    final cached = _sendKeysStrokeCache[cacheKey];
+    if (cached != null) return cached;
+
+    String token = '';
+    final mappedChar = _mapCharacterForLayout(character, payload);
+    if (_isPrintableCharacter(mappedChar) && !(ctrl || meta) && (altGraph || !alt)) {
+      token = _escapeSendKeysChar(mappedChar);
+    } else {
+      token = _specialKeyToSendKeysToken(keyName);
+      if (token.isEmpty) {
+        final lower = keyName.toLowerCase();
+        final keyLetter = RegExp(r'^key\s+([a-z])$').firstMatch(lower);
+        if (keyLetter != null) {
+          token = _escapeSendKeysChar(keyLetter.group(1)!);
+        }
+        final digit = RegExp(r'^digit\s+([0-9])$').firstMatch(lower);
+        if (token.isEmpty && digit != null) {
+          token = _escapeSendKeysChar(digit.group(1)!);
+        }
+      }
+      if (token.isEmpty && keyName.length == 1) {
+        token = _escapeSendKeysChar(keyName);
+      }
+      if (token.isEmpty && isNumpad) {
+        final digit = RegExp(r'([0-9])').firstMatch(keyName);
+        if (digit != null) {
+          token = '{NUMPAD${digit.group(1)!}}';
+        }
+      }
+    }
+
+    if (token.isEmpty) {
+      _sendKeysStrokeCache[cacheKey] = '';
+      return '';
+    }
+
+    final mods = StringBuffer();
+    if (ctrl) mods.write('^');
+    if (alt && !altGraph) mods.write('%');
+    if (shift) mods.write('+');
+    final stroke = '${mods}${token}';
+    _sendKeysStrokeCache[cacheKey] = stroke;
+    return stroke;
+  }
+
+  String _mapCharacterForLayout(String character, [Map<String, dynamic>? payload]) {
+    if (!_isPrintableCharacter(character)) return character;
+    final sourceFamily = (payload?['sourceLayoutFamily'] ?? _remoteKeyboardLayoutFamily).toString();
+    final targetFamily = _localKeyboardLayoutFamily;
+    if (sourceFamily == targetFamily || sourceFamily == 'unknown' || targetFamily == 'unknown') {
+      return character;
+    }
+    // Keep literal characters as the source of truth for text fidelity across layouts.
+    return character;
+  }
+
+  bool _isModifierKey(Map<String, dynamic> payload) {
+    final keyName = (payload['keyName'] ?? '').toString().toLowerCase();
+    return keyName.contains('shift') ||
+        keyName.contains('control') ||
+        keyName.contains('ctrl') ||
+        keyName.contains('alt') ||
+        keyName.contains('meta') ||
+        keyName.contains('command') ||
+        keyName.contains('caps lock');
+  }
+
+  bool _isPrintableCharacter(String value) {
+    if (value.length != 1) return false;
+    final unit = value.codeUnitAt(0);
+    return unit >= 0x20 && unit != 0x7F;
+  }
+
+  String _escapeSendKeysChar(String value) {
+    if (value.isEmpty) return '';
+    const escaped = r'+^%~(){}[]';
+    if (escaped.contains(value)) {
+      return '{$value}';
+    }
+    return value;
+  }
+
+  String _specialKeyToSendKeysToken(String keyName) {
+    final normalized = keyName.toLowerCase();
+    const map = {
+      'enter': '{ENTER}',
+      'backspace': '{BACKSPACE}',
+      'tab': '{TAB}',
+      'escape': '{ESC}',
+      'arrow left': '{LEFT}',
+      'arrow right': '{RIGHT}',
+      'arrow up': '{UP}',
+      'arrow down': '{DOWN}',
+      'delete': '{DELETE}',
+      'home': '{HOME}',
+      'end': '{END}',
+      'page up': '{PGUP}',
+      'page down': '{PGDN}',
+      'space': ' ',
+      'f1': '{F1}',
+      'f2': '{F2}',
+      'f3': '{F3}',
+      'f4': '{F4}',
+      'f5': '{F5}',
+      'f6': '{F6}',
+      'f7': '{F7}',
+      'f8': '{F8}',
+      'f9': '{F9}',
+      'f10': '{F10}',
+      'f11': '{F11}',
+      'f12': '{F12}',
+      'numpad add': '{ADD}',
+      'numpad subtract': '{SUBTRACT}',
+      'numpad multiply': '{MULTIPLY}',
+      'numpad divide': '{DIVIDE}',
+      'numpad decimal': '{DECIMAL}',
+      'numpad enter': '{ENTER}',
+    };
+    return map[normalized] ?? '';
   }
 
   bool _sendSessionPayload({
@@ -1067,35 +1899,69 @@ switch ($action) {
       print('[RemoteSupportPage] Cannot signal: signalingService=${widget.signalingService}, userId=${widget.currentUserId}, sessionId=${widget.sessionId}');
       return false;
     }
-    final targetUserId = widget.deviceId.trim();
-    final sid = (widget.sessionId ?? '').toString().trim();
-    if (targetUserId.isEmpty || sid.isEmpty) {
-      if (mounted && _captureError.isEmpty && messageType == 'screen_frame') {
-        setState(() {
-          _captureError = 'Signaling target/session invalid (empty id).';
-        });
-      }
-      return false;
-    }
     if (messageType != 'screen_frame' && messageType != 'input_event') {
-      print('[RemoteSupportPage] Sending $messageType to $targetUserId via session $sid');
+      print('[RemoteSupportPage] Sending $messageType to ${widget.deviceId} via session ${widget.sessionId}');
     }
-    final sent = widget.signalingService!.sendSessionMessage(
-      sessionId: sid,
-      toUserId: targetUserId,
+    return widget.signalingService!.sendSessionMessage(
+      sessionId: (widget.sessionId ?? '').toString(),
+      toUserId: widget.deviceId,
       messageType: messageType,
       payload: payload,
     );
-    if (!sent && mounted && _captureError.isEmpty && messageType == 'screen_frame') {
-      setState(() {
-        _captureError = 'Unable to send frame: signaling disconnected/routing failed.';
-      });
+  }
+
+  void _sendCaptureStatus(String status, String detail) {
+    if (!widget.sendLocalScreen) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final minIntervalMs = status == 'ok' ? 4000 : 1200;
+    if (now - _lastCaptureStatusSentMs < minIntervalMs) return;
+    _lastCaptureStatusSentMs = now;
+    _sendSessionPayload(
+      messageType: 'capture_status',
+      payload: {
+        'status': status,
+        'detail': detail,
+      },
+    );
+  }
+
+  Future<io.ProcessResult> _runPowerShell(
+    List<String> args, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final commands = <String>['powershell', 'powershell.exe', 'pwsh', 'pwsh.exe'];
+    Object? lastError;
+    for (final cmd in commands) {
+      try {
+        final process = await io.Process.start(cmd, args);
+        final stdoutFuture = process.stdout.transform(utf8.decoder).join();
+        final stderrFuture = process.stderr.transform(utf8.decoder).join();
+
+        int exitCode;
+        try {
+          exitCode = await process.exitCode.timeout(timeout);
+        } on TimeoutException {
+          process.kill(io.ProcessSignal.sigterm);
+          return io.ProcessResult(
+            process.pid,
+            124,
+            '',
+            'PowerShell timed out after ${timeout.inSeconds}s',
+          );
+        }
+
+        final stdoutText = await stdoutFuture;
+        final stderrText = await stderrFuture;
+        return io.ProcessResult(process.pid, exitCode, stdoutText, stderrText);
+      } catch (e) {
+        lastError = e;
+      }
     }
-    return sent;
+    throw lastError ?? Exception('PowerShell executable not found');
   }
 
   void _sendMoveIfNeeded(Offset p) {
-    const epsilon = 0.0025;
+    const epsilon = 0.0008;
     final sameAsLast = _lastSentMoveX != null &&
         _lastSentMoveY != null &&
         (p.dx - _lastSentMoveX!).abs() < epsilon &&
@@ -1146,77 +2012,27 @@ switch ($action) {
     _showMessage(context, _isFullScreen ? tr('full_screen') : tr('exit_full_screen'), _getColors(context));
   }
 
-  void _scheduleAutoFitWindowToRemoteAspect() {
-    if (widget.sendLocalScreen || !_autoFitWindowToRemoteAspect) return;
-    if (_remoteFrameWidth <= 0 || _remoteFrameHeight <= 0) return;
-    unawaited(_applyAutoFitWindowToRemoteAspect());
-  }
-
-  Future<void> _applyAutoFitWindowToRemoteAspect() async {
-    if (_isApplyingAutoWindowFit || !mounted || widget.sendLocalScreen) return;
-    if (_remoteFrameWidth <= 0 || _remoteFrameHeight <= 0) return;
-
-    final remoteAspect = _remoteFrameWidth / _remoteFrameHeight;
-    if (remoteAspect <= 0) return;
-
-    final now = DateTime.now();
-    final elapsedMs = _lastAutoWindowFitAt == null
-        ? 999999
-        : now.difference(_lastAutoWindowFitAt!).inMilliseconds;
-    final aspectDelta = (remoteAspect - _lastAppliedRemoteAspect).abs();
-    if (_lastAppliedRemoteAspect > 0 && aspectDelta < 0.01 && elapsedMs < 3000) {
-      return;
-    }
-    if (elapsedMs < 1200) {
-      return;
-    }
-
-    _isApplyingAutoWindowFit = true;
-    try {
-      final baseSize = await windowManager.getSize();
-      final isFs = await windowManager.isFullScreen();
-      if (isFs) {
-        await windowManager.setFullScreen(false);
-        if (mounted) {
-          setState(() => _isFullScreen = false);
-        }
-      }
-
-      final maxW = baseSize.width;
-      final maxH = baseSize.height;
-      if (maxW <= 0 || maxH <= 0) return;
-
-      double targetW = maxW;
-      double targetH = targetW / remoteAspect;
-      if (targetH > maxH) {
-        targetH = maxH;
-        targetW = targetH * remoteAspect;
-      }
-
-      const edgeFactor = 0.96;
-      targetW = (targetW * edgeFactor).clamp(920.0, maxW);
-      targetH = (targetH * edgeFactor).clamp(520.0, maxH);
-
-      await windowManager.setSize(Size(targetW, targetH), animate: true);
-      await windowManager.center(animate: true);
-      _lastAppliedRemoteAspect = remoteAspect;
-      _lastAutoWindowFitAt = now;
-      print('[ScreenShare] Auto-fit receiver window to aspect ${remoteAspect.toStringAsFixed(4)} size=${targetW.toStringAsFixed(0)}x${targetH.toStringAsFixed(0)}');
-    } catch (e) {
-      print('[ScreenShare] Auto-fit window failed: $e');
-    } finally {
-      _isApplyingAutoWindowFit = false;
-    }
-  }
-
   @override
   void dispose() {
+    _stopAllManagedRepeats();
+    _pressedLogicalKeys.clear();
+    _sendResetAllKeys();
+    _audioUdpOfferTimer?.cancel();
+    _audioUdpOfferTimer = null;
+    _remoteAudioCompatTimer?.cancel();
+    _remoteAudioCompatTimer = null;
+    _audioUdpSocket?.close();
+    _audioUdpSocket = null;
+    _audioUdpReady = false;
+    unawaited(_remoteAudioService.dispose());
     _sessionTimer?.cancel();
     _screenShareTimer?.cancel();
     _overlayHideTimer?.cancel();
     _diagnosticsTimer?.cancel();
     _recordingTimer?.cancel();
     _reconnectTimer?.cancel();
+    _keyboardLayoutTimer?.cancel();
+    _keyStateSyncTimer?.cancel();
     _signalSubscription?.cancel();
     _composerController.dispose();
     _chatScrollController.dispose();
@@ -1245,85 +2061,105 @@ switch ($action) {
   }
 
   Widget _buildControllerView(Map<String, Color> colors) {
-<<<<<<< HEAD
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () {
-        _revealOverlayTemporarily();
-        if (_panelMode != 'none') {
-          setState(() => _panelMode = 'none');
+    return MouseRegion(
+      onHover: (event) {
+        if (_hideAllHud) return;
+        if (event.position.dy <= 42) {
+          _revealOverlayTemporarily();
         }
       },
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: Listener(
-              onPointerSignal: (event) {
-                if (event is PointerScrollEvent && event.position.dy <= 70) {
-                  _revealOverlayTemporarily();
-                }
-              },
-              child: _buildRemoteCanvas(colors),
+      onEnter: (_) => _revealOverlayTemporarily(),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          if (_panelMode != 'none') {
+            setState(() => _panelMode = 'none');
+          }
+          _revealOverlayTemporarily();
+        },
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: Listener(
+                onPointerSignal: (event) {
+                  if (event is PointerScrollEvent && event.position.dy <= 70) {
+                    _revealOverlayTemporarily();
+                  }
+                },
+                child: _buildRemoteCanvas(colors),
+              ),
             ),
-          ),
-          if (_showTopOverlay)
+            if (_showTopOverlay && !_hideAllHud)
+              Positioned(
+                top: 10,
+                left: 70,
+                right: 16,
+                child: _buildTopOverlayBar(colors),
+              ),
+            if (_showLeftFloatingButtons && !_hideAllHud)
+              Positioned(
+                top: 84,
+                left: 12,
+                child: _buildFloatingButtons(colors),
+              ),
+            if (_panelMode != 'none' && !_hideAllHud)
+              Positioned(
+                top: 76,
+                left: 74,
+                bottom: 20,
+                width: 360,
+                child: _buildContextPanel(colors),
+              ),
             Positioned(
               top: 10,
-              left: 70,
-              right: 16,
-              child: _buildTopOverlayBar(colors),
-            ),
-          if (_showLeftFloatingButtons)
-            Positioned(
-              top: 84,
               left: 12,
-              child: _buildFloatingButtons(colors),
-            ),
-          if (_panelMode != 'none')
-            Positioned(
-              top: 76,
-              left: 74,
-              bottom: 20,
-              width: 360,
-              child: _buildContextPanel(colors),
-            ),
-          if (_isDeviceLocked)
-            Positioned.fill(
-              child: Container(
-                color: Colors.black.withValues(alpha: 0.35),
-                alignment: Alignment.center,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-                  decoration: BoxDecoration(
-                    color: Colors.black87,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Text(
-                    'Lock mode enabled: remote user controls are restricted',
-                    style: TextStyle(color: Colors.white),
-                  ),
+              child: Tooltip(
+                message: _hideAllHud ? 'Show bars' : 'Hide bars',
+                child: _buildSmallOverlayButton(
+                  _hideAllHud ? Icons.visibility : Icons.visibility_off,
+                  _toggleHudVisibility,
+                  colors,
                 ),
               ),
             ),
-          if (_isSessionPaused)
-            Positioned.fill(
-              child: Container(
-                color: Colors.black.withValues(alpha: 0.45),
-                alignment: Alignment.center,
+            if (_isDeviceLocked)
+              Positioned.fill(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                  decoration: BoxDecoration(
-                    color: Colors.black87,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Text(
-                    'Session paused. Remote screen is frozen.',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                  color: Colors.black.withValues(alpha: 0.35),
+                  alignment: Alignment.center,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                    decoration: BoxDecoration(
+                      color: Colors.black87,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Text(
+                      'Lock mode enabled: remote user controls are restricted',
+                      style: TextStyle(color: Colors.white),
+                    ),
                   ),
                 ),
               ),
-            ),
-        ],
+            if (_isSessionPaused)
+              Positioned.fill(
+                child: Container(
+                  color: Colors.black.withValues(alpha: 0.45),
+                  alignment: Alignment.center,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.black87,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Text(
+                      'Session paused. Remote screen is frozen.',
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -1342,172 +2178,19 @@ switch ($action) {
               child: Stack(
                 children: [
                   Positioned.fill(child: _buildRemoteCanvas(colors)),
-                  Positioned(
-                    top: 14,
-                    left: 14,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      color: Colors.redAccent,
-                      child: Text(
-                        'Connected with: ${widget.deviceId}',
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-=======
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final isCompact = constraints.maxWidth < 1200;
-        final overlayLeft = isCompact ? 12.0 : 70.0;
-        final panelLeft = isCompact ? 12.0 : 74.0;
-        final panelWidth = (constraints.maxWidth - panelLeft - 12.0).clamp(260.0, 360.0);
-
-        return MouseRegion(
-          onHover: (event) {
-            if (event.position.dy <= 42) {
-              _revealOverlayTemporarily();
-            }
-          },
-          onEnter: (_) => _revealOverlayTemporarily(),
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () {
-              if (_panelMode != 'none') {
-                setState(() => _panelMode = 'none');
-              }
-              _revealOverlayTemporarily();
-            },
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: Listener(
-                    onPointerSignal: (event) {
-                      if (event is PointerScrollEvent && event.position.dy <= 70) {
-                        _revealOverlayTemporarily();
-                      }
-                    },
-                    child: _buildRemoteCanvas(colors),
-                  ),
-                ),
-                if (_showTopOverlay)
-                  Positioned(
-                    top: 10,
-                    left: overlayLeft,
-                    right: 12,
-                    child: _buildTopOverlayBar(colors),
-                  ),
-                if (_showLeftFloatingButtons)
-                  Positioned(
-                    top: 84,
-                    left: 12,
-                    child: _buildFloatingButtons(colors),
-                  ),
-                if (_panelMode != 'none')
-                  Positioned(
-                    top: 76,
-                    left: panelLeft,
-                    bottom: 20,
-                    width: panelWidth,
-                    child: _buildContextPanel(colors),
-                  ),
-                if (_isDeviceLocked)
-                  Positioned.fill(
-                    child: Container(
-                      color: Colors.black.withValues(alpha: 0.35),
-                      alignment: Alignment.center,
+                  if (!_hideAllHud)
+                    Positioned(
+                      top: 14,
+                      left: 14,
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-                        decoration: BoxDecoration(
-                          color: Colors.black87,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: const Text(
-                          'Lock mode enabled: remote user controls are restricted',
-                          style: TextStyle(color: Colors.white),
-                        ),
->>>>>>> f4ae1fd (Fix remote support view syntax)
-                      ),
-                    ),
-                  ),
-                if (_isSessionPaused)
-                  Positioned.fill(
-                    child: Container(
-                      color: Colors.black.withValues(alpha: 0.45),
-                      alignment: Alignment.center,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                        decoration: BoxDecoration(
-                          color: Colors.black87,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: const Text(
-                          'Session paused. Remote screen is frozen.',
-                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        color: Colors.redAccent,
+                        child: Text(
+                          'Connected with: ${widget.deviceId}',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
                         ),
                       ),
                     ),
-                  ),
-                Positioned(
-                  right: 2,
-                  top: 2,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.35),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.minimize, color: Colors.white),
-                          tooltip: 'Minimize',
-                          onPressed: () => _minimizeWindow(),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.filter_none, color: Colors.white),
-                          tooltip: 'Restore',
-                          onPressed: () => _restoreWindow(),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.close, color: Colors.white),
-                          tooltip: 'Close session',
-                          onPressed: () => _closeSession(),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildRemoteAgentView(Map<String, Color> colors) {
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: Container(
-            color: Colors.black,
-            child: Container(
-              margin: EdgeInsets.zero,
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.redAccent, width: 4),
-              ),
-              child: Stack(
-                children: [
-                  Positioned.fill(child: _buildRemoteCanvas(colors)),
-                  Positioned(
-                    top: 14,
-                    left: 14,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      color: Colors.redAccent,
-                      child: Text(
-                        'Connected with: ${widget.deviceId}',
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                  ),
                   if (_isLockedForRemoteUser)
                     Positioned.fill(
                       child: Container(
@@ -1536,35 +2219,43 @@ switch ($action) {
           ),
         ),
         Positioned(
-          right: 2,
-          top: 2,
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.35),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.minimize, color: Colors.white),
-                  tooltip: 'Minimize',
-                  onPressed: () => _minimizeWindow(),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.filter_none, color: Colors.white),
-                  tooltip: 'Restore',
-                  onPressed: () => _restoreWindow(),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white),
-                  tooltip: 'Close session',
-                  onPressed: () => _closeSession(),
-                ),
-              ],
+          left: 10,
+          top: 8,
+          child: Tooltip(
+            message: _hideAllHud ? 'Show bars' : 'Hide bars',
+            child: _buildSmallOverlayButton(
+              _hideAllHud ? Icons.visibility : Icons.visibility_off,
+              _toggleHudVisibility,
+              colors,
             ),
           ),
         ),
+        if (!_hideAllHud)
+          Positioned(
+            right: 2,
+            top: 2,
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.35),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: Icon(_isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen, color: Colors.white),
+                    tooltip: _isFullScreen ? 'Restore' : 'Full screen',
+                    onPressed: () => _toggleFullScreen(),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white),
+                    tooltip: 'Close session',
+                    onPressed: () => _closeSession(),
+                  ),
+                ],
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -1608,24 +2299,6 @@ switch ($action) {
             colors,
           ),
           const SizedBox(width: 6),
-          _buildSmallOverlayButton(
-            _autoFitWindowToRemoteAspect ? Icons.aspect_ratio : Icons.crop_free,
-            () {
-              setState(() {
-                _autoFitWindowToRemoteAspect = !_autoFitWindowToRemoteAspect;
-              });
-              if (_autoFitWindowToRemoteAspect) {
-                _scheduleAutoFitWindowToRemoteAspect();
-              }
-            },
-            colors,
-            isActive: _autoFitWindowToRemoteAspect,
-          ),
-          const SizedBox(width: 6),
-          _buildSmallOverlayButton(Icons.minimize, () => _minimizeWindow(), colors),
-          const SizedBox(width: 6),
-          _buildSmallOverlayButton(Icons.filter_none, () => _restoreWindow(), colors),
-          const SizedBox(width: 6),
           _buildSmallOverlayButton(Icons.close, () => _closeSession(), colors, isDanger: true),
         ],
       ),
@@ -1667,8 +2340,6 @@ switch ($action) {
       ),
       child: Column(
         children: [
-          _buildRoundToolButton(Icons.chat_bubble_outline, 'Chat', () => _togglePanel('chat'), colors),
-          const SizedBox(height: 8),
           _buildRoundToolButton(Icons.swap_horiz, 'Transfer', () => _togglePanel('transfer'), colors),
           const SizedBox(height: 8),
           _buildRoundToolButton(Icons.settings_remote, 'System', () => _togglePanel('system'), colors),
@@ -1780,132 +2451,137 @@ switch ($action) {
                 return;
               }
               if (event is KeyDownEvent) {
-                final key = event.logicalKey.keyLabel.isNotEmpty
-                    ? event.logicalKey.keyLabel
-                    : event.logicalKey.debugName;
-                if (key != null && key.isNotEmpty) {
-                  _sendInputEvent('key_press', key: key);
+                final logical = event.logicalKey.keyId;
+                final managed = _isManagedRepeatKey(event.logicalKey);
+                final modifier = _isModifierLogical(event.logicalKey);
+                if ((managed || modifier) && _pressedLogicalKeys.contains(logical)) return;
+                _pressedLogicalKeys.add(logical);
+                _sendKeyboardEvent(event, phase: 'down');
+                if (managed) {
+                  _startManagedRepeat(event);
                 }
               }
+              if (event is KeyUpEvent) {
+                _stopManagedRepeat(event.logicalKey.keyId);
+                _pressedLogicalKeys.remove(event.logicalKey.keyId);
+                _sendKeyboardEvent(event, phase: 'up');
+              }
             },
-            child: LayoutBuilder(
-              builder: (localContext, constraints) {
-                final geometry = _computeViewportGeometry(
-                  constraints.maxWidth,
-                  constraints.maxHeight,
-                );
-
+            child: Builder(
+              builder: (localContext) {
                 Offset? normalize(Offset local) {
-                  final inX = (local.dx - geometry.offsetX);
-                  final inY = (local.dy - geometry.offsetY);
-                  if (inX < 0 || inY < 0 || inX > geometry.drawWidth || inY > geometry.drawHeight) {
+                  final box = localContext.findRenderObject();
+                  if (box is! RenderBox) return null;
+                  final w = box.size.width;
+                  final h = box.size.height;
+                  if (w <= 0 || h <= 0) return null;
+
+                  final frameAspect = _remoteFrameWidth / _remoteFrameHeight;
+                  final viewAspect = w / h;
+                  double drawW;
+                  double drawH;
+                  double offsetX = 0;
+                  double offsetY = 0;
+
+                  if (_fillRemoteViewport) {
+                    if (frameAspect > viewAspect) {
+                      drawH = h;
+                      drawW = h * frameAspect;
+                      offsetX = (w - drawW) / 2;
+                    } else {
+                      drawW = w;
+                      drawH = w / frameAspect;
+                      offsetY = (h - drawH) / 2;
+                    }
+                  } else {
+                    if (frameAspect > viewAspect) {
+                      drawW = w;
+                      drawH = w / frameAspect;
+                      offsetY = (h - drawH) / 2;
+                    } else {
+                      drawH = h;
+                      drawW = h * frameAspect;
+                      offsetX = (w - drawW) / 2;
+                    }
+                  }
+
+                  final inX = (local.dx - offsetX);
+                  final inY = (local.dy - offsetY);
+                  if (!_fillRemoteViewport && (inX < 0 || inY < 0 || inX > drawW || inY > drawH)) {
                     return null;
                   }
-                  final nx = (inX / geometry.drawWidth).clamp(0.0, 1.0);
-                  final ny = (inY / geometry.drawHeight).clamp(0.0, 1.0);
+
+                  final nx = (inX / drawW).clamp(0.0, 1.0);
+                  final ny = (inY / drawH).clamp(0.0, 1.0);
                   return Offset(nx, ny);
                 }
 
-                return Stack(
-                  children: [
-                    Listener(
-                      onPointerDown: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
-                          ? (event) {
-                              _revealOverlayTemporarily();
-                              final p = normalize(event.localPosition);
-                              if (p == null) return;
-                              _rightButtonPressed = event.buttons == kSecondaryMouseButton;
-                              _sendInputEvent(
-                                _rightButtonPressed ? 'right_down' : 'left_down',
-                                normalizedX: p.dx,
-                                normalizedY: p.dy,
-                              );
-                              _remoteControlFocusNode.requestFocus();
-                            }
-                          : (_) => _revealOverlayTemporarily(),
-                      onPointerHover: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
-                          ? (event) {
-                              final now = DateTime.now().millisecondsSinceEpoch;
-                              if (now - _lastPointerMoveMs < 35) return;
-                              _lastPointerMoveMs = now;
-                              final p = normalize(event.localPosition);
-                              if (p == null) return;
-                              _sendMoveIfNeeded(p);
-                            }
-                          : null,
-                      onPointerMove: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
-                          ? (event) {
-                              final now = DateTime.now().millisecondsSinceEpoch;
-                              if (now - _lastPointerMoveMs < 35) return;
-                              _lastPointerMoveMs = now;
-                              final p = normalize(event.localPosition);
-                              if (p == null) return;
-                              _sendMoveIfNeeded(p);
-                            }
-                          : null,
-                      onPointerUp: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
-                          ? (event) {
-                              final p = normalize(event.localPosition);
-                              if (p == null) return;
-                              _sendInputEvent(
-                                _rightButtonPressed ? 'right_up' : 'left_up',
-                                normalizedX: p.dx,
-                                normalizedY: p.dy,
-                              );
-                              _rightButtonPressed = false;
-                            }
-                          : null,
-                      onPointerSignal: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
-                          ? (event) {
-                              if (event is PointerScrollEvent) {
-                                _sendInputEvent('wheel', wheelDelta: event.scrollDelta.dy.toInt());
-                              }
-                            }
-                          : null,
-                      child: Image.memory(
-                        _remoteScreenFrame!,
-                        width: double.infinity,
-                        height: double.infinity,
-                        fit: BoxFit.contain,
-                        gaplessPlayback: true,
-                      ),
-                    ),
-                    if (!widget.sendLocalScreen && _showViewportDebugOverlay)
-                      Positioned(
-                        left: geometry.offsetX,
-                        top: geometry.offsetY,
-                        width: geometry.drawWidth,
-                        height: geometry.drawHeight,
-                        child: IgnorePointer(
-                          child: Container(
-                            decoration: BoxDecoration(
-                              border: Border.all(color: Colors.cyanAccent.withValues(alpha: 0.85), width: 1),
-                            ),
-                          ),
-                        ),
-                      ),
-                    if (!widget.sendLocalScreen && _showViewportDebugOverlay)
-                      Positioned(
-                        left: 12,
-                        bottom: 12,
-                        child: _buildViewportDebugOverlay(geometry),
-                      ),
-                  ],
+                return Listener(
+                  onPointerDown: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                      ? (event) {
+                          _revealOverlayTemporarily();
+                          final p = normalize(event.localPosition);
+                          if (p == null) return;
+                          _rightButtonPressed = event.buttons == kSecondaryMouseButton;
+                          _sendInputEvent(
+                            _rightButtonPressed ? 'right_down' : 'left_down',
+                            normalizedX: p.dx,
+                            normalizedY: p.dy,
+                          );
+                          _remoteControlFocusNode.requestFocus();
+                        }
+                      : (_) => _revealOverlayTemporarily(),
+                  onPointerHover: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                      ? (event) {
+                          final now = DateTime.now().millisecondsSinceEpoch;
+                          if (now - _lastPointerMoveMs < 8) return;
+                          _lastPointerMoveMs = now;
+                          final p = normalize(event.localPosition);
+                          if (p == null) return;
+                          _sendMoveIfNeeded(p);
+                        }
+                      : null,
+                  onPointerMove: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                      ? (event) {
+                          final now = DateTime.now().millisecondsSinceEpoch;
+                          if (now - _lastPointerMoveMs < 8) return;
+                          _lastPointerMoveMs = now;
+                          final p = normalize(event.localPosition);
+                          if (p == null) return;
+                          _sendMoveIfNeeded(p);
+                        }
+                      : null,
+                  onPointerUp: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                      ? (event) {
+                          final p = normalize(event.localPosition);
+                          if (p == null) return;
+                          _sendInputEvent(
+                            _rightButtonPressed ? 'right_up' : 'left_up',
+                            normalizedX: p.dx,
+                            normalizedY: p.dy,
+                          );
+                          _rightButtonPressed = false;
+                        }
+                      : null,
+                  onPointerSignal: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                      ? (event) {
+                          if (event is PointerScrollEvent) {
+                            _sendWheelFromDelta(event.scrollDelta.dy);
+                          }
+                        }
+                      : null,
+                  child: Image.memory(
+                    _remoteScreenFrame!,
+                    width: double.infinity,
+                    height: double.infinity,
+                    fit: _fillRemoteViewport ? BoxFit.cover : BoxFit.contain,
+                    gaplessPlayback: true,
+                  ),
                 );
               },
             ),
           ),
         ),
-        if (!widget.sendLocalScreen)
-          Positioned(
-            top: 12,
-            right: 12,
-            child: IconButton.filledTonal(
-              tooltip: _showViewportDebugOverlay ? 'Hide debug overlay' : 'Show debug overlay',
-              onPressed: () => setState(() => _showViewportDebugOverlay = !_showViewportDebugOverlay),
-              icon: Icon(_showViewportDebugOverlay ? Icons.bug_report : Icons.bug_report_outlined),
-            ),
-          ),
         // Pause overlay
         if (_isSessionPaused)
           Positioned.fill(
@@ -1955,77 +2631,6 @@ switch ($action) {
             ),
           ),
       ],
-    );
-  }
-
-  _ViewportGeometry _computeViewportGeometry(double viewW, double viewH) {
-    final safeW = viewW <= 0 ? 1.0 : viewW;
-    final safeH = viewH <= 0 ? 1.0 : viewH;
-    final frameW = _remoteFrameWidth <= 0 ? 1 : _remoteFrameWidth;
-    final frameH = _remoteFrameHeight <= 0 ? 1 : _remoteFrameHeight;
-    final frameAspect = frameW / frameH;
-    final viewAspect = safeW / safeH;
-    double drawW;
-    double drawH;
-    double offsetX = 0;
-    double offsetY = 0;
-
-    if (frameAspect > viewAspect) {
-      drawW = safeW;
-      drawH = safeW / frameAspect;
-      offsetY = (safeH - drawH) / 2;
-    } else {
-      drawH = safeH;
-      drawW = safeH * frameAspect;
-      offsetX = (safeW - drawW) / 2;
-    }
-
-    return _ViewportGeometry(
-      viewWidth: safeW,
-      viewHeight: safeH,
-      drawWidth: drawW,
-      drawHeight: drawH,
-      offsetX: offsetX,
-      offsetY: offsetY,
-    );
-  }
-
-  Widget _buildViewportDebugOverlay(_ViewportGeometry geometry) {
-    final lastFrameAgeSeconds = _lastFrameReceivedAt == null
-        ? -1
-        : DateTime.now().difference(_lastFrameReceivedAt!).inSeconds;
-    final lines = <String>[
-      'DEBUG VIEWPORT',
-      'viewport: ${geometry.viewWidth.toStringAsFixed(0)}x${geometry.viewHeight.toStringAsFixed(0)}',
-      'drawRect: ${geometry.drawWidth.toStringAsFixed(0)}x${geometry.drawHeight.toStringAsFixed(0)} @ (${geometry.offsetX.toStringAsFixed(1)}, ${geometry.offsetY.toStringAsFixed(1)})',
-      'frame: ${_remoteFrameWidth}x$_remoteFrameHeight bytes=$_lastRemoteFrameBytes',
-      'capture: ${_remoteCaptureLeft},${_remoteCaptureTop},${_remoteCaptureWidth}x$_remoteCaptureHeight mode=${_lastRemoteCaptureMode.isEmpty ? '-': _lastRemoteCaptureMode}',
-      'autoFitWindow: ${_autoFitWindowToRemoteAspect ? 'on' : 'off'} lastAspect=${_lastAppliedRemoteAspect.toStringAsFixed(4)}',
-      'mouse(last normalized): x=${(_lastSentMoveX ?? -1).toStringAsFixed(3)} y=${(_lastSentMoveY ?? -1).toStringAsFixed(3)}',
-      'frames RX=$_framesReceived lastFrameAge=${lastFrameAgeSeconds < 0 ? '-': '${lastFrameAgeSeconds}s'}',
-    ];
-
-    final panelWidth = (geometry.viewWidth - 24).clamp(260.0, 560.0);
-
-    return IgnorePointer(
-      child: Container(
-        width: panelWidth,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.75),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.cyanAccent.withValues(alpha: 0.85)),
-        ),
-        child: Text(
-          lines.join('\n'),
-          style: const TextStyle(
-            color: Colors.cyanAccent,
-            fontSize: 11,
-            fontFamily: 'Consolas',
-            height: 1.25,
-          ),
-        ),
-      ),
     );
   }
 
@@ -2120,8 +2725,23 @@ switch ($action) {
             ),
           ],
         ),
-        const SizedBox(height: 10),
-        // Transfer mode selector
+        Expanded(
+          child: Container(
+            decoration: BoxDecoration(
+              color: colors['bg']!,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: colors['border']!),
+            ),
+            padding: const EdgeInsets.all(12),
+            child: ListView.builder(
+              itemCount: _transfers.length,
+              itemBuilder: (context, index) {
+                return _buildTransferItem(index, _transfers[index], colors);
+              },
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
         Row(
           children: [
             Expanded(
@@ -2145,196 +2765,45 @@ switch ($action) {
             ),
           ],
         ),
-        const SizedBox(height: 10),
-        // Dual file browser
-        Expanded(
-          child: Container(
-            decoration: BoxDecoration(
-              color: colors['bg']!,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: colors['border']!),
-            ),
-            child: Row(
-              children: [
-                // Local machine (Machine A) browser
-                Expanded(
-                  child: Column(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: colors['cardBg']!,
-                          borderRadius: const BorderRadius.only(
-                            topLeft: Radius.circular(12),
-                          ),
-                        ),
-                        child: Text(
-                          'Machine A (Your Computer)',
-                          style: TextStyle(
-                            color: colors['text']!,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        child: Container(
-                          padding: const EdgeInsets.all(8),
-                          child: _buildLocalFileBrowser(colors),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                // Divider
-                Container(
-                  width: 1,
-                  color: colors['border']!,
-                ),
-                // Remote machine (Machine B) browser
-                Expanded(
-                  child: Column(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: colors['cardBg']!,
-                          borderRadius: const BorderRadius.only(
-                            topRight: Radius.circular(12),
-                          ),
-                        ),
-                        child: Text(
-                          'Machine B (Remote Computer)',
-                          style: TextStyle(
-                            color: colors['text']!,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        child: Container(
-                          padding: const EdgeInsets.all(8),
-                          child: _buildRemoteFileBrowser(colors),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: colors['cardBg']!,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: colors['border']!),
+          ),
+          child: Text(
+            _transferMode == 'send'
+                ? 'Send mode: choose a file to upload. Name, size, path, speed and progress are tracked.'
+                : 'Receive mode: choose destination path. Incoming files are saved to this location.',
+            style: TextStyle(color: colors['textSecondary']!, fontSize: 12),
           ),
         ),
         const SizedBox(height: 10),
-        // Action buttons and status
-        Row(
-          children: [
-            if (_transferMode == 'send')
-              Expanded(
-                child: _buildFileButton(
-                  icon: Icons.cloud_upload_outlined,
-                  label: 'Select File to Send',
-                  onPressed: _handleUpload,
-                  colors: colors,
-                ),
-              )
-            else
-              Expanded(
-                child: _buildFileButton(
-                  icon: Icons.download,
-                  label: 'Pull File from B',
-                  onPressed: () => _showMessage(context, 'Remote file browsing available', colors),
-                  colors: colors,
-                ),
-              ),
-          ],
-        ),
-        if (_transfers.isNotEmpty) ...[
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: colors['cardBg']!,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: colors['border']!),
-            ),
-            height: 100,
-            child: ListView.builder(
-              itemCount: _transfers.length,
-              itemBuilder: (context, index) {
-                return _buildTransferItem(index, _transfers[index], colors);
-              },
-            ),
+        if (_transferMode == 'send')
+          _buildFileButton(
+            icon: Icons.cloud_upload_outlined,
+            label: tr('btn_upload_file'),
+            onPressed: _handleUpload,
+            colors: colors,
+          )
+        else
+          _buildFileButton(
+            icon: Icons.folder_open,
+            label: 'Select receive folder',
+            onPressed: _selectReceiveTargetPath,
+            colors: colors,
+          ),
+        if (_transferMode == 'receive' && _receiveTargetPath.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Text(
+            'Receive path: $_receiveTargetPath',
+            style: TextStyle(color: colors['textSecondary']!, fontSize: 12),
+            overflow: TextOverflow.ellipsis,
           ),
         ],
       ],
-    );
-  }
-
-  Widget _buildLocalFileBrowser(Map<String, Color> colors) {
-    return ListView(
-      children: [
-        _buildFileBrowserItem('C:', Icons.storage, colors, () {}),
-        _buildFileBrowserItem('D:', Icons.storage, colors, () {}),
-        _buildFileBrowserItem('Desktop', Icons.folder, colors, () {}),
-        _buildFileBrowserItem('Documents', Icons.folder, colors, () {}),
-        _buildFileBrowserItem('Downloads', Icons.folder, colors, () {}),
-      ],
-    );
-  }
-
-  Widget _buildRemoteFileBrowser(Map<String, Color> colors) {
-    if (_remoteFileList.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.storage, size: 32, color: colors['textSecondary']!),
-            const SizedBox(height: 8),
-            Text(
-              'Remote Files',
-              style: TextStyle(color: colors['textSecondary']!, fontSize: 12),
-            ),
-          ],
-        ),
-      );
-    }
-    return ListView.builder(
-      itemCount: _remoteFileList.length,
-      itemBuilder: (context, index) {
-        return _buildFileBrowserItem(
-          _remoteFileList[index],
-          Icons.folder,
-          colors,
-          () {},
-        );
-      },
-    );
-  }
-
-  Widget _buildFileBrowserItem(
-    String name,
-    IconData icon,
-    Map<String, Color> colors,
-    VoidCallback onTap,
-  ) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      decoration: BoxDecoration(
-        color: colors['bg']!,
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: colors['border']!),
-      ),
-      child: ListTile(
-        dense: true,
-        leading: Icon(icon, size: 16, color: colors['accent']!),
-        title: Text(
-          name,
-          style: TextStyle(color: colors['text']!, fontSize: 11),
-          overflow: TextOverflow.ellipsis,
-        ),
-        onTap: onTap,
-      ),
     );
   }
 
@@ -2442,6 +2911,36 @@ switch ($action) {
           ],
         ),
         const SizedBox(height: 8),
+        Text('Remote Audio Volume', style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600)),
+        Slider(
+          value: _remoteAudioVolume,
+          min: 0.0,
+          max: 1.0,
+          divisions: 20,
+          label: '${(_remoteAudioVolume * 100).round()}%',
+          onChanged: (value) {
+            setState(() => _remoteAudioVolume = value);
+            unawaited(_remoteAudioService.setClientVolume(value));
+          },
+        ),
+        Text('Remote Audio Bitrate (${_remoteAudioBitrateKbps} kbps)', style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600)),
+        Slider(
+          value: _remoteAudioBitrateKbps.toDouble(),
+          min: 64,
+          max: 256,
+          divisions: 12,
+          label: '$_remoteAudioBitrateKbps kbps',
+          onChanged: (value) {
+            final next = ((value / 16).round() * 16).clamp(64, 256);
+            setState(() => _remoteAudioBitrateKbps = next);
+            if (widget.sendLocalScreen) {
+              unawaited(_remoteAudioService.updateHostBitrate(next));
+            } else {
+              _sendRemoteAudioPayload({'kind': 'config', 'bitrateKbps': next});
+            }
+          },
+        ),
+        const SizedBox(height: 8),
         Row(
           children: [
             Expanded(
@@ -2547,7 +3046,7 @@ switch ($action) {
             ),
             TextButton(
               onPressed: () {
-                if (tempScreenshot.isNotEmpty && tempRecordings.isNotEmpty) {
+                if (tempScreenshot.trim().isNotEmpty && tempRecordings.trim().isNotEmpty) {
                   try {
                     io.Directory(tempScreenshot).createSync(recursive: true);
                     io.Directory(tempRecordings).createSync(recursive: true);
@@ -2586,12 +3085,7 @@ switch ($action) {
           ),
           items: const [
             DropdownMenuItem(value: 'Full Screen', child: Text('Full Screen')),
-            DropdownMenuItem(value: 'Windowed Adapted', child: Text('Windowed Adapted')),
-            DropdownMenuItem(value: 'Adapted Resolution', child: Text('Adapted Resolution')),
-            DropdownMenuItem(value: 'Auto', child: Text('Auto')),
-            DropdownMenuItem(value: '540p', child: Text('540p')),
-            DropdownMenuItem(value: '720p', child: Text('720p')),
-            DropdownMenuItem(value: '1080p', child: Text('1080p')),
+            DropdownMenuItem(value: 'Adapter', child: Text('Adapter')),
           ],
           onChanged: (v) {
             if (v != null) _setResolutionPreset(v);
@@ -2606,9 +3100,11 @@ switch ($action) {
             labelStyle: TextStyle(color: Colors.lightBlueAccent, fontWeight: FontWeight.w700),
           ),
           items: const [
+            DropdownMenuItem(value: 'Auto', child: Text('Auto (connection-based)')),
             DropdownMenuItem(value: 'Low', child: Text('Low (performance)')),
             DropdownMenuItem(value: 'Medium', child: Text('Medium')),
             DropdownMenuItem(value: 'High', child: Text('High (quality)')),
+            DropdownMenuItem(value: 'Ultra', child: Text('Ultra (max bandwidth)')),
           ],
           onChanged: (v) {
             if (v != null) _setQualityPreset(v);
@@ -2674,19 +3170,7 @@ switch ($action) {
         _buildMetricLine('Frames RX', '$_framesReceived', colors),
         _buildMetricLine('Frames TX', '$_framesSent', colors),
         const SizedBox(height: 10),
-        _buildActionButton(
-          Icons.refresh,
-          'Refresh Diagnostics',
-          () async {
-            _showMessage(context, 'Refreshing diagnostics...', _getColors(context));
-            await _refreshPing();
-            _applyAutoQuality();
-            if (mounted) {
-              _showMessage(context, 'Diagnostics updated: $_connectionQualityText', _getColors(context));
-            }
-          },
-          colors,
-        ),
+        _buildActionButton(Icons.refresh, 'Refresh Diagnostics', () => _refreshPing(), colors),
       ],
     );
   }
@@ -2757,8 +3241,8 @@ switch ($action) {
                   ),
                   Text(
                     isReceived
-                        ? 'Reçu de: $from${fileSize.isNotEmpty ? '  •  $fileSize' : ''}'
-                        : 'Envoyé${fileSize.isNotEmpty ? '  •  $fileSize' : ''}',
+                        ? 'Re├ºu de: $from${fileSize.isNotEmpty ? '  ΓÇó  $fileSize' : ''}'
+                        : 'Envoy├⌐${fileSize.isNotEmpty ? '  ΓÇó  $fileSize' : ''}',
                     style: TextStyle(color: colors['textSecondary'], fontSize: 10),
                   ),
                   if (path.isNotEmpty)
@@ -2769,7 +3253,7 @@ switch ($action) {
                     ),
                   if (status.isNotEmpty || speed.isNotEmpty || progress.isNotEmpty)
                     Text(
-                      'Status: $status  ${progress.isNotEmpty ? '• $progress%' : ''}  ${speed.isNotEmpty ? '• $speed' : ''}',
+                      'Status: $status  ${progress.isNotEmpty ? 'ΓÇó $progress%' : ''}  ${speed.isNotEmpty ? 'ΓÇó $speed' : ''}',
                       style: TextStyle(color: colors['textSecondary'], fontSize: 10),
                     ),
                 ],
@@ -2974,7 +3458,7 @@ switch ($action) {
   Future<void> _saveReceivedFile(Map<String, String> transfer) async {
     final fileData = transfer['fileData'] ?? '';
     if (fileData.isEmpty) {
-      _showMessage(context, 'Aucune donnée disponible', _getColors(context));
+      _showMessage(context, 'Aucune donn├⌐e disponible', _getColors(context));
       return;
     }
     String? outputPath;
@@ -2992,7 +3476,7 @@ switch ($action) {
       final bytes = base64Decode(fileData);
       await io.File(outputPath).writeAsBytes(bytes);
       if (!mounted) return;
-      _showMessage(context, 'Fichier sauvegardé: $outputPath', _getColors(context));
+      _showMessage(context, 'Fichier sauvegard├⌐: $outputPath', _getColors(context));
     } catch (e) {
       if (!mounted) return;
       _showMessage(context, 'Erreur sauvegarde: $e', _getColors(context));
@@ -3007,6 +3491,22 @@ switch ($action) {
         duration: const Duration(seconds: 2),
       ),
     );
+  }
+
+  Future<void> _selectReceiveTargetPath() async {
+    final dir = await FilePicker.platform.getDirectoryPath(
+      dialogTitle: 'Choose receive folder',
+    );
+    if (!mounted || dir == null || dir.isEmpty) return;
+    setState(() => _receiveTargetPath = dir);
+    
+    // Request list of files from remote machine for browsing
+    _sendSessionPayload(
+      messageType: 'list_files',
+      payload: {'path': ''},
+    );
+    
+    _showMessage(context, 'Receive folder set: $dir', _getColors(context));
   }
 
   Future<void> _takeScreenshot() async {
@@ -3046,43 +3546,25 @@ switch ($action) {
     if (!_canSignal || !_isScreenSharing || _isCapturing) return;
     _isCapturing = true;
     try {
-      int attemptWidth = _captureMaxWidth;
-      int attemptQuality = _captureJpegQuality;
-      Uint8List? bytes = await _captureLocalScreenToJpegBytes(
-        maxWidthOverride: attemptWidth,
-        jpegQualityOverride: attemptQuality,
-      );
-      for (int attempt = 0; attempt < 3; attempt++) {
-        if (bytes == null || bytes.isEmpty || bytes.length <= _transportTargetBytes) {
-          break;
-        }
-        attemptWidth = attemptWidth <= 0 ? 1280 : (attemptWidth * 0.82).round();
-        if (attemptWidth < 960) attemptWidth = 960;
-        attemptQuality = (attemptQuality - 10).clamp(40, 90);
-        bytes = await _captureLocalScreenToJpegBytes(
-          maxWidthOverride: attemptWidth,
-          jpegQualityOverride: attemptQuality,
-        );
-      }
+      final bytes = await _captureLocalScreenToJpegBytes();
       if (!mounted) return;
       if (bytes == null || bytes.isEmpty) {
         print('[ScreenShare] Capture returned null/empty');
-        if (mounted) setState(() => _captureError = 'capture null');
-        _sendCaptureStatus(
-          'error',
-          _captureError.isNotEmpty ? _captureError : 'Capture failed (empty frame)',
-        );
+        final detail = _captureError.isNotEmpty ? _captureError : 'capture null';
+        if (mounted && _captureError.isEmpty) {
+          setState(() => _captureError = detail);
+        }
+        _sendCaptureStatus('error', detail);
         return;
       }
-      final frameBytes = bytes;
-      const maxFrameBytes = 8 * 1024 * 1024;
-      if (frameBytes.length > maxFrameBytes) {
-        print('[ScreenShare] Frame too large: ${frameBytes.length} bytes');
-        if (mounted) setState(() => _captureError = 'too large: ${frameBytes.length}');
-        _sendCaptureStatus('error', _captureError);
+      const maxFrameBytes = 20 * 1024 * 1024;
+      if (bytes.length > maxFrameBytes) {
+        print('[ScreenShare] Frame too large: ${bytes.length} bytes');
+        if (mounted) setState(() => _captureError = 'too large: ${bytes.length}');
+        _sendCaptureStatus('error', 'Frame too large: ${bytes.length} bytes');
         return;
       }
-      final b64 = base64Encode(frameBytes);
+      final b64 = base64Encode(bytes);
       final sent = _sendSessionPayload(
         messageType: 'screen_frame',
         payload: {
@@ -3091,8 +3573,6 @@ switch ($action) {
           'frameHeight': _localFrameHeight,
           'screenCount': _localScreenCount,
           'screenIndex': _selectedLocalScreenIndex,
-          'captureMode': _captureResolutionLabel,
-          'frameBytes': frameBytes.length,
           'captureLeft': _localCaptureLeft,
           'captureTop': _localCaptureTop,
           'captureWidth': _localCaptureWidth,
@@ -3100,45 +3580,24 @@ switch ($action) {
         },
       );
       if (!sent) {
-        _sendCaptureStatus('error', _captureError.isNotEmpty ? _captureError : 'Signaling send failed');
+        if (mounted) setState(() => _captureError = 'session send failed');
+        _sendCaptureStatus('error', 'Session send failed');
         return;
       }
       if (mounted) setState(() { _framesSent++; _captureError = ''; });
       _sendCaptureStatus('ok', '');
       if (_framesSent % 30 == 0) {
-        print('[ScreenShare] TX #$_framesSent bytes=${frameBytes.length} frame=${_localFrameWidth}x$_localFrameHeight screen=${_selectedLocalScreenIndex}/${_localScreenCount} capture=${_localCaptureLeft},${_localCaptureTop},${_localCaptureWidth}x$_localCaptureHeight mode=${_captureResolutionLabel} quality=$attemptQuality maxW=$attemptWidth');
+        print('[ScreenShare] Sent frame #$_framesSent (${bytes.length} bytes) ${_localFrameWidth}x$_localFrameHeight');
       }
     } catch (e) {
-      if (mounted) setState(() => _captureError = 'send frame error: $e');
-      _sendCaptureStatus('error', _captureError);
+      if (mounted) setState(() => _captureError = 'capture/send exception: $e');
+      _sendCaptureStatus('error', 'Capture/send exception: $e');
     } finally {
       _isCapturing = false;
     }
   }
 
-  void _sendCaptureStatus(String status, String detail) {
-    if (!widget.sendLocalScreen) return;
-    final now = DateTime.now().millisecondsSinceEpoch;
-    if (status == 'ok' && now - _lastCaptureStatusSentMs < 5000) {
-      return;
-    }
-    if (status != 'ok' && now - _lastCaptureStatusSentMs < 1500) {
-      return;
-    }
-    _lastCaptureStatusSentMs = now;
-    _sendSessionPayload(
-      messageType: 'capture_status',
-      payload: {
-        'status': status,
-        'detail': detail,
-      },
-    );
-  }
-
-  Future<Uint8List?> _captureLocalScreenToJpegBytes({
-    int? maxWidthOverride,
-    int? jpegQualityOverride,
-  }) async {
+  Future<Uint8List?> _captureLocalScreenToJpegBytes() async {
     if (!io.Platform.isWindows) return null;
 
     // Use stable paths so antivirus exclusions can target one precise location.
@@ -3150,27 +3609,29 @@ switch ($action) {
     final scriptPath = '${stableDir.path}\\capture.ps1';
     final escapedOutput = outputPath.replaceAll("'", "''");
 
-    // Script écrit dans un fichier (.ps1) pour éviter tout problème d'encodage en ligne de commande
-    final scriptContent = r'''[void][Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms')
-[void][Reflection.Assembly]::LoadWithPartialName('System.Drawing')
+    // Script ├⌐crit dans un fichier (.ps1) pour ├⌐viter tout probl├¿me d'encodage en ligne de commande
+    final scriptContent = r'''Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class NativeDpi {
+  [DllImport("user32.dll")]
+  public static extern bool SetProcessDPIAware();
+}
+"@
+[NativeDpi]::SetProcessDPIAware() | Out-Null
 $all=[System.Windows.Forms.Screen]::AllScreens
 $idx=SCREEN_INDEX
 if ($idx -lt 0) { $idx = 0 }
 if ($idx -ge $all.Count) { $idx = 0 }
-$useVirtual = USE_VIRTUAL_BOUNDS
-if ($useVirtual -eq 1) {
-  $vb = [System.Windows.Forms.SystemInformation]::VirtualScreen
-  $b = New-Object System.Drawing.Rectangle($vb.Left, $vb.Top, $vb.Width, $vb.Height)
-} else {
-  $b=$all[$idx].Bounds
-}
+$b=$all[$idx].Bounds
 $src=New-Object System.Drawing.Bitmap $b.Width,$b.Height
 $g=[System.Drawing.Graphics]::FromImage($src)
 $g.CopyFromScreen($b.Left,$b.Top,0,0,$src.Size)
 $maxW=MAX_WIDTH
 $tw=$src.Width
 $th=$src.Height
-if ($maxW -gt 0 -and $tw -gt $maxW) {
+if ($tw -gt $maxW) {
   $ratio=[double]$maxW/[double]$tw
   $tw=[int]([Math]::Round($tw*$ratio))
   $th=[int]([Math]::Round($th*$ratio))
@@ -3188,29 +3649,34 @@ $params.Dispose()
 $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
 '''
         .replaceAll('OUTPUT_PATH', escapedOutput)
-  .replaceAll('MAX_WIDTH', (maxWidthOverride ?? _captureMaxWidth).toString())
+        .replaceAll('MAX_WIDTH', _captureMaxWidth.toString())
         .replaceAll('SCREEN_INDEX', _selectedLocalScreenIndex.toString())
-  .replaceAll('USE_VIRTUAL_BOUNDS', _captureResolutionLabel == 'Full Screen' ? '1' : '0')
-  .replaceAll('JPEG_QUALITY', '${jpegQualityOverride ?? _captureJpegQuality}L');
+        .replaceAll('JPEG_QUALITY', '${_captureJpegQuality}L');
 
     await io.File(scriptPath).writeAsString(scriptContent);
 
     try {
-      final result = await io.Process.run(
-        'powershell',
+      final result = await _runPowerShell(
         ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
+        timeout: const Duration(seconds: 12),
       );
       if (result.exitCode != 0) {
-        final err = '${result.stderr}'.trim();
+        var err = '${result.stderr}'.trim();
+        if (err.isEmpty) {
+          err = '${result.stdout}'.trim();
+        }
+        if (err.isEmpty && result.exitCode == 124) {
+          err = 'capture timed out after 12s';
+        }
         print('[ScreenShare] PS1 failed (exit=${result.exitCode}): $err');
-        if (mounted) setState(() => _captureError = 'PS1 exit=${result.exitCode}: ${err.substring(0, err.length.clamp(0, 180))}');
-        return null;
+        if (mounted) setState(() => _captureError = 'PS1 exit=${result.exitCode}: ${err.substring(0, err.length.clamp(0, 120))}');
+        return await _captureLocalScreenFallbackPngBytes(stableDir);
       }
       final file = io.File(outputPath);
       if (!file.existsSync()) {
         print('[ScreenShare] Output JPEG not found: $outputPath');
         if (mounted) setState(() => _captureError = 'file not found');
-        return null;
+        return await _captureLocalScreenFallbackPngBytes(stableDir);
       }
       final out = '${result.stdout}'.trim();
       final line = out.split(RegExp(r'[\r\n]+')).firstWhere(
@@ -3234,17 +3700,86 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
           _localCaptureHeight = int.tryParse(parts[5].trim()) ?? _localCaptureHeight;
         }
       }
-      if (_localCaptureWidth <= 0 && _localFrameWidth > 0) {
-        _localCaptureWidth = _localFrameWidth;
-      }
-      if (_localCaptureHeight <= 0 && _localFrameHeight > 0) {
-        _localCaptureHeight = _localFrameHeight;
-      }
       final bytes = await file.readAsBytes();
+      if (bytes.isEmpty) {
+        if (mounted) setState(() => _captureError = 'capture produced empty JPEG');
+        return await _captureLocalScreenFallbackPngBytes(stableDir);
+      }
       return bytes;
     } catch (e) {
       print('[ScreenShare] Exception: $e');
       if (mounted) setState(() => _captureError = e.toString());
+      return await _captureLocalScreenFallbackPngBytes(stableDir);
+    } finally {
+      try { io.File(outputPath).deleteSync(); } catch (_) {}
+    }
+  }
+
+  Future<Uint8List?> _captureLocalScreenFallbackPngBytes(io.Directory stableDir) async {
+    final outputPath = '${stableDir.path}\\frame_fallback.png';
+    final script = r'''
+Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+$all=[System.Windows.Forms.Screen]::AllScreens
+$idx=SCREEN_INDEX
+if ($idx -lt 0) { $idx = 0 }
+if ($idx -ge $all.Count) { $idx = 0 }
+$b=$all[$idx].Bounds
+$bmp=New-Object System.Drawing.Bitmap $b.Width,$b.Height
+$g=[System.Drawing.Graphics]::FromImage($bmp)
+$g.CopyFromScreen($b.Left,$b.Top,0,0,$bmp.Size)
+$bmp.Save('OUTPUT_PATH',[System.Drawing.Imaging.ImageFormat]::Png)
+Write-Output "$($bmp.Width),$($bmp.Height),$($b.Left),$($b.Top),$($b.Width),$($b.Height)"
+$g.Dispose();$bmp.Dispose()
+'''
+        .replaceAll('OUTPUT_PATH', outputPath.replaceAll("'", "''"))
+        .replaceAll('SCREEN_INDEX', _selectedLocalScreenIndex.toString());
+
+    try {
+      final result = await _runPowerShell(
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+        timeout: const Duration(seconds: 10),
+      );
+      if (result.exitCode != 0) {
+        var err = '${result.stderr}'.trim();
+        if (err.isEmpty) err = '${result.stdout}'.trim();
+        if (mounted && err.isNotEmpty) {
+          setState(() => _captureError = 'Fallback capture failed: ${err.substring(0, err.length.clamp(0, 120))}');
+        }
+        return null;
+      }
+      final file = io.File(outputPath);
+      if (!file.existsSync()) {
+        if (mounted) setState(() => _captureError = 'Fallback capture file not found');
+        return null;
+      }
+      final out = '${result.stdout}'.trim();
+      final line = out.split(RegExp(r'[\r\n]+')).firstWhere((l) => l.contains(','), orElse: () => '');
+      if (line.isNotEmpty) {
+        final parts = line.split(',');
+        if (parts.length >= 2) {
+          final w = int.tryParse(parts[0].trim()) ?? 0;
+          final h = int.tryParse(parts[1].trim()) ?? 0;
+          if (w > 0 && h > 0) {
+            _localFrameWidth = w;
+            _localFrameHeight = h;
+          }
+        }
+        if (parts.length >= 6) {
+          _localCaptureLeft = int.tryParse(parts[2].trim()) ?? _localCaptureLeft;
+          _localCaptureTop = int.tryParse(parts[3].trim()) ?? _localCaptureTop;
+          _localCaptureWidth = int.tryParse(parts[4].trim()) ?? _localCaptureWidth;
+          _localCaptureHeight = int.tryParse(parts[5].trim()) ?? _localCaptureHeight;
+        }
+      }
+      final bytes = await file.readAsBytes();
+      if (bytes.isEmpty) {
+        if (mounted) setState(() => _captureError = 'Fallback capture produced empty PNG');
+        return null;
+      }
+      if (mounted) setState(() => _captureError = '');
+      return bytes;
+    } catch (e) {
+      if (mounted) setState(() => _captureError = 'Fallback capture exception: $e');
       return null;
     } finally {
       try { io.File(outputPath).deleteSync(); } catch (_) {}
@@ -3303,6 +3838,7 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
       messageType: 'audio_toggle',
       payload: {'enabled': _audioEnabled},
     );
+    unawaited(_syncRemoteAudioPipeline());
     _showMessage(context, _audioEnabled ? tr('audio_enabled') : tr('audio_disabled'), _getColors(context));
   }
 
