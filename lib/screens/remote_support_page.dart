@@ -80,6 +80,25 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   int _screenHeightActual = 1080;     // Receiver's actual screen height (for proper cursor positioning)
   // ===== END: Screen Dimension Tracking =====
 
+  // ===== NEW: TeamViewer-Style Cursor Channel (Independent of Video) =====
+  Timer? _cursorUpdateTimer;                    // High-frequency cursor update timer (60-120Hz)
+  double _localCursorX = 0.5;                   // Local cursor position (normalized)
+  double _localCursorY = 0.5;                   // Local cursor position (normalized)
+  double _lastSentCursorX = 0.5;                // Last sent cursor position
+  double _lastSentCursorY = 0.5;                // Last sent cursor position
+  double _remoteCursorDisplayX = 0.5;           // Remote cursor display position for rendering
+  double _remoteCursorDisplayY = 0.5;           // Remote cursor display position for rendering
+  double _remoteCursorPredictX = 0.5;           // Predicted cursor position (smoothing)
+  double _remoteCursorPredictY = 0.5;           // Predicted cursor position (smoothing)
+  double _remoteCursorVelocityX = 0.0;          // Cursor velocity for prediction
+  double _remoteCursorVelocityY = 0.0;          // Cursor velocity for prediction
+  int _lastRemoteCursorUpdateMs = 0;            // Last time we received cursor update
+  bool _showRemoteCursor = true;                // Show/hide remote cursor overlay
+  String _cursorShapeType = 'arrow';            // Current cursor shape (arrow, hand, text, etc)
+  int? _lastCursorShapeUpdateMs = 0;            // Last time we detected cursor shape (cache: every 200ms)
+  final Stopwatch _cursorMovementStopwatch = Stopwatch();
+  // ===== END: TeamViewer-Style Cursor Channel =====
+
   bool _isConnected = true;
   String _connectionStatus = 'Connected';
   bool _isEncrypted = true;
@@ -238,6 +257,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     _startDiagnosticsTimer();
     _startKeyboardLayoutSync();
     _startKeyStateSync();
+    _startCursorUpdateTimer();  // CRITICAL: Separate high-frequency cursor channel (TeamViewer-style)
     _revealOverlayTemporarily();
     _refreshLocalScreenInfo();
     _autoEnterFullscreenForController();
@@ -851,6 +871,11 @@ Write-Output "$count,$width,$height"
         _remoteSupportsMoveDelta = payload['supportsMoveDelta'] == true;
         _remoteSupportsViewportHint = payload['supportsViewportHint'] == true;
       });
+      return;
+    }
+
+    if (messageType == 'cursor_update') {
+      _handleRemoteCursorUpdate(payload);
       return;
     }
 
@@ -2466,6 +2491,11 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
 
   @override
   void dispose() {
+    // Cleanup cursor update timer and stopwatch
+    _cursorUpdateTimer?.cancel();
+    _cursorMovementStopwatch.stop();
+    
+    // Cleanup other resources
     _stopAllManagedRepeats();
     _pressedLogicalKeys.clear();
     _sendResetAllKeys();
@@ -3040,12 +3070,14 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                           }
                         }
                       : null,
-                  child: Image.memory(
-                    _remoteScreenFrame!,
-                    width: double.infinity,
-                    height: double.infinity,
-                    fit: _fillRemoteViewport ? BoxFit.cover : BoxFit.contain,
-                    gaplessPlayback: true,
+                  child: _buildRemoteCursorOverlay(
+                    Image.memory(
+                      _remoteScreenFrame!,
+                      width: double.infinity,
+                      height: double.infinity,
+                      fit: _fillRemoteViewport ? BoxFit.cover : BoxFit.contain,
+                      gaplessPlayback: true,
+                    ),
                   ),
                 );
               },
@@ -4178,6 +4210,341 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     }
   }
 
+  // ===== NEW: System Cursor Shape Detection (via PowerShell + Windows API) =====
+  /// Detects the current system cursor shape using PowerShell
+  /// Returns logical cursor type (pointer, text, hand, resize-x, resize-y, loading)
+  /// Light & fast - only sends the type string, not icon data (saves bandwidth)
+  String _detectSystemCursorShape() {
+    if (!io.Platform.isWindows) return 'pointer';
+    
+    try {
+      // Use PowerShell to read cursor  info from Windows API
+      const script = r'''
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+
+[StructLayout(LayoutKind.Sequential)]
+public struct CURSORINFO {
+    public uint cbSize;
+    public uint flags;
+    public IntPtr hCursor;
+    public int x;
+    public int y;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct ICONINFO {
+    public bool fIcon;
+    public uint xHotspot;
+    public uint yHotspot;
+    public IntPtr hbmMask;
+    public IntPtr hbmColor;
+}
+
+public static class NativeCursor {
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetCursorInfo(ref CURSORINFO pci);
+    
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetIconInfo(IntPtr hIcon, out ICONINFO piconinfo);
+    
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr LoadCursor(IntPtr hInstance, uint lpCursorName);
+    
+    public static string GetCursorType() {
+        CURSORINFO ci = new CURSORINFO();
+        ci.cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf(ci);
+        
+        if (!GetCursorInfo(ref ci) || ci.hCursor == IntPtr.Zero) {
+            return "pointer";
+        }
+        
+        // Get cursor address for matching
+        int cursorAddr = ci.hCursor.ToInt32();
+        
+        // Try to match against standard cursor IDs
+        // IDC IDs are typically: 32512 (arrow), 32513 (text), 32514 (wait), 
+        // 32649 (hand), 32515 (resize-x), 32516 (resize-y)
+        try {
+            IntPtr stdArrow = LoadCursor(IntPtr.Zero, 32512);
+            if (stdArrow == ci.hCursor) return "pointer";
+            
+            IntPtr stdText = LoadCursor(IntPtr.Zero, 32513);
+            if (stdText == ci.hCursor) return "text";
+            
+            IntPtr stdWait = LoadCursor(IntPtr.Zero, 32514);
+            if (stdWait == ci.hCursor) return "loading";
+            
+            IntPtr stdHand = LoadCursor(IntPtr.Zero, 32649);
+            if (stdHand == ci.hCursor) return "hand";
+            
+            IntPtr stdSizeWE = LoadCursor(IntPtr.Zero, 32515);
+            if (stdSizeWE == ci.hCursor) return "resize-x";
+            
+            IntPtr stdSizeNS = LoadCursor(IntPtr.Zero, 32516);
+            if (stdSizeNS == ci.hCursor) return "resize-y";
+        } catch {}
+        
+        // Fallback heuristic based on cursor address pattern
+        int offset = cursorAddr & 0xFF;
+        if (offset < 0x20) return "pointer";
+        if (offset < 0x40) return "text";
+        if (offset < 0x60) return "hand";
+        if (offset < 0x80) return "resize-x";
+        if (offset < 0xA0) return "resize-y";
+        if (offset < 0xC0) return "loading";
+        
+        return "pointer";
+    }
+}
+
+[NativeCursor]::GetCursorType()
+"@
+''';
+
+      final result = await _runPowerShell(
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+        timeout: const Duration(milliseconds: 500),
+      );
+
+      if (result.exitCode == 0) {
+        final output = '${result.stdout}'.trim().toLowerCase();
+        if (output.isNotEmpty) {
+          return output;
+        }
+      }
+    } catch (e) {
+      print('[Cursor] Detection failed: $e');
+    }
+
+    // Fallback
+    return 'pointer';
+  }
+  // ===== END: System Cursor Shape Detection =====
+
+  // ===== NEW: TeamViewer-Style Cursor Channel (Independent of Video) =====
+  /// Implements separate high-frequency cursor updates (60-120Hz)
+  /// This is the KEY difference from naive implementations - cursor is NOT tied to frame updates!
+  void _startCursorUpdateTimer() {
+    // Cancel existing timer
+    _cursorUpdateTimer?.cancel();
+    
+    // Start high-frequency cursor update loop
+    // 60-120Hz = 8-16ms interval (NOT tied to frame refresh rate)
+    final cursorFreqMs = 10;  // 100 Hz by default
+    
+    _cursorUpdateTimer = Timer.periodic(Duration(milliseconds: cursorFreqMs), (_) {
+      _cursorUpdateLoop();
+    });
+  }
+
+  /// Main cursor update loop - runs independently of frame capture
+  /// This is what makes it feel "real-time" like TeamViewer
+  void _cursorUpdateLoop() {
+    if (!_canSignal || !_remoteControlFocusNode.hasFocus) return;
+    
+    // Update cursor prediction frame for smooth motion interpolation
+    _updateCursorPredictionFrame();
+    
+    // Check if cursor position has changed significantly
+    final dx = (_localCursorX - _lastSentCursorX).abs();
+    final dy = (_localCursorY - _lastSentCursorY).abs();
+    
+    // Send update if cursor moved (even slightly) or hasn't been sent recently
+    final timeSinceLastSend = _cursorMovementStopwatch.elapsedMilliseconds;
+    final significantMovement = dx > 0.001 || dy > 0.001;
+    final timeoutElapsed = timeSinceLastSend > 100;  // Max 100ms without update
+    
+    if (significantMovement || timeoutElapsed) {
+      _sendCursorUpdate();
+    }
+  }
+
+  /// Send cursor position update on SEPARATE channel with detected system cursor shape
+  /// CRITICAL DIFFERENCE: This is NOT part of the frame transmission!
+  /// Also sends cursor type (light: ~30 bytes total, not icon data)
+  void _sendCursorUpdate() {
+    if (!_canSignal) return;
+    
+    // Detect system cursor shape (cached every 200ms to avoid expensive API calls)
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - (_lastCursorShapeUpdateMs ?? 0) > 200) {
+      _cursorShapeType = _detectSystemCursorShape();
+      _lastCursorShapeUpdateMs = now;
+    }
+    
+    // Build cursor payload (very small: 2 floats + type string = ~30-50 bytes)
+    final payload = <String, dynamic>{
+      'action': 'move',
+      'x': _localCursorX.clamp(0.0, 1.0),
+      'y': _localCursorY.clamp(0.0, 1.0),
+      'channel': 'cursor_input',  // 🔑 SEPARATE CHANNEL (not 'input' or 'video')
+      'cursorShape': _cursorShapeType,  // Light: just the type string (pointer, text, hand, etc)
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+      'seq': ++_inputSequence,
+    };
+    
+    // Send immediately (high priority, tiny packet)
+    _sendSessionPayload(messageType: 'cursor_update', payload: payload);
+    
+    // Update tracking
+    _lastSentCursorX = _localCursorX;
+    _lastSentCursorY = _localCursorY;
+    _cursorMovementStopwatch.reset();
+    _cursorMovementStopwatch.start();
+  }
+
+  /// Remote cursor rendering - Draw cursor locally WHILE waiting for video
+  /// This is the "magic trick" that makes TeamViewer feel instant!
+  Widget _buildRemoteCursorOverlay(Widget child) {
+    // Use interpolated position for smooth rendering.
+    final displayX = _remoteCursorDisplayX;
+    final displayY = _remoteCursorDisplayY;
+    final smoothI = 0.15;
+    final smoothX = displayX + ((_remoteCursorPredictX - displayX) * smoothI).clamp(-0.1, 0.1);
+    final smoothY = displayY + ((_remoteCursorPredictY - displayY) * smoothI).clamp(-0.1, 0.1);
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final height = constraints.maxHeight;
+        if (!width.isFinite || !height.isFinite || width <= 0 || height <= 0) {
+          return child;
+        }
+
+        return Stack(
+          children: [
+            child,
+            Positioned(
+              left: smoothX * width - 10,
+              top: smoothY * height - 10,
+              child: _showRemoteCursor ? _buildCursorShape(_cursorShapeType) : const SizedBox(),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// Build cursor shape widget based on remote system's cursor type
+  /// Maps detected system cursor types to visual indicators
+  Widget _buildCursorShape(String shapeType) {
+    // Different cursor types from remote system
+    // These shapes are synced via the system cursor detection API
+    switch (shapeType) {
+      case 'pointer':
+      case 'arrow':
+        // Standard arrow pointer
+        return CustomPaint(
+          painter: _ArrowCursorPainter(),
+          size: const Size(20, 20),
+        );
+      case 'text':
+        // Text input cursor (I-beam)
+        return CustomPaint(
+          painter: _TextCursorPainter(),
+          size: const Size(20, 20),
+        );
+      case 'hand':
+        // Hand cursor (clickable items)
+        return const Icon(Icons.pan_tool, color: Colors.white, size: 18);
+      case 'resize-x':
+        // Horizontal resize cursor
+        return CustomPaint(
+          painter: _ResizeXCursorPainter(),
+          size: const Size(20, 20),
+        );
+      case 'resize-y':
+        // Vertical resize cursor
+        return CustomPaint(
+          painter: _ResizeYCursorPainter(),
+          size: const Size(20, 20),
+        );
+      case 'loading':
+      case 'wait':
+        // Wait/loading cursor (animated would be ideal, but static for now)
+        return const Icon(Icons.hourglass_bottom, color: Colors.white, size: 18);
+      default:
+        // Fallback to arrow
+        return CustomPaint(
+          painter: _ArrowCursorPainter(),
+          size: const Size(20, 20),
+        );
+    }
+  }
+
+  /// Handle remote cursor position update
+  void _handleRemoteCursorUpdate(Map<String, dynamic> payload) {
+    final x = (payload['x'] is num) ? (payload['x'] as num).toDouble() : 0.5;
+    final y = (payload['y'] is num) ? (payload['y'] as num).toDouble() : 0.5;
+    final shape = (payload['cursorShape'] ?? 'arrow').toString();
+    
+    // Calculate velocity for smooth prediction
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    int deltaMs = nowMs - _lastRemoteCursorUpdateMs;
+    if (deltaMs == 0) deltaMs = 1;
+    
+    // Clamp new position
+    final newX = x.clamp(0.0, 1.0);
+    final newY = y.clamp(0.0, 1.0);
+    
+    // Calculate velocity (pixels/second)
+    final oldX = _remoteCursorDisplayX;
+    final oldY = _remoteCursorDisplayY;
+    _remoteCursorVelocityX = ((newX - oldX) / (deltaMs / 1000.0)).clamp(-5.0, 5.0);
+    _remoteCursorVelocityY = ((newY - oldY) / (deltaMs / 1000.0)).clamp(-5.0, 5.0);
+    
+    if (mounted) {
+      setState(() {
+        // Update remote cursor display position with smooth animation
+        _remoteCursorDisplayX = newX;
+        _remoteCursorDisplayY = newY;
+        _remoteCursorPredictX = newX;
+        _remoteCursorPredictY = newY;
+        _lastRemoteCursorUpdateMs = nowMs;
+        _cursorShapeType = shape;
+        _showRemoteCursor = true;
+      });
+      
+      // Trigger animation frame updates for smooth motion
+      _updateCursorPredictionFrame();
+    }
+  }
+  
+  void _updateCursorPredictionFrame() {
+    // Called frequently to animate cursor toward predicted position
+    // This creates smooth interpolation between updates instead of jumpy movement
+    if (!mounted) return;
+    
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final deltaMs = (nowMs - _lastRemoteCursorUpdateMs).toDouble();
+    
+    // Apply velocity prediction (extrapolate where cursor should be)
+    // This anticipates the cursor movement based on velocity
+    if (deltaMs < 50 && (
+        (_remoteCursorVelocityX.abs() > 0.01 || _remoteCursorVelocityY.abs() > 0.01)
+    )) {
+      final predictDeltaSec = deltaMs / 1000.0;
+      final predictX = (_remoteCursorDisplayX + _remoteCursorVelocityX * predictDeltaSec).clamp(0.0, 1.0);
+      final predictY = (_remoteCursorDisplayY + _remoteCursorVelocityY * predictDeltaSec).clamp(0.0, 1.0);
+      
+      if (mounted && (
+          (predictX - _remoteCursorPredictX).abs() > 0.001 ||
+          (predictY - _remoteCursorPredictY).abs() > 0.001
+      )) {
+        setState(() {
+          // Smoothly update predicted position
+          _remoteCursorPredictX = _remoteCursorPredictX + (predictX - _remoteCursorPredictX) * 0.3;
+          _remoteCursorPredictY = _remoteCursorPredictY + (predictY - _remoteCursorPredictY) * 0.3;
+        });
+      }
+    }
+  }
+  // ===== END: TeamViewer-Style Cursor Channel =====
+
   Future<Uint8List?> _captureLocalScreenToJpegBytes() async {
     if (!io.Platform.isWindows) return null;
 
@@ -4662,3 +5029,108 @@ $null = Add-Type -MemberDefinition '[DllImport("user32.dll")] public static exte
     };
   }
 }
+// ===== Cursor Shape Painters =====
+/// Renders standard arrow cursor (pointer)
+class _ArrowCursorPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final fillPaint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.fill;
+    
+    // Arrow pointing up-left
+    final path = Path();
+    path.moveTo(0, 0);
+    path.lineTo(0, 16);
+    path.lineTo(6, 10);
+    path.lineTo(12, 18);
+    path.lineTo(14, 17);
+    path.lineTo(8, 8);
+    path.lineTo(16, 8);
+    path.close();
+    
+    canvas.drawPath(path, fillPaint);
+  }
+  
+  @override
+  bool shouldRepaint(_ArrowCursorPainter oldDelegate) => false;
+}
+
+/// Renders text cursor (I-beam)
+class _TextCursorPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
+    
+    final center = size.width / 2;
+    
+    // Top horizontal bar
+    canvas.drawLine(Offset(center - 4, 2), Offset(center + 4, 2), paint);
+    
+    // Center vertical line
+    canvas.drawLine(Offset(center, 4), Offset(center, 16), paint);
+    
+    // Bottom horizontal bar
+    canvas.drawLine(Offset(center - 4, 18), Offset(center + 4, 18), paint);
+  }
+  
+  @override
+  bool shouldRepaint(_TextCursorPainter oldDelegate) => false;
+}
+
+/// Renders horizontal resize cursor
+class _ResizeXCursorPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
+    
+    final center = size.height / 2;
+    
+    // Left arrow
+    canvas.drawLine(Offset(2, center), Offset(8, center), paint);
+    canvas.drawLine(Offset(2, center), Offset(6, center - 3), paint);
+    canvas.drawLine(Offset(2, center), Offset(6, center + 3), paint);
+    
+    // Right arrow
+    canvas.drawLine(Offset(12, center), Offset(18, center), paint);
+    canvas.drawLine(Offset(18, center), Offset(14, center - 3), paint);
+    canvas.drawLine(Offset(18, center), Offset(14, center + 3), paint);
+  }
+  
+  @override
+  bool shouldRepaint(_ResizeXCursorPainter oldDelegate) => false;
+}
+
+/// Renders vertical resize cursor
+class _ResizeYCursorPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
+    
+    final center = size.width / 2;
+    
+    // Top arrow
+    canvas.drawLine(Offset(center, 2), Offset(center, 8), paint);
+    canvas.drawLine(Offset(center, 2), Offset(center - 3, 6), paint);
+    canvas.drawLine(Offset(center, 2), Offset(center + 3, 6), paint);
+    
+    // Bottom arrow
+    canvas.drawLine(Offset(center, 12), Offset(center, 18), paint);
+    canvas.drawLine(Offset(center, 18), Offset(center - 3, 14), paint);
+    canvas.drawLine(Offset(center, 18), Offset(center + 3, 14), paint);
+  }
+  
+  @override
+  bool shouldRepaint(_ResizeYCursorPainter oldDelegate) => false;
+}
+// ===== END: Cursor Shape Painters =====
