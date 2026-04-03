@@ -149,6 +149,13 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   bool _isClosingSession = false;
   int _remoteFrameWidth = 16;
   int _remoteFrameHeight = 9;
+  int _virtualWidth = 1920;
+  int _virtualHeight = 1080;
+  int _remoteRealWidth = 0;
+  int _remoteRealHeight = 0;
+  int _remoteVirtualWidth = 1920;
+  int _remoteVirtualHeight = 1080;
+  double _remoteScaleRatio = 1.0;
   int _localFrameWidth = 0;
   int _localFrameHeight = 0;
   int _localCaptureLeft = 0;
@@ -365,7 +372,7 @@ Write-Output "$count,$width,$height"
           _screenWidthActual = int.tryParse(parts[1]) ?? 1920;
           _screenHeightActual = int.tryParse(parts[2]) ?? 1080;
           if (_captureResolutionLabel == 'Full Screen') {
-            _captureMaxWidth = _recommendedFullScreenCaptureWidth();
+            _setVirtualResolutionFromLongEdge(_recommendedFullScreenCaptureWidth());
             _fillRemoteViewport = true;
           }
         }
@@ -574,7 +581,7 @@ Write-Output "$count,$width,$height"
       switch (preset) {
         case 'Full Screen':
           _fillRemoteViewport = true;
-          _captureMaxWidth = _recommendedFullScreenCaptureWidth();
+          _setVirtualResolutionFromLongEdge(_recommendedFullScreenCaptureWidth());
           break;
         case 'Adapter':
           _fillRemoteViewport = false;
@@ -585,6 +592,52 @@ Write-Output "$count,$width,$height"
       }
     });
     _sendDisplayConfig();
+  }
+
+  void _setVirtualResolutionFromLongEdge(int longEdge) {
+    final safeLongEdge = longEdge.clamp(960, 3840);
+    final sourceW = _localCaptureWidth > 0 ? _localCaptureWidth : _screenWidthActual;
+    final sourceH = _localCaptureHeight > 0 ? _localCaptureHeight : _screenHeightActual;
+    final aspect = sourceW <= 0 || sourceH <= 0 ? (16.0 / 9.0) : sourceW / sourceH;
+    int vw;
+    int vh;
+    if (aspect >= 1.0) {
+      vw = safeLongEdge;
+      vh = (safeLongEdge / aspect).round().clamp(540, 2160);
+    } else {
+      vh = safeLongEdge;
+      vw = (safeLongEdge * aspect).round().clamp(540, 2160);
+    }
+    _virtualWidth = vw;
+    _virtualHeight = vh;
+    _captureMaxWidth = safeLongEdge;
+  }
+
+  void _applyVirtualResolutionPolicy() {
+    if (_captureResolutionLabel != 'Full Screen') return;
+    if (_autoQualityMode == 'Auto') {
+      final target = _pingMs <= 50
+          ? _recommendedFullScreenCaptureWidth()
+          : (_pingMs <= 100 ? 1600 : (_pingMs <= 180 ? 1366 : 1280));
+      _setVirtualResolutionFromLongEdge(target);
+      return;
+    }
+    switch (_qualityLabel) {
+      case 'Low':
+        _setVirtualResolutionFromLongEdge(1280);
+        break;
+      case 'Medium':
+        _setVirtualResolutionFromLongEdge(1600);
+        break;
+      case 'High':
+        _setVirtualResolutionFromLongEdge(1920);
+        break;
+      case 'Ultra':
+        _setVirtualResolutionFromLongEdge(_recommendedFullScreenCaptureWidth());
+        break;
+      default:
+        _setVirtualResolutionFromLongEdge(_recommendedFullScreenCaptureWidth());
+    }
   }
 
   int _recommendedFullScreenCaptureWidth() {
@@ -630,6 +683,7 @@ Write-Output "$count,$width,$height"
           _captureFrameIntervalMs = _defaultCaptureIntervalMs;
           _autoQualityMode = 'Manual';
       }
+      _applyVirtualResolutionPolicy();
     });
     _restartScreenShareTimerIfNeeded();
     _sendDisplayConfig();
@@ -663,6 +717,7 @@ Write-Output "$count,$width,$height"
     setState(() {
       _captureJpegQuality = newQuality;
       _captureFrameIntervalMs = tunedIntervalMs;
+      _applyVirtualResolutionPolicy();
     });
     _restartScreenShareTimerIfNeeded();
   }
@@ -930,7 +985,7 @@ Write-Output "$count,$width,$height"
         }
         if (resolution.isNotEmpty) {
           _captureResolutionLabel = resolution;
-          if (resolution == 'Full Screen') _captureMaxWidth = _recommendedFullScreenCaptureWidth();
+          if (resolution == 'Full Screen') _setVirtualResolutionFromLongEdge(_recommendedFullScreenCaptureWidth());
           if (resolution == '720p') _captureMaxWidth = 1280;
           if (resolution == '1080p') _captureMaxWidth = 1920;
           if (resolution == '540p') _captureMaxWidth = 960;
@@ -1023,11 +1078,26 @@ Write-Output "$count,$width,$height"
             _pendingRemoteFrameData = frameData;
             final fw = payload['frameWidth'];
             final fh = payload['frameHeight'];
+            final vw = payload['virtualWidth'];
+            final vh = payload['virtualHeight'];
+            final rw = payload['remoteWidth'];
+            final rh = payload['remoteHeight'];
             final sc = payload['screenCount'];
             final si = payload['screenIndex'];
             if (fw is num && fh is num && fw > 0 && fh > 0) {
               _pendingRemoteFrameWidth = fw.toInt();
               _pendingRemoteFrameHeight = fh.toInt();
+            }
+            if (vw is num && vh is num && vw > 0 && vh > 0) {
+              _remoteVirtualWidth = vw.toInt();
+              _remoteVirtualHeight = vh.toInt();
+            }
+            if (rw is num && rh is num && rw > 0 && rh > 0) {
+              _remoteRealWidth = rw.toInt();
+              _remoteRealHeight = rh.toInt();
+            }
+            if (_remoteVirtualWidth > 0 && _remoteRealWidth > 0) {
+              _remoteScaleRatio = _remoteRealWidth / _remoteVirtualWidth;
             }
             if (sc is num && sc.toInt() > 0) {
               _pendingRemoteScreenCount = sc.toInt();
@@ -1203,7 +1273,12 @@ Write-Output "$count,$width,$height"
       final direction = _wheelAccumulator > 0 ? 1 : -1;
       // Flutter dy > 0 means scroll down, while Win32 wheel < 0 is down.
       final wheel = direction > 0 ? -120 : 120;
-      _sendInputEvent('wheel', wheelDelta: wheel);
+      _sendInputEvent(
+        'wheel',
+        wheelDelta: wheel,
+        normalizedX: _localCursorX,
+        normalizedY: _localCursorY,
+      );
       _wheelAccumulator -= threshold * direction;
     }
   }
@@ -1491,23 +1566,24 @@ Write-Output "$count,$width,$height"
   // ===== NEW: Native Win32 Input Handler (TeamViewer-style optimization) =====
   /// High-speed native Win32 cursor control using FFI
   /// Replaces slow PowerShell execution with direct Win32 API calls
-  /// IMPORTANT: Uses RECEIVER's screen dimensions for proper coordinate transformation
-  /// (not sender's capture bounds, which was causing misalignment)
+  /// IMPORTANT: Always denormalizes against host capture bounds (virtual pipeline).
   void _applyRemoteInputNative(String action, double? normX, double? normY, int wheelDelta) {
     if (!io.Platform.isWindows) return;
     try {
-      // Map normalized coordinates into the exact captured rectangle.
-      // This keeps remote click targets aligned even with multi-monitor offsets/DPI.
       if (normX != null && normY != null) {
         final capLeft = _localCaptureLeft;
         final capTop = _localCaptureTop;
         final capWidth = _localCaptureWidth > 0 ? _localCaptureWidth : _screenWidthActual;
         final capHeight = _localCaptureHeight > 0 ? _localCaptureHeight : _screenHeightActual;
-        final relX = ((capWidth - 1) * normX.clamp(0.0, 1.0)).round().clamp(0, capWidth - 1);
-        final relY = ((capHeight - 1) * normY.clamp(0.0, 1.0)).round().clamp(0, capHeight - 1);
-        final finalPx = capLeft + relX;
-        final finalPy = capTop + relY;
-        win32.SetCursorPos(finalPx, finalPy);
+        final pos = denormalizeCoordinates(
+          normX: normX,
+          normY: normY,
+          targetLeft: capLeft,
+          targetTop: capTop,
+          targetWidth: capWidth,
+          targetHeight: capHeight,
+        );
+        win32.SetCursorPos(pos.dx.round(), pos.dy.round());
 
         _cursorPredictX = normX;
         _cursorPredictY = normY;
@@ -1735,10 +1811,6 @@ switch ($action) {
 
     double? x = (payload['x'] is num) ? (payload['x'] as num).toDouble() : null;
     double? y = (payload['y'] is num) ? (payload['y'] as num).toDouble() : null;
-    final sentAt = payload['sentAt'] is num ? (payload['sentAt'] as num).toInt() : 0;
-    final vx = payload['vx'] is num ? (payload['vx'] as num).toDouble() : 0.0;
-    final vy = payload['vy'] is num ? (payload['vy'] as num).toDouble() : 0.0;
-
     if (action == 'move_delta') {
       final dx = payload['dx'] is num ? (payload['dx'] as num).toDouble() : 0.0;
       final dy = payload['dy'] is num ? (payload['dy'] as num).toDouble() : 0.0;
@@ -1753,20 +1825,16 @@ switch ($action) {
     }
 
     if (x == null || y == null) return;
-    var predictedX = x;
-    var predictedY = y;
-    if (sentAt > 0) {
-      final ageMs = (DateTime.now().millisecondsSinceEpoch - sentAt).clamp(0, 180);
-      final oneWaySec = (ageMs / 2000.0);
-      predictedX = (predictedX + (vx * oneWaySec)).clamp(0.0, 1.0);
-      predictedY = (predictedY + (vy * oneWaySec)).clamp(0.0, 1.0);
-    }
+    // Apply exact normalized coordinate to host pointer injection.
+    // Avoid predictive extrapolation here because it causes click/hover mismatch.
+    final clampedX = x.clamp(0.0, 1.0);
+    final clampedY = y.clamp(0.0, 1.0);
 
-    _remoteCursorNormX = predictedX;
-    _remoteCursorNormY = predictedY;
+    _remoteCursorNormX = clampedX;
+    _remoteCursorNormY = clampedY;
     _remoteCursorInitialized = true;
-    _pendingRemoteMoveX = predictedX;
-    _pendingRemoteMoveY = predictedY;
+    _pendingRemoteMoveX = clampedX;
+    _pendingRemoteMoveY = clampedY;
     _schedulePendingRemoteMoveDispatch();
   }
 
@@ -1798,38 +1866,8 @@ switch ($action) {
   }
 
   Future<void> _applyRemotePointerMove(double x, double y) async {
-    final script = r'''
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-$x = __X__
-$y = __Y__
-$capLeft = __CAP_LEFT__
-$capTop = __CAP_TOP__
-$capWidth = __CAP_WIDTH__
-$capHeight = __CAP_HEIGHT__
-
-$bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-if ($capWidth -gt 0 -and $capHeight -gt 0) {
-  $bounds = New-Object System.Drawing.Rectangle($capLeft, $capTop, $capWidth, $capHeight)
-}
-$px = $bounds.Left + [int]([double]($bounds.Width - 1) * $x)
-$py = $bounds.Top + [int]([double]($bounds.Height - 1) * $y)
-[System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point($px, $py)
-'''
-        .replaceAll('__X__', x.toStringAsFixed(6))
-        .replaceAll('__Y__', y.toStringAsFixed(6))
-        .replaceAll('__CAP_LEFT__', _localCaptureLeft.toString())
-        .replaceAll('__CAP_TOP__', _localCaptureTop.toString())
-        .replaceAll('__CAP_WIDTH__', _localCaptureWidth.toString())
-        .replaceAll('__CAP_HEIGHT__', _localCaptureHeight.toString());
-    try {
-      await _runPowerShell(
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
-        timeout: const Duration(milliseconds: 900),
-      );
-    } catch (_) {
-      // Keep session alive on pointer injection failures.
-    }
+    // Native cursor move is lower latency and avoids PowerShell DPI/runtime drift.
+    _applyRemoteInputNative('move', x, y, 0);
   }
   Future<void> _applyRemoteKeyboardEvent(Map<String, dynamic> payload) async {
     final phase = (payload['phase'] ?? 'down').toString();
@@ -2426,6 +2464,17 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
         if (_pendingRemoteFrameWidth != null && _pendingRemoteFrameHeight != null) {
           _remoteFrameWidth = _pendingRemoteFrameWidth!;
           _remoteFrameHeight = _pendingRemoteFrameHeight!;
+          if (_remoteVirtualWidth <= 0 || _remoteVirtualHeight <= 0) {
+            _remoteVirtualWidth = _remoteFrameWidth;
+            _remoteVirtualHeight = _remoteFrameHeight;
+          }
+          if (_remoteRealWidth <= 0 || _remoteRealHeight <= 0) {
+            _remoteRealWidth = _remoteFrameWidth;
+            _remoteRealHeight = _remoteFrameHeight;
+          }
+          _remoteScaleRatio = _remoteVirtualWidth > 0
+              ? (_remoteRealWidth / _remoteVirtualWidth)
+              : 1.0;
         }
         if (_pendingRemoteScreenCount != null) {
           _remoteScreenCount = _pendingRemoteScreenCount!;
@@ -3638,8 +3687,20 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
         _buildMetricLine('Connection', _isConnected ? 'Connected' : 'Disconnected', colors),
         _buildMetricLine('Bitrate', _bandwidthText, colors),
         _buildMetricLine('FPS', _fpsText, colors),
+        _buildMetricLine('Frame latency', '${_frameAvgLatencyMs.toStringAsFixed(1)} ms', colors),
         _buildMetricLine('Packet loss', _packetLossText, colors),
         _buildMetricLine('Protocol', 'v$_remoteProtocolVersion', colors),
+        _buildMetricLine(
+          'Remote (real)',
+          '${_remoteRealWidth > 0 ? _remoteRealWidth : _remoteFrameWidth}x${_remoteRealHeight > 0 ? _remoteRealHeight : _remoteFrameHeight}',
+          colors,
+        ),
+        _buildMetricLine(
+          'Remote (virtual)',
+          '${_remoteVirtualWidth > 0 ? _remoteVirtualWidth : _remoteFrameWidth}x${_remoteVirtualHeight > 0 ? _remoteVirtualHeight : _remoteFrameHeight}',
+          colors,
+        ),
+        _buildMetricLine('Scale ratio', _remoteScaleRatio.toStringAsFixed(3), colors),
         _buildMetricLine(
           'Peer Capabilities',
           'delta=${_remoteSupportsMoveDelta ? 'on' : 'off'} viewport=${_remoteSupportsViewportHint ? 'on' : 'off'}',
@@ -4083,6 +4144,10 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
           'frameHash': hash,
           'frameWidth': _localFrameWidth,
           'frameHeight': _localFrameHeight,
+          'virtualWidth': _virtualWidth,
+          'virtualHeight': _virtualHeight,
+          'remoteWidth': _localCaptureWidth > 0 ? _localCaptureWidth : _screenWidthActual,
+          'remoteHeight': _localCaptureHeight > 0 ? _localCaptureHeight : _screenHeightActual,
           'screenCount': _localScreenCount,
           'screenIndex': _selectedLocalScreenIndex,
           'captureLeft': _localCaptureLeft,
@@ -4377,13 +4442,18 @@ public static class NativeCursor {
 
   /// Remote cursor rendering - Draw cursor locally WHILE waiting for video
   /// This is the "magic trick" that makes TeamViewer feel instant!
-  Rect _computeRemoteFrameDrawRect(Size viewportSize) {
+  Rect computeDisplayBounds({
+    required Size viewportSize,
+    required int sourceWidth,
+    required int sourceHeight,
+    required bool fillViewport,
+  }) {
     final w = viewportSize.width;
     final h = viewportSize.height;
     if (w <= 0 || h <= 0) return Rect.zero;
 
-    final frameW = _remoteFrameWidth <= 0 ? w : _remoteFrameWidth;
-    final frameH = _remoteFrameHeight <= 0 ? h : _remoteFrameHeight;
+    final frameW = sourceWidth <= 0 ? w : sourceWidth.toDouble();
+    final frameH = sourceHeight <= 0 ? h : sourceHeight.toDouble();
     final frameAspect = frameW / frameH;
     final viewAspect = w / h;
 
@@ -4392,7 +4462,7 @@ public static class NativeCursor {
     double offsetX = 0;
     double offsetY = 0;
 
-    if (_fillRemoteViewport) {
+    if (fillViewport) {
       if (frameAspect > viewAspect) {
         drawH = h;
         drawW = h * frameAspect;
@@ -4417,13 +4487,24 @@ public static class NativeCursor {
     return Rect.fromLTWH(offsetX, offsetY, drawW, drawH);
   }
 
-  Offset? _normalizeLocalToRemote(Offset local, Size viewportSize) {
-    final frameRect = _computeRemoteFrameDrawRect(viewportSize);
+  Offset? normalizeCoordinates({
+    required Offset local,
+    required Size viewportSize,
+    required int sourceWidth,
+    required int sourceHeight,
+    required bool fillViewport,
+  }) {
+    final frameRect = computeDisplayBounds(
+      viewportSize: viewportSize,
+      sourceWidth: sourceWidth,
+      sourceHeight: sourceHeight,
+      fillViewport: fillViewport,
+    );
     if (frameRect.width <= 0 || frameRect.height <= 0) return null;
 
     final inX = local.dx - frameRect.left;
     final inY = local.dy - frameRect.top;
-    if (!_fillRemoteViewport &&
+    if (!fillViewport &&
         (inX < 0 || inY < 0 || inX > frameRect.width || inY > frameRect.height)) {
       return null;
     }
@@ -4431,6 +4512,42 @@ public static class NativeCursor {
     final nx = (inX / frameRect.width).clamp(0.0, 1.0);
     final ny = (inY / frameRect.height).clamp(0.0, 1.0);
     return Offset(nx, ny);
+  }
+
+  Offset denormalizeCoordinates({
+    required double normX,
+    required double normY,
+    required int targetLeft,
+    required int targetTop,
+    required int targetWidth,
+    required int targetHeight,
+  }) {
+    final nx = normX.clamp(0.0, 1.0);
+    final ny = normY.clamp(0.0, 1.0);
+    final safeWidth = targetWidth.clamp(1, 32768);
+    final safeHeight = targetHeight.clamp(1, 32768);
+    final px = targetLeft + ((safeWidth - 1) * nx).round().clamp(0, safeWidth - 1);
+    final py = targetTop + ((safeHeight - 1) * ny).round().clamp(0, safeHeight - 1);
+    return Offset(px.toDouble(), py.toDouble());
+  }
+
+  Rect _computeRemoteFrameDrawRect(Size viewportSize) {
+    return computeDisplayBounds(
+      viewportSize: viewportSize,
+      sourceWidth: _remoteVirtualWidth > 0 ? _remoteVirtualWidth : _remoteFrameWidth,
+      sourceHeight: _remoteVirtualHeight > 0 ? _remoteVirtualHeight : _remoteFrameHeight,
+      fillViewport: _fillRemoteViewport,
+    );
+  }
+
+  Offset? _normalizeLocalToRemote(Offset local, Size viewportSize) {
+    return normalizeCoordinates(
+      local: local,
+      viewportSize: viewportSize,
+      sourceWidth: _remoteVirtualWidth > 0 ? _remoteVirtualWidth : _remoteFrameWidth,
+      sourceHeight: _remoteVirtualHeight > 0 ? _remoteVirtualHeight : _remoteFrameHeight,
+      fillViewport: _fillRemoteViewport,
+    );
   }
 
   Offset _cursorHotspotForShape(String shapeType) {
