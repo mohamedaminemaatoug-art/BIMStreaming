@@ -246,6 +246,8 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   bool _showTopOverlay = true;
   bool _showLeftFloatingButtons = true;
   bool _hideAllHud = false;
+  Timer? _hostMouseButtonSafetyTimer;
+  String? _hostMouseButtonDownType;
   DynamicLibrary? _user32Lib;
   DynamicLibrary? _gdi32Lib;
   void Function(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo)? _nativeMouseEvent;
@@ -1685,6 +1687,27 @@ Write-Output "$count,$width,$height"
     }
   }
 
+  void _armHostMouseButtonSafety(String buttonType) {
+    _hostMouseButtonDownType = buttonType;
+    _hostMouseButtonSafetyTimer?.cancel();
+    _hostMouseButtonSafetyTimer = Timer(const Duration(milliseconds: 1500), () {
+      final downType = _hostMouseButtonDownType;
+      if (downType == null) return;
+      if (downType == 'left') {
+        _emitNativeMouseEvent(win32.MOUSEEVENTF_LEFTUP);
+      } else if (downType == 'right') {
+        _emitNativeMouseEvent(win32.MOUSEEVENTF_RIGHTUP);
+      }
+      _hostMouseButtonDownType = null;
+    });
+  }
+
+  void _clearHostMouseButtonSafety() {
+    _hostMouseButtonSafetyTimer?.cancel();
+    _hostMouseButtonSafetyTimer = null;
+    _hostMouseButtonDownType = null;
+  }
+
   void _applyRemoteInputNative(String action, double? normX, double? normY, int wheelDelta) {
     if (!io.Platform.isWindows) return;
     try {
@@ -1710,15 +1733,19 @@ Write-Output "$count,$width,$height"
       switch (action) {
         case 'left_down':
           _emitNativeMouseEvent(win32.MOUSEEVENTF_LEFTDOWN);
+          _armHostMouseButtonSafety('left');
           break;
         case 'left_up':
           _emitNativeMouseEvent(win32.MOUSEEVENTF_LEFTUP);
+          _clearHostMouseButtonSafety();
           break;
         case 'right_down':
           _emitNativeMouseEvent(win32.MOUSEEVENTF_RIGHTDOWN);
+          _armHostMouseButtonSafety('right');
           break;
         case 'right_up':
           _emitNativeMouseEvent(win32.MOUSEEVENTF_RIGHTUP);
+          _clearHostMouseButtonSafety();
           break;
         case 'wheel':
           _emitNativeMouseEvent(win32.MOUSEEVENTF_WHEEL, data: wheelDelta);
@@ -2711,6 +2738,9 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     _pendingRemoteMoveTimer = null;
     _pendingRemoteMoveX = null;
     _pendingRemoteMoveY = null;
+    _hostMouseButtonSafetyTimer?.cancel();
+    _hostMouseButtonSafetyTimer = null;
+    _hostMouseButtonDownType = null;
     _keyboardLayoutTimer?.cancel();
     _keyStateSyncTimer?.cancel();
     _signalSubscription?.cancel();
@@ -4741,38 +4771,30 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     }
   }
 
+  MouseCursor _systemCursorForShape(String shapeType) {
+    switch (shapeType) {
+      case 'text':
+        return SystemMouseCursors.text;
+      case 'hand':
+        return SystemMouseCursors.click;
+      case 'resize-x':
+        return SystemMouseCursors.resizeLeftRight;
+      case 'resize-y':
+        return SystemMouseCursors.resizeUpDown;
+      case 'loading':
+      case 'wait':
+        return SystemMouseCursors.progress;
+      case 'pointer':
+      case 'arrow':
+      default:
+        return SystemMouseCursors.basic;
+    }
+  }
+
   Widget _buildRemoteCursorOverlay(Widget child) {
-    // Use interpolated position for smooth rendering.
-    final displayX = _remoteCursorDisplayX;
-    final displayY = _remoteCursorDisplayY;
-    final smoothI = 0.15;
-    final smoothX = displayX + ((_remoteCursorPredictX - displayX) * smoothI).clamp(-0.1, 0.1);
-    final smoothY = displayY + ((_remoteCursorPredictY - displayY) * smoothI).clamp(-0.1, 0.1);
-    final hotspot = _cursorHotspotForShape(_cursorShapeType);
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final width = constraints.maxWidth;
-        final height = constraints.maxHeight;
-        if (!width.isFinite || !height.isFinite || width <= 0 || height <= 0) {
-          return child;
-        }
-        final frameRect = _computeRemoteFrameDrawRect(Size(width, height));
-        if (frameRect.width <= 0 || frameRect.height <= 0) {
-          return child;
-        }
-
-        return Stack(
-          children: [
-            child,
-            Positioned(
-              left: frameRect.left + (smoothX * frameRect.width) - hotspot.dx,
-              top: frameRect.top + (smoothY * frameRect.height) - hotspot.dy,
-              child: _showRemoteCursor ? _buildCursorShape(_cursorShapeType) : const SizedBox(),
-            ),
-          ],
-        );
-      },
+    return MouseRegion(
+      cursor: _systemCursorForShape(_cursorShapeType),
+      child: child,
     );
   }
 
@@ -4853,7 +4875,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
         _remoteCursorPredictY = newY;
         _lastRemoteCursorUpdateMs = nowMs;
         _cursorShapeType = shape;
-        _showRemoteCursor = true;
+        _showRemoteCursor = false;
       });
       
       // Trigger animation frame updates for smooth motion
