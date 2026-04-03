@@ -14,6 +14,7 @@ import 'package:win32/win32.dart' as win32
     show
         SetCursorPos,
         GetCursorPos,
+    POINT,
         MOUSEEVENTF_LEFTDOWN,
         MOUSEEVENTF_LEFTUP,
         MOUSEEVENTF_RIGHTDOWN,
@@ -21,6 +22,40 @@ import 'package:win32/win32.dart' as win32
         MOUSEEVENTF_WHEEL;
 import '../services/signaling_client_service.dart';
 import '../services/remote_audio_service.dart';
+
+final class _CursorInfoNative extends Struct {
+  @Uint32()
+  external int cbSize;
+
+  @Uint32()
+  external int flags;
+
+  @IntPtr()
+  external int hCursor;
+
+  @Int32()
+  external int x;
+
+  @Int32()
+  external int y;
+}
+
+final class _IconInfoNative extends Struct {
+  @Int32()
+  external int fIcon;
+
+  @Uint32()
+  external int xHotspot;
+
+  @Uint32()
+  external int yHotspot;
+
+  @IntPtr()
+  external int hbmMask;
+
+  @IntPtr()
+  external int hbmColor;
+}
 
 class RemoteSupportPage extends StatefulWidget {
   final String deviceName;
@@ -71,7 +106,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   // ===== NEW: Cursor Optimization =====
   double _cursorPredictX = 0.5;
   double _cursorPredictY = 0.5;
-  int _cursorUpdateFreqMs = 10; // Increased from 4ms default to 10-15ms range
+  int _cursorUpdateFreqMs = 4; // Ultra-low-latency target for cursor/move updates
   final List<Offset> _cursorPositionHistory = [];
   // ===== END: Cursor Optimization =====
 
@@ -210,8 +245,14 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   bool _showLeftFloatingButtons = true;
   bool _hideAllHud = false;
   DynamicLibrary? _user32Lib;
+  DynamicLibrary? _gdi32Lib;
   void Function(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo)? _nativeMouseEvent;
   bool _nativeMouseEventInitFailed = false;
+  int Function(Pointer<_CursorInfoNative>)? _nativeGetCursorInfo;
+  int Function(int, Pointer<Utf16>)? _nativeLoadCursorW;
+  int Function(int, Pointer<_IconInfoNative>)? _nativeGetIconInfo;
+  int Function(int)? _nativeDeleteObject;
+  bool _nativeCursorApiInitFailed = false;
   int _captureMaxWidth = _defaultCaptureMaxWidth;
   int _captureJpegQuality = _defaultJpegQuality;
   String _captureResolutionLabel = 'Full Screen';
@@ -848,8 +889,18 @@ Write-Output "$count,$width,$height"
           _lastAppliedInputSequence = seq;
         }
         final action = (payload['action'] ?? '').toString();
+        const fastMouseActions = <String>{
+          'left_down',
+          'left_up',
+          'right_down',
+          'right_up',
+          'wheel',
+        };
         if (action == 'move' || action == 'move_delta') {
           _enqueueRemoteMove(payload);
+        } else if (fastMouseActions.contains(action)) {
+          // Apply click/wheel immediately to minimize perceived latency.
+          unawaited(_applyRemoteInput(payload));
         } else {
           _enqueueRemoteInput(() => _applyRemoteInput(payload));
         }
@@ -1271,7 +1322,8 @@ Write-Output "$count,$width,$height"
   void _sendWheelFromDelta(double deltaY) {
     if (!_canSendRemoteInput) return;
     _wheelAccumulator += deltaY;
-    const threshold = 20.0;
+    const threshold = 8.0;
+    var dispatched = false;
     while (_wheelAccumulator.abs() >= threshold) {
       final direction = _wheelAccumulator > 0 ? 1 : -1;
       // Flutter dy > 0 means scroll down, while Win32 wheel < 0 is down.
@@ -1283,6 +1335,19 @@ Write-Output "$count,$width,$height"
         normalizedY: _localCursorY,
       );
       _wheelAccumulator -= threshold * direction;
+      dispatched = true;
+    }
+
+    // Touchpads can emit tiny deltas that never cross threshold; send one step.
+    if (!dispatched && deltaY.abs() >= 1.0) {
+      final wheel = deltaY > 0 ? -120 : 120;
+      _sendInputEvent(
+        'wheel',
+        wheelDelta: wheel,
+        normalizedX: _localCursorX,
+        normalizedY: _localCursorY,
+      );
+      _wheelAccumulator = 0.0;
     }
   }
 
@@ -1888,7 +1953,7 @@ switch ($action) {
   void _schedulePendingRemoteMoveDispatch() {
     if (_remoteMoveInFlight) return;
     if (_pendingRemoteMoveTimer?.isActive == true) return;
-    _pendingRemoteMoveTimer = Timer(const Duration(milliseconds: 6), () {
+    _pendingRemoteMoveTimer = Timer(const Duration(milliseconds: 2), () {
       _pendingRemoteMoveTimer = null;
       unawaited(_dispatchPendingRemoteMove());
     });
@@ -3095,7 +3160,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                   onPointerHover: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
                       ? (event) {
                           final now = DateTime.now().millisecondsSinceEpoch;
-                          if (now - _lastPointerMoveMs < 2) return;
+                        if (now - _lastPointerMoveMs < 1) return;
                           _lastPointerMoveMs = now;
                           final p = normalize(event.localPosition);
                           if (p == null) return;
@@ -3105,7 +3170,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                   onPointerMove: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
                       ? (event) {
                           final now = DateTime.now().millisecondsSinceEpoch;
-                          if (now - _lastPointerMoveMs < 2) return;
+                        if (now - _lastPointerMoveMs < 1) return;
                           _lastPointerMoveMs = now;
                           final p = normalize(event.localPosition);
                           if (p == null) return;
@@ -3132,6 +3197,27 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                           if (event is PointerScrollEvent) {
                             _flushPendingMove();
                             _sendWheelFromDelta(event.scrollDelta.dy);
+                          }
+                        }
+                      : null,
+                  onPointerPanZoomUpdate: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                      ? (event) {
+                          final panDy = event.panDelta.dy;
+                          if (panDy.abs() > 0.01) {
+                            _flushPendingMove();
+                            _sendWheelFromDelta(panDy);
+                          }
+
+                          // Trackpad pinch fallback: map scale changes to wheel steps.
+                          final scaleDelta = event.scale - 1.0;
+                          if (scaleDelta.abs() >= 0.01) {
+                            final wheel = scaleDelta > 0 ? 120 : -120;
+                            _sendInputEvent(
+                              'wheel',
+                              wheelDelta: wheel,
+                              normalizedX: _localCursorX,
+                              normalizedY: _localCursorY,
+                            );
                           }
                         }
                       : null,
@@ -4291,118 +4377,98 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     }
   }
 
-  // ===== NEW: System Cursor Shape Detection (via PowerShell + Windows API) =====
-  /// Detects the current system cursor shape using PowerShell
-  /// Returns logical cursor type (pointer, text, hand, resize-x, resize-y, loading)
-  /// Light & fast - only sends the type string, not icon data (saves bandwidth)
-  Future<String> _detectSystemCursorShape() async {
-    if (!io.Platform.isWindows) return 'pointer';
-    
-    try {
-      // Use PowerShell to read cursor  info from Windows API
-      const script = r'''
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-
-[StructLayout(LayoutKind.Sequential)]
-public struct CURSORINFO {
-    public uint cbSize;
-    public uint flags;
-    public IntPtr hCursor;
-    public int x;
-    public int y;
-}
-
-[StructLayout(LayoutKind.Sequential)]
-public struct ICONINFO {
-    public bool fIcon;
-    public uint xHotspot;
-    public uint yHotspot;
-    public IntPtr hbmMask;
-    public IntPtr hbmColor;
-}
-
-public static class NativeCursor {
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetCursorInfo(ref CURSORINFO pci);
-    
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetIconInfo(IntPtr hIcon, out ICONINFO piconinfo);
-    
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern IntPtr LoadCursor(IntPtr hInstance, uint lpCursorName);
-    
-    public static string GetCursorType() {
-        CURSORINFO ci = new CURSORINFO();
-        ci.cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf(ci);
-        
-        if (!GetCursorInfo(ref ci) || ci.hCursor == IntPtr.Zero) {
-            return "pointer";
-        }
-        
-        // Get cursor address for matching
-        int cursorAddr = ci.hCursor.ToInt32();
-        
-        // Try to match against standard cursor IDs
-        // IDC IDs are typically: 32512 (arrow), 32513 (text), 32514 (wait), 
-        // 32649 (hand), 32515 (resize-x), 32516 (resize-y)
-        try {
-            IntPtr stdArrow = LoadCursor(IntPtr.Zero, 32512);
-            if (stdArrow == ci.hCursor) return "pointer";
-            
-            IntPtr stdText = LoadCursor(IntPtr.Zero, 32513);
-            if (stdText == ci.hCursor) return "text";
-            
-            IntPtr stdWait = LoadCursor(IntPtr.Zero, 32514);
-            if (stdWait == ci.hCursor) return "loading";
-            
-            IntPtr stdHand = LoadCursor(IntPtr.Zero, 32649);
-            if (stdHand == ci.hCursor) return "hand";
-            
-            IntPtr stdSizeWE = LoadCursor(IntPtr.Zero, 32515);
-            if (stdSizeWE == ci.hCursor) return "resize-x";
-            
-            IntPtr stdSizeNS = LoadCursor(IntPtr.Zero, 32516);
-            if (stdSizeNS == ci.hCursor) return "resize-y";
-        } catch {}
-        
-        // Fallback heuristic based on cursor address pattern
-        int offset = cursorAddr & 0xFF;
-        if (offset < 0x20) return "pointer";
-        if (offset < 0x40) return "text";
-        if (offset < 0x60) return "hand";
-        if (offset < 0x80) return "resize-x";
-        if (offset < 0xA0) return "resize-y";
-        if (offset < 0xC0) return "loading";
-        
-        return "pointer";
+  // ===== NEW: System Cursor Shape Detection (native WinAPI) =====
+  /// Detects the current system cursor shape on host using GetCursorInfo/GetIconInfo.
+  /// Returns logical cursor type (pointer, text, hand, resize-x, resize-y, loading).
+  void _ensureNativeCursorApi() {
+    if (_nativeCursorApiInitFailed) return;
+    if (_nativeGetCursorInfo != null && _nativeLoadCursorW != null) return;
+    if (!io.Platform.isWindows) {
+      _nativeCursorApiInitFailed = true;
+      return;
     }
-}
+    try {
+      _user32Lib ??= DynamicLibrary.open('user32.dll');
+      _gdi32Lib ??= DynamicLibrary.open('gdi32.dll');
+      _nativeGetCursorInfo ??= _user32Lib!.lookupFunction<
+          Int32 Function(Pointer<_CursorInfoNative>),
+          int Function(Pointer<_CursorInfoNative>)>('GetCursorInfo');
+      _nativeLoadCursorW ??= _user32Lib!.lookupFunction<
+          IntPtr Function(IntPtr, Pointer<Utf16>),
+          int Function(int, Pointer<Utf16>)>('LoadCursorW');
+      _nativeGetIconInfo ??= _user32Lib!.lookupFunction<
+          Int32 Function(IntPtr, Pointer<_IconInfoNative>),
+          int Function(int, Pointer<_IconInfoNative>)>('GetIconInfo');
+      _nativeDeleteObject ??= _gdi32Lib!.lookupFunction<
+          Int32 Function(IntPtr),
+          int Function(int)>('DeleteObject');
+    } catch (e) {
+      _nativeCursorApiInitFailed = true;
+      debugPrint('[Cursor] Native API init failed: $e');
+    }
+  }
 
-[NativeCursor]::GetCursorType()
-"@
-''';
+  Pointer<Utf16> _makeCursorResource(int id) => Pointer<Utf16>.fromAddress(id);
 
-      final result = await _runPowerShell(
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
-        timeout: const Duration(milliseconds: 500),
-      );
+  String _detectSystemCursorShape() {
+    if (!io.Platform.isWindows) return 'pointer';
+    _ensureNativeCursorApi();
+    final getCursorInfo = _nativeGetCursorInfo;
+    final loadCursorW = _nativeLoadCursorW;
+    if (getCursorInfo == null || loadCursorW == null) return 'pointer';
 
-      if (result.exitCode == 0) {
-        final output = '${result.stdout}'.trim().toLowerCase();
-        if (output.isNotEmpty) {
-          return output;
+    final ci = calloc<_CursorInfoNative>();
+    try {
+      ci.ref.cbSize = sizeOf<_CursorInfoNative>();
+      final ok = getCursorInfo(ci);
+      if (ok == 0) return 'pointer';
+      if ((ci.ref.flags & 0x00000001) == 0) return 'pointer';
+
+      final current = ci.ref.hCursor;
+      if (current == 0) return 'pointer';
+
+      final arrow = loadCursorW(0, _makeCursorResource(32512));
+      if (current == arrow) return 'pointer';
+      final ibeam = loadCursorW(0, _makeCursorResource(32513));
+      if (current == ibeam) return 'text';
+      final wait = loadCursorW(0, _makeCursorResource(32514));
+      if (current == wait) return 'loading';
+      final sizewe = loadCursorW(0, _makeCursorResource(32644)); // IDC_SIZEWE
+      if (current == sizewe) return 'resize-x';
+      final sizens = loadCursorW(0, _makeCursorResource(32645)); // IDC_SIZENS
+      if (current == sizens) return 'resize-y';
+      final hand = loadCursorW(0, _makeCursorResource(32649));
+      if (current == hand) return 'hand';
+
+      // Fallback probe using GetIconInfo to keep shape-sync robust for themed cursors.
+      final getIconInfo = _nativeGetIconInfo;
+      final deleteObject = _nativeDeleteObject;
+      if (getIconInfo != null && deleteObject != null) {
+        final icon = calloc<_IconInfoNative>();
+        try {
+          final iconOk = getIconInfo(current, icon);
+          if (iconOk != 0) {
+            final hx = icon.ref.xHotspot;
+            final hy = icon.ref.yHotspot;
+            if (hx <= 2 && hy <= 2) return 'pointer';
+            if (hx >= 8 && hx <= 12 && hy >= 8 && hy <= 12) return 'text';
+          }
+        } finally {
+          final mask = icon.ref.hbmMask;
+          final color = icon.ref.hbmColor;
+          if (mask != 0) deleteObject(mask);
+          if (color != 0) deleteObject(color);
+          calloc.free(icon);
         }
       }
-    } catch (e) {
-      print('[Cursor] Detection failed: $e');
-    }
 
-    // Fallback
-    return 'pointer';
+      return 'pointer';
+    } catch (e) {
+      debugPrint('[Cursor] Native detection failed: $e');
+      return 'pointer';
+    } finally {
+      calloc.free(ci);
+    }
   }
   // ===== END: System Cursor Shape Detection =====
 
@@ -4415,7 +4481,7 @@ public static class NativeCursor {
     
     // Start high-frequency cursor update loop
     // 60-120Hz = 8-16ms interval (NOT tied to frame refresh rate)
-    final cursorFreqMs = 10;  // 100 Hz by default
+    final cursorFreqMs = _cursorUpdateFreqMs;  // 250 Hz target
     
     _cursorUpdateTimer = Timer.periodic(Duration(milliseconds: cursorFreqMs), (_) {
       _cursorUpdateLoop();
@@ -4425,7 +4491,12 @@ public static class NativeCursor {
   /// Main cursor update loop - runs independently of frame capture
   /// This is what makes it feel "real-time" like TeamViewer
   void _cursorUpdateLoop() {
-    if (!_canSignal || !_remoteControlFocusNode.hasFocus) return;
+    if (!_canSignal) return;
+    if (!widget.sendLocalScreen && !_remoteControlFocusNode.hasFocus) return;
+
+    if (widget.sendLocalScreen) {
+      _syncLocalCursorFromSystem();
+    }
     
     // Update cursor prediction frame for smooth motion interpolation
     _updateCursorPredictionFrame();
@@ -4444,26 +4515,36 @@ public static class NativeCursor {
     }
   }
 
+  void _syncLocalCursorFromSystem() {
+    if (!io.Platform.isWindows) return;
+    final capWidth = _localCaptureWidth > 0 ? _localCaptureWidth : _screenWidthActual;
+    final capHeight = _localCaptureHeight > 0 ? _localCaptureHeight : _screenHeightActual;
+    if (capWidth <= 0 || capHeight <= 0) return;
+
+    final point = calloc<win32.POINT>();
+    try {
+      final ok = win32.GetCursorPos(point);
+      if (ok == 0) return;
+      final relX = point.ref.x - _localCaptureLeft;
+      final relY = point.ref.y - _localCaptureTop;
+      _localCursorX = (relX / capWidth).clamp(0.0, 1.0);
+      _localCursorY = (relY / capHeight).clamp(0.0, 1.0);
+    } finally {
+      calloc.free(point);
+    }
+  }
+
   /// Send cursor position update on SEPARATE channel with detected system cursor shape
   /// CRITICAL DIFFERENCE: This is NOT part of the frame transmission!
   /// Also sends cursor type (light: ~30 bytes total, not icon data)
   void _sendCursorUpdate() {
     if (!_canSignal) return;
     
-    // Detect system cursor shape (cached every 200ms to avoid expensive API calls)
+    // Native cursor-shape polling (fast enough for near-real-time sync).
     final now = DateTime.now().millisecondsSinceEpoch;
-    if (now - (_lastCursorShapeUpdateMs ?? 0) > 200 && !_cursorShapeDetectionInFlight) {
+    if (now - (_lastCursorShapeUpdateMs ?? 0) > 60) {
       _lastCursorShapeUpdateMs = now;
-      _cursorShapeDetectionInFlight = true;
-      unawaited(
-        _detectSystemCursorShape().then((shape) {
-          _cursorShapeType = shape;
-        }).catchError((Object e) {
-          debugPrint('[Cursor] Detection failed: $e');
-        }).whenComplete(() {
-          _cursorShapeDetectionInFlight = false;
-        }),
-      );
+      _cursorShapeType = _detectSystemCursorShape();
     }
     
     // Build cursor payload (very small: 2 floats + type string = ~30-50 bytes)
