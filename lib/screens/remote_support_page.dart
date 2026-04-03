@@ -38,9 +38,9 @@ class RemoteSupportPage extends StatefulWidget {
 }
 
 class _RemoteSupportPageState extends State<RemoteSupportPage> {
-  static const int _defaultCaptureMaxWidth = 2560;
-  static const int _defaultJpegQuality = 88;
-  static const int _defaultCaptureIntervalMs = 45;
+  static const int _defaultCaptureMaxWidth = 1280;
+  static const int _defaultJpegQuality = 50;
+  static const int _defaultCaptureIntervalMs = 150;
 
   bool _isConnected = true;
   String _connectionStatus = 'Connected';
@@ -57,7 +57,6 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   bool _isRebooting = false;
   bool _isScreenSharing = false;
   bool _isCapturing = false;
-  bool _screenFrameCaptureRequested = false;
   bool _isSessionPaused = false;
   bool _isSessionPausedRemote = false;
   bool _keyboardInputEnabledForUser2 = true;
@@ -72,12 +71,12 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   final List<Map<String, String>> _transfers = [];
   final List<Map<String, String>> _recordedFrames = [];
   Uint8List? _remoteScreenFrame;
-  String? _pendingRemoteScreenFrameData;
+  String? _pendingRemoteFrameData;
   int? _pendingRemoteFrameWidth;
   int? _pendingRemoteFrameHeight;
   int? _pendingRemoteScreenCount;
-  int? _pendingSelectedRemoteScreenIndex;
-  bool _remoteFrameUpdateScheduled = false;
+  int? _pendingRemoteScreenIndex;
+  Timer? _pendingRemoteFrameTimer;
   Timer? _sessionTimer;
   Timer? _screenShareTimer;
   Timer? _overlayHideTimer;
@@ -88,10 +87,6 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   int _sessionSeconds = 0;
   final FocusNode _remoteControlFocusNode = FocusNode();
   int _lastPointerMoveMs = 0;
-  int _lastKeyboardFocusRequestMs = 0;
-  int _lastKeyboardSendWarnMs = 0;
-  int _lastRemoteInputBlockWarnMs = 0;
-  bool _keyboardV2Healthy = false;
   bool _rightButtonPressed = false;
   bool _isClosingSession = false;
   int _remoteFrameWidth = 16;
@@ -107,6 +102,8 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   int _lastCaptureStatusSentMs = 0;
   double? _lastSentMoveX;
   double? _lastSentMoveY;
+  Offset? _pendingMove;
+  Timer? _pendingMoveTimer;
   double _wheelAccumulator = 0.0;
   Timer? _keyboardLayoutTimer;
   Timer? _keyStateSyncTimer;
@@ -125,7 +122,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   int _captureMaxWidth = _defaultCaptureMaxWidth;
   int _captureJpegQuality = _defaultJpegQuality;
   String _captureResolutionLabel = 'Full Screen';
-  String _qualityLabel = 'High';
+  String _qualityLabel = 'Medium';
   String _autoQualityMode = 'Manual';
   int _captureFrameIntervalMs = _defaultCaptureIntervalMs;
   String _screenshotPath = '';
@@ -211,9 +208,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
       }
     } catch (_) {
       // Fall back to BimStreaming defaults if path creation fails
-      final baseDir = io.Directory(
-        '${io.Platform.environment['USERPROFILE'] ?? '.'}\\BimStreaming',
-      );
+      final baseDir = io.Directory('${io.Platform.environment['USERPROFILE'] ?? '.'}\\BimStreaming');
       try {
         baseDir.createSync(recursive: true);
         _screenshotPath = '${baseDir.path}\\screenshot';
@@ -261,13 +256,10 @@ $count = [System.Windows.Forms.Screen]::AllScreens.Count
 Write-Output $count
 ''';
     try {
-      final result = await _runPowerShell([
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-Command',
-        script,
-      ], timeout: const Duration(seconds: 4));
+      final result = await _runPowerShell(
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+        timeout: const Duration(seconds: 4),
+      );
       if (result.exitCode != 0) return;
       final count = int.tryParse('${result.stdout}'.trim()) ?? 1;
       if (!mounted) return;
@@ -288,37 +280,27 @@ Write-Output $count
 
   void _connectSessionSignalIfAvailable() {
     if (!_canSignal) return;
-    _signalSubscription = widget.signalingService!.events.listen(
-      _handleSignalEvent,
-    );
+    _signalSubscription = widget.signalingService!.events.listen(_handleSignalEvent);
   }
 
   void _startAutomaticScreenShareIfPossible() {
-    if (!widget.sendLocalScreen ||
-        widget.signalingService == null ||
-        !_isConnected) {
+    if (!widget.sendLocalScreen || widget.signalingService == null || !_isConnected) {
       return;
     }
     _isScreenSharing = true;
     _screenShareTimer?.cancel();
-    _screenShareTimer = Timer.periodic(
-      Duration(milliseconds: _captureFrameIntervalMs),
-      (_) {
-        _sendScreenFrame();
-      },
-    );
+    _screenShareTimer = Timer.periodic(Duration(milliseconds: _captureFrameIntervalMs), (_) {
+      _sendScreenFrame();
+    });
     _sendScreenFrame();
   }
 
   void _restartScreenShareTimerIfNeeded() {
     if (!widget.sendLocalScreen || !_isScreenSharing) return;
     _screenShareTimer?.cancel();
-    _screenShareTimer = Timer.periodic(
-      Duration(milliseconds: _captureFrameIntervalMs),
-      (_) {
-        _sendScreenFrame();
-      },
-    );
+    _screenShareTimer = Timer.periodic(Duration(milliseconds: _captureFrameIntervalMs), (_) {
+      _sendScreenFrame();
+    });
   }
 
   void _revealOverlayTemporarily() {
@@ -365,8 +347,7 @@ Write-Output $count
       final prev = _lastNetSampleAt ?? now;
       final elapsed = now.difference(prev).inMilliseconds.clamp(1, 1000000);
       final frameDelta = _framesReceived - _lastNetFrameCounter;
-      final kbps = ((frameDelta * 140.0 * 8.0) / (elapsed / 1000.0))
-          .toStringAsFixed(0);
+      final kbps = ((frameDelta * 140.0 * 8.0) / (elapsed / 1000.0)).toStringAsFixed(0);
       final q = _pingMs <= 50
           ? 'Excellent'
           : (_pingMs <= 100 ? 'Good' : (_pingMs <= 180 ? 'Fair' : 'Poor'));
@@ -392,20 +373,22 @@ Write-Output $count
 
   Future<void> _refreshKeyboardLayout({required bool sendSync}) async {
     if (!io.Platform.isWindows) return;
-    final result = await _runPowerShell([
-      '-NoProfile',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-Command',
-      r"$v=(Get-ItemProperty -Path 'HKCU:\Keyboard Layout\Preload' -ErrorAction SilentlyContinue).'1'; if([string]::IsNullOrWhiteSpace($v)){$v='unknown'}; Write-Output $v",
-    ], timeout: const Duration(seconds: 3));
+    final result = await _runPowerShell(
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        r"$v=(Get-ItemProperty -Path 'HKCU:\Keyboard Layout\Preload' -ErrorAction SilentlyContinue).'1'; if([string]::IsNullOrWhiteSpace($v)){$v='unknown'}; Write-Output $v",
+      ],
+      timeout: const Duration(seconds: 3),
+    );
     var layout = '${result.stdout}'.trim();
     if (layout.isEmpty) {
       layout = 'unknown';
     }
     final family = _classifyLayoutFamily(layout);
-    final changed =
-        layout != _localKeyboardLayout || family != _localKeyboardLayoutFamily;
+    final changed = layout != _localKeyboardLayout || family != _localKeyboardLayoutFamily;
     if (!changed) return;
     if (mounted) {
       setState(() {
@@ -430,19 +413,13 @@ Write-Output $count
 
   String _classifyLayoutFamily(String layout) {
     final normalized = layout.toLowerCase();
-    if (normalized.contains('040c') ||
-        normalized.contains('080c') ||
-        normalized.contains('0c0c') ||
-        normalized.contains('100c')) {
+    if (normalized.contains('040c') || normalized.contains('080c') || normalized.contains('0c0c') || normalized.contains('100c')) {
       return 'azerty';
     }
     if (normalized.contains('0407') || normalized.contains('0807')) {
       return 'qwertz';
     }
-    if (normalized.contains('0409') ||
-        normalized.contains('0809') ||
-        normalized.contains('0c09') ||
-        normalized.contains('1009')) {
+    if (normalized.contains('0409') || normalized.contains('0809') || normalized.contains('0c09') || normalized.contains('1009')) {
       return 'qwerty';
     }
     return 'unknown';
@@ -453,9 +430,7 @@ Write-Output $count
     try {
       final client = io.HttpClient();
       client.connectionTimeout = const Duration(seconds: 2);
-      final req = await client.getUrl(
-        Uri.parse('http://127.0.0.1:8080/healthz'),
-      );
+      final req = await client.getUrl(Uri.parse('http://127.0.0.1:8080/healthz'));
       final res = await req.close();
       await res.drain<void>();
       sw.stop();
@@ -534,24 +509,29 @@ Write-Output $count
   void _applyAutoQuality() {
     if (_autoQualityMode != 'Auto') return;
     // Auto-adjust quality based on bandwidth and ping
-    // Excellent (ping <= 50ms): High quality
-    // Good (ping <= 100ms): Medium quality
-    // Fair (ping <= 180ms): Low quality
-    // Poor (ping > 180ms): Very Low quality
+    // Excellent (ping <= 50ms): Medium quality
+    // Good (ping <= 100ms): Low quality
+    // Fair (ping <= 180ms): Very Low quality
+    // Poor (ping > 180ms): Ultra Low quality
     final newQuality = _pingMs <= 40
-        ? 96
-        : (_pingMs <= 80 ? 90 : (_pingMs <= 140 ? 75 : 55));
+        ? 60
+        : (_pingMs <= 80
+            ? 50
+            : (_pingMs <= 140
+                ? 45
+                : 40));
     final newIntervalMs = _pingMs <= 40
-        ? 28
-        : (_pingMs <= 80 ? 38 : (_pingMs <= 140 ? 52 : 70));
-    if (_captureJpegQuality != newQuality ||
-        _captureFrameIntervalMs != newIntervalMs) {
-      setState(() {
-        _captureJpegQuality = newQuality;
-        _captureFrameIntervalMs = newIntervalMs;
-      });
-      _restartScreenShareTimerIfNeeded();
-    }
+        ? 100
+        : (_pingMs <= 80
+            ? 150
+            : (_pingMs <= 140
+                ? 200
+                : 250));
+    setState(() {
+      _captureJpegQuality = newQuality;
+      _captureFrameIntervalMs = newIntervalMs;
+    });
+    _restartScreenShareTimerIfNeeded();
   }
 
   void _sendDisplayConfig() {
@@ -613,26 +593,20 @@ Write-Output $count
     if (rawData is! Map) return;
 
     final data = Map<String, dynamic>.from(rawData);
-    final messageSessionId = (data['sessionId'] ?? data['session_id'] ?? '')
-        .toString();
+    final messageSessionId = (data['sessionId'] ?? data['session_id'] ?? '').toString();
     final expectedSessionId = (widget.sessionId ?? '').toString();
-    if (expectedSessionId.isNotEmpty &&
-        messageSessionId.isNotEmpty &&
-        messageSessionId != expectedSessionId) {
+    if (expectedSessionId.isNotEmpty && messageSessionId.isNotEmpty && messageSessionId != expectedSessionId) {
       return;
     }
 
     final fromUserId = (data['fromUserId'] ?? data['from'] ?? '').toString();
-    final fromInstanceId =
-        (data['fromInstanceId'] ?? data['from_instance'] ?? '').toString();
+    final fromInstanceId = (data['fromInstanceId'] ?? data['from_instance'] ?? '').toString();
     if (fromUserId.isEmpty) {
       return;
     }
     if (fromUserId == widget.currentUserId) {
       final localInstanceId = widget.signalingService?.clientInstanceId ?? '';
-      if (localInstanceId.isEmpty ||
-          fromInstanceId.isEmpty ||
-          fromInstanceId == localInstanceId) {
+      if (localInstanceId.isEmpty || fromInstanceId.isEmpty || fromInstanceId == localInstanceId) {
         return;
       }
     }
@@ -648,13 +622,7 @@ Write-Output $count
 
     if (messageType == 'input_event') {
       if (widget.sendLocalScreen) {
-        final action = (payload['action'] ?? '').toString();
-        if (_isKeyboardRemoteAction(action)) {
-          // Handle keyboard immediately so mouse traffic cannot starve typing.
-          unawaited(_applyRemoteInput(payload));
-        } else {
-          _enqueueRemoteInput(() => _applyRemoteInput(payload));
-        }
+        _enqueueRemoteInput(() => _applyRemoteInput(payload));
       }
       return;
     }
@@ -750,8 +718,7 @@ Write-Output $count
           if (resolution == '720p') _captureMaxWidth = 1280;
           if (resolution == '1080p') _captureMaxWidth = 1920;
           if (resolution == '540p') _captureMaxWidth = 960;
-          if (resolution == 'Adapted Resolution')
-            _captureMaxWidth = _defaultCaptureMaxWidth;
+          if (resolution == 'Adapted Resolution') _captureMaxWidth = _defaultCaptureMaxWidth;
           _fillRemoteViewport = resolution == 'Full Screen';
         }
         if (quality.isNotEmpty) {
@@ -786,9 +753,7 @@ Write-Output $count
     }
 
     if (messageType != 'screen_frame' && messageType != 'input_event') {
-      print(
-        '[RemoteSupportPage] Received $messageType from $fromUserId: $payload',
-      );
+      print('[RemoteSupportPage] Received $messageType from $fromUserId: $payload');
     }
 
     setState(() {
@@ -803,9 +768,7 @@ Write-Output $count
             _panelMode = 'chat';
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (_chatScrollController.hasClients) {
-                _chatScrollController.jumpTo(
-                  _chatScrollController.position.maxScrollExtent,
-                );
+                _chatScrollController.jumpTo(_chatScrollController.position.maxScrollExtent);
               }
             });
           }
@@ -814,9 +777,7 @@ Write-Output $count
           final fileName = (payload['fileName'] ?? '').toString();
           final fileData = (payload['fileData'] ?? '').toString();
           final rawSize = payload['fileSize'];
-          final fileSize = rawSize is int
-              ? rawSize
-              : (rawSize is double ? rawSize.toInt() : 0);
+          final fileSize = rawSize is int ? rawSize : (rawSize is double ? rawSize.toInt() : 0);
           if (fileName.isNotEmpty) {
             _isConnected = true;
             _connectionStatus = 'Connected';
@@ -843,7 +804,7 @@ Write-Output $count
             if (_reconnectTimer != null) {
               _stopReconnectLoop();
             }
-            _pendingRemoteScreenFrameData = frameData;
+            _pendingRemoteFrameData = frameData;
             final fw = payload['frameWidth'];
             final fh = payload['frameHeight'];
             final sc = payload['screenCount'];
@@ -856,55 +817,11 @@ Write-Output $count
               _pendingRemoteScreenCount = sc.toInt();
             }
             if (si is num && si.toInt() >= 0) {
-              _pendingSelectedRemoteScreenIndex = si.toInt();
-            }
-            _framesReceived++;
-            if (_framesReceived % 30 == 0) {
-              print(
-                '[ScreenShare] Frame received #$_framesReceived (queued latest only) from $fromUserId',
-              );
+              _pendingRemoteScreenIndex = si.toInt();
             }
             _scheduleRemoteFrameApply();
           }
           break;
-      }
-    });
-  }
-
-  void _scheduleRemoteFrameApply() {
-    if (_remoteFrameUpdateScheduled || !mounted) {
-      return;
-    }
-    _remoteFrameUpdateScheduled = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _remoteFrameUpdateScheduled = false;
-      if (!mounted) return;
-      final frameData = _pendingRemoteScreenFrameData;
-      if (frameData == null || frameData.isEmpty) return;
-      try {
-        final decoded = base64Decode(frameData);
-        setState(() {
-          _remoteScreenFrame = decoded;
-          final fw = _pendingRemoteFrameWidth;
-          final fh = _pendingRemoteFrameHeight;
-          final sc = _pendingRemoteScreenCount;
-          final si = _pendingSelectedRemoteScreenIndex;
-          if (fw != null && fh != null && fw > 0 && fh > 0) {
-            _remoteFrameWidth = fw;
-            _remoteFrameHeight = fh;
-          }
-          if (sc != null && sc > 0) {
-            _remoteScreenCount = sc;
-          }
-          if (si != null && si >= 0) {
-            _selectedRemoteScreenIndex = si;
-          }
-        });
-      } catch (e) {
-        print('[ScreenShare] Decode error: $e');
-        if (mounted) {
-          setState(() => _remoteScreenFrame = null);
-        }
       }
     });
   }
@@ -937,6 +854,9 @@ Write-Output $count
     _sessionTimer?.cancel();
     _screenShareTimer?.cancel();
     _stopReconnectLoop();
+    _pendingMoveTimer?.cancel();
+    _pendingMoveTimer = null;
+    _pendingMove = null;
 
     await _restoreWindowStateForSessionExit();
 
@@ -1021,22 +941,14 @@ Write-Output $count
     _reconnectAttempts = 0;
   }
 
-  bool get _canSendRemoteInput => _canSignal && !widget.sendLocalScreen;
-
-  void _ensureRemoteKeyboardFocus() {
-    if (widget.sendLocalScreen || !mounted) return;
-    if (_remoteControlFocusNode.hasFocus) return;
-    final now = DateTime.now().millisecondsSinceEpoch;
-    if (now - _lastKeyboardFocusRequestMs < 150) return;
-    _lastKeyboardFocusRequestMs = now;
-    _remoteControlFocusNode.requestFocus();
-  }
+  bool get _canSendRemoteInput =>
+      _canSignal &&
+      _isConnected &&
+      !widget.sendLocalScreen;
 
   void _startKeyStateSync() {
     _keyStateSyncTimer?.cancel();
-    _keyStateSyncTimer = Timer.periodic(const Duration(milliseconds: 1500), (
-      _,
-    ) {
+    _keyStateSyncTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) {
       _sendKeyStateSync();
     });
   }
@@ -1065,14 +977,6 @@ Write-Output $count
     _remoteInputQueue = _remoteInputQueue.then((_) => task()).catchError((_) {
       // Keep later input events flowing if one injection fails.
     });
-  }
-
-  bool _isKeyboardRemoteAction(String action) {
-    return action == 'key_event' ||
-        action == 'key_press' ||
-        action == 'key_state_sync' ||
-        action == 'reset_all_keys' ||
-        action == 'layout_sync';
   }
 
   void _sendWheelFromDelta(double deltaY) {
@@ -1115,18 +1019,14 @@ Write-Output $count
     _stopManagedRepeat(logical);
     _repeatStartTimers[logical] = Timer(const Duration(milliseconds: 320), () {
       _repeatStartTimers.remove(logical);
-      if (!_pressedLogicalKeys.contains(logical) || !_canSendRemoteInput)
-        return;
-      _repeatTickTimers[logical] = Timer.periodic(
-        const Duration(milliseconds: 42),
-        (_) {
-          if (!_pressedLogicalKeys.contains(logical) || !_canSendRemoteInput) {
-            _stopManagedRepeat(logical);
-            return;
-          }
-          _sendKeyboardEvent(event, phase: 'down');
-        },
-      );
+      if (!_pressedLogicalKeys.contains(logical) || !_canSendRemoteInput) return;
+      _repeatTickTimers[logical] = Timer.periodic(const Duration(milliseconds: 42), (_) {
+        if (!_pressedLogicalKeys.contains(logical) || !_canSendRemoteInput) {
+          _stopManagedRepeat(logical);
+          return;
+        }
+        _sendKeyboardEvent(event, phase: 'down');
+      });
     });
   }
 
@@ -1147,11 +1047,7 @@ Write-Output $count
   }
 
   bool _sendRemoteAudioPayload(Map<String, dynamic> payload) {
-    if (_audioUdpReady &&
-        payload['kind'] == 'packet' &&
-        _audioUdpSocket != null &&
-        _audioPeerAddress != null &&
-        _audioPeerPort != null) {
+    if (_audioUdpReady && payload['kind'] == 'packet' && _audioUdpSocket != null && _audioPeerAddress != null && _audioPeerPort != null) {
       final envelope = {
         'type': 'remote_audio_udp',
         'sessionId': (widget.sessionId ?? '').toString(),
@@ -1160,11 +1056,7 @@ Write-Output $count
       };
       try {
         final bytes = utf8.encode(jsonEncode(envelope));
-        final sent = _audioUdpSocket!.send(
-          bytes,
-          _audioPeerAddress!,
-          _audioPeerPort!,
-        );
+        final sent = _audioUdpSocket!.send(bytes, _audioPeerAddress!, _audioPeerPort!);
         if (sent > 0) {
           return true;
         }
@@ -1180,20 +1072,14 @@ Write-Output $count
     final a = (widget.currentUserId ?? '').toString();
     final b = widget.deviceId;
     final seed = '$sid|$a|$b|bim-audio-v1';
-    final hash = seed.codeUnits.fold<int>(
-      0,
-      (acc, v) => (acc * 131 + v) & 0x7fffffff,
-    );
+    final hash = seed.codeUnits.fold<int>(0, (acc, v) => (acc * 131 + v) & 0x7fffffff);
     return hash.toRadixString(16);
   }
 
   Future<void> _initAudioUdpSocket() async {
     if (_audioUdpSocket != null) return;
     try {
-      final socket = await io.RawDatagramSocket.bind(
-        io.InternetAddress.anyIPv4,
-        0,
-      );
+      final socket = await io.RawDatagramSocket.bind(io.InternetAddress.anyIPv4, 0);
       socket.readEventsEnabled = true;
       socket.listen((event) {
         if (event != io.RawSocketEvent.read) return;
@@ -1201,16 +1087,12 @@ Write-Output $count
         if (dg == null) return;
         Map<String, dynamic> decoded;
         try {
-          decoded = Map<String, dynamic>.from(
-            jsonDecode(utf8.decode(dg.data)) as Map,
-          );
+          decoded = Map<String, dynamic>.from(jsonDecode(utf8.decode(dg.data)) as Map);
         } catch (_) {
           return;
         }
         if ((decoded['type'] ?? '') != 'remote_audio_udp') return;
-        if ((decoded['sessionId'] ?? '').toString() !=
-            (widget.sessionId ?? '').toString())
-          return;
+        if ((decoded['sessionId'] ?? '').toString() != (widget.sessionId ?? '').toString()) return;
         if ((decoded['token'] ?? '').toString() != _audioUdpToken) return;
         final payloadRaw = decoded['payload'];
         if (payloadRaw is! Map) return;
@@ -1342,8 +1224,7 @@ Write-Output $count
     _sendRemoteAudioPayload({'kind': 'cap_probe', 'version': 1});
     _remoteAudioCompatTimer?.cancel();
     _remoteAudioCompatTimer = Timer(const Duration(seconds: 8), () {
-      if (!mounted || _remoteAudioPeerCompatible || _remoteAudioCompatWarned)
-        return;
+      if (!mounted || _remoteAudioPeerCompatible || _remoteAudioCompatWarned) return;
       _remoteAudioCompatWarned = true;
       _showMessage(
         context,
@@ -1357,10 +1238,7 @@ Write-Output $count
     } else {
       await _remoteAudioService.startClient(volume: _remoteAudioVolume);
       // Request host config as soon as client enables audio.
-      _sendRemoteAudioPayload({
-        'kind': 'config',
-        'bitrateKbps': _remoteAudioBitrateKbps,
-      });
+      _sendRemoteAudioPayload({'kind': 'config', 'bitrateKbps': _remoteAudioBitrateKbps});
     }
     _remoteAudioActive = true;
   }
@@ -1384,23 +1262,7 @@ Write-Output $count
     if (wheelDelta != null) payload['wheelDelta'] = wheelDelta;
     if (key != null && key.isNotEmpty) payload['key'] = key;
     if (extra != null && extra.isNotEmpty) payload.addAll(extra);
-    final sent = _sendSessionPayload(
-      messageType: 'input_event',
-      payload: payload,
-    );
-    if (!sent &&
-        (action == 'key_event' ||
-            action == 'key_press' ||
-            action == 'key_state_sync' ||
-            action == 'reset_all_keys')) {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      if (now - _lastKeyboardSendWarnMs > 2000) {
-        _lastKeyboardSendWarnMs = now;
-        print(
-          '[RemoteInput] Keyboard event dropped because signaling send failed: $action',
-        );
-      }
-    }
+    _sendSessionPayload(messageType: 'input_event', payload: payload);
   }
 
   void _sendKeyboardEvent(KeyEvent event, {required String phase}) {
@@ -1413,14 +1275,10 @@ Write-Output $count
     final character = event.character ?? '';
     final isSpace = character == ' ' || keyName.toLowerCase() == 'space';
     final hw = HardwareKeyboard.instance;
-    final altGraphPressed = hw.logicalKeysPressed.contains(
-      LogicalKeyboardKey.altGraph,
-    );
-    final isNumpad =
-        keyName.toLowerCase().contains('numpad') ||
-        (physicalId >= 0x00070059 && physicalId <= 0x00070063);
+    final altGraphPressed = hw.logicalKeysPressed.contains(LogicalKeyboardKey.altGraph);
+    final isNumpad = keyName.toLowerCase().contains('numpad') || (physicalId >= 0x00070059 && physicalId <= 0x00070063);
     final legacyKey = character.isNotEmpty
-        ? (isSpace ? 'Space' : character)
+      ? (isSpace ? 'Space' : character)
         : (keyName.isNotEmpty ? keyName : event.logicalKey.keyLabel);
     final modernPayload = <String, dynamic>{
       'phase': phase,
@@ -1446,17 +1304,14 @@ Write-Output $count
 
     // Backward compatibility for older peers that only understand key_press.
     // Send only on key-down to avoid duplicate characters on old receivers.
-    if (phase == 'down' &&
-        legacyKey.isNotEmpty &&
-        !_isModifierKey({'keyName': keyName})) {
+    if (phase == 'down' && legacyKey.isNotEmpty && !_isModifierKey({'keyName': keyName})) {
       _sendInputEvent(
         'key_press',
         key: legacyKey,
-        extra: {'legacyCompat': true},
+        extra: {
+          'legacyCompat': true,
+        },
       );
-      if (!_keyboardV2Healthy && character.isNotEmpty) {
-        _sendInputEvent('key_press', key: character);
-      }
     }
   }
 
@@ -1474,19 +1329,13 @@ Write-Output $count
       'wheel',
     };
     if (!_mouseInputEnabledForUser2 && mouseActions.contains(action)) {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      if (now - _lastRemoteInputBlockWarnMs > 2000) {
-        _lastRemoteInputBlockWarnMs = now;
-        print('[RemoteInput] Mouse action blocked by input policy: $action');
-      }
       return;
     }
-    // Never hard-block keyboard events here; stale input policy sync can
-    // otherwise disable all typing for an active remote session.
-    if (action == 'key_press' &&
-        payload['legacyCompat'] == true &&
-        _keyboardV2Healthy) {
-      // Ignore compatibility duplicate only when modern keyboard path is healthy.
+    if (!_keyboardInputEnabledForUser2 && (action == 'key_press' || action == 'key_event')) {
+      return;
+    }
+    if (action == 'key_press' && payload['legacyCompat'] == true) {
+      // Ignore compatibility duplicate on updated receivers.
       return;
     }
     if (action == 'reset_all_keys') {
@@ -1499,15 +1348,12 @@ Write-Output $count
     }
     if (action == 'layout_sync') {
       _remoteKeyboardLayout = (payload['layout'] ?? 'unknown').toString();
-      _remoteKeyboardLayoutFamily = (payload['layoutFamily'] ?? 'unknown')
-          .toString();
+      _remoteKeyboardLayoutFamily = (payload['layoutFamily'] ?? 'unknown').toString();
       _sendKeysStrokeCache.clear();
       return;
     }
-    if (action == 'key_event' ||
-        (action == 'key_press' && payload.containsKey('phase'))) {
-      final ok = await _applyRemoteKeyboardEvent(payload);
-      _keyboardV2Healthy = ok;
+    if (action == 'key_event' || (action == 'key_press' && payload.containsKey('phase'))) {
+      await _applyRemoteKeyboardEvent(payload);
       return;
     }
     if (action == 'move') {
@@ -1523,8 +1369,7 @@ Write-Output $count
         : 0;
     final key = (payload['key'] ?? '').toString();
 
-    final script =
-        r'''
+    final script = r'''
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
@@ -1599,43 +1444,37 @@ switch ($action) {
   }
 }
 '''
-            .replaceAll('__ACTION__', action.replaceAll("'", "''"))
-            .replaceAll('__X__', x == null ? '-1' : x.toStringAsFixed(6))
-            .replaceAll('__Y__', y == null ? '-1' : y.toStringAsFixed(6))
-            .replaceAll('__WHEEL__', wheelDelta.toString())
-            .replaceAll('__CAP_LEFT__', _localCaptureLeft.toString())
-            .replaceAll('__CAP_TOP__', _localCaptureTop.toString())
-            .replaceAll('__CAP_WIDTH__', _localCaptureWidth.toString())
-            .replaceAll('__CAP_HEIGHT__', _localCaptureHeight.toString())
-            .replaceAll('__KEY__', key.replaceAll("'", "''"));
+        .replaceAll('__ACTION__', action.replaceAll("'", "''"))
+        .replaceAll('__X__', x == null ? '-1' : x.toStringAsFixed(6))
+        .replaceAll('__Y__', y == null ? '-1' : y.toStringAsFixed(6))
+        .replaceAll('__WHEEL__', wheelDelta.toString())
+        .replaceAll('__CAP_LEFT__', _localCaptureLeft.toString())
+        .replaceAll('__CAP_TOP__', _localCaptureTop.toString())
+        .replaceAll('__CAP_WIDTH__', _localCaptureWidth.toString())
+        .replaceAll('__CAP_HEIGHT__', _localCaptureHeight.toString())
+        .replaceAll('__KEY__', key.replaceAll("'", "''"));
 
     try {
-      await _runPowerShell([
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-Command',
-        script,
-      ], timeout: const Duration(seconds: 2));
+      await _runPowerShell(
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+        timeout: const Duration(seconds: 2),
+      );
     } catch (_) {
       // Ignore remote input injection failures silently to keep session alive.
     }
   }
 
-  Future<bool> _applyRemoteKeyboardEvent(Map<String, dynamic> payload) async {
+  Future<void> _applyRemoteKeyboardEvent(Map<String, dynamic> payload) async {
     final phase = (payload['phase'] ?? 'down').toString();
-    if (phase != 'down' && phase != 'up') return false;
+    if (phase != 'down' && phase != 'up') return;
     final isModifier = _isModifierKey(payload);
     if (phase == 'up' && !isModifier) {
       // Non-modifier keys are injected as a full tap on key-down.
-      return true;
+      return;
     }
     final vkCode = _resolveVirtualKey(payload);
     final keyStroke = _buildSendKeysStroke(payload);
-    final character = _mapCharacterForLayout(
-      (payload['character'] ?? '').toString(),
-      payload,
-    );
+    final character = _mapCharacterForLayout((payload['character'] ?? '').toString(), payload);
     final isNumpad = payload['isNumpad'] == true;
     final useCtrl = payload['ctrl'] == true;
     final useAlt = payload['alt'] == true;
@@ -1650,8 +1489,7 @@ switch ($action) {
         (useAltGraph || !useAlt);
     final unicode = shouldSendUnicode ? character.runes.first : 0;
 
-    final script =
-        r'''
+    final script = r'''
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type @"
 using System;
@@ -1760,24 +1598,19 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
   [System.Windows.Forms.SendKeys]::SendWait($stroke)
 }
 '''
-            .replaceAll('__PHASE__', phase)
-            .replaceAll('__VK__', vkCode.toString())
-            .replaceAll('__UNICODE__', unicode.toString())
-            .replaceAll('__SEND_UNICODE__', shouldSendUnicode ? '1' : '0')
-            .replaceAll('__STROKE__', keyStroke.replaceAll("'", "''"));
+        .replaceAll('__PHASE__', phase)
+        .replaceAll('__VK__', vkCode.toString())
+        .replaceAll('__UNICODE__', unicode.toString())
+        .replaceAll('__SEND_UNICODE__', shouldSendUnicode ? '1' : '0')
+        .replaceAll('__STROKE__', keyStroke.replaceAll("'", "''"));
 
     try {
-      final result = await _runPowerShell([
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-Command',
-        script,
-      ], timeout: const Duration(seconds: 2));
-      return result.exitCode == 0;
+      await _runPowerShell(
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+        timeout: const Duration(seconds: 2),
+      );
     } catch (_) {
       // Keep session alive on key injection failures.
-      return false;
     }
   }
 
@@ -1787,22 +1620,10 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     final desiredAlt = payload['alt'] == true;
     final desiredMeta = payload['meta'] == true;
 
-    await _applyRemoteKeyboardEvent({
-      'phase': desiredShift ? 'down' : 'up',
-      'keyName': 'shift',
-    });
-    await _applyRemoteKeyboardEvent({
-      'phase': desiredCtrl ? 'down' : 'up',
-      'keyName': 'control',
-    });
-    await _applyRemoteKeyboardEvent({
-      'phase': desiredAlt ? 'down' : 'up',
-      'keyName': 'alt',
-    });
-    await _applyRemoteKeyboardEvent({
-      'phase': desiredMeta ? 'down' : 'up',
-      'keyName': 'meta',
-    });
+    await _applyRemoteKeyboardEvent({'phase': desiredShift ? 'down' : 'up', 'keyName': 'shift'});
+    await _applyRemoteKeyboardEvent({'phase': desiredCtrl ? 'down' : 'up', 'keyName': 'control'});
+    await _applyRemoteKeyboardEvent({'phase': desiredAlt ? 'down' : 'up', 'keyName': 'alt'});
+    await _applyRemoteKeyboardEvent({'phase': desiredMeta ? 'down' : 'up', 'keyName': 'meta'});
   }
 
   Future<void> _resetRemoteInjectedKeys() async {
@@ -1813,9 +1634,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
   }
 
   int _resolveVirtualKey(Map<String, dynamic> payload) {
-    final physical = payload['physicalKey'] is num
-        ? (payload['physicalKey'] as num).toInt()
-        : 0;
+    final physical = payload['physicalKey'] is num ? (payload['physicalKey'] as num).toInt() : 0;
     const physicalVkMap = {
       0x00070059: 0x61,
       0x0007005A: 0x62,
@@ -1917,9 +1736,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     final label = (payload['character'] ?? '').toString();
     if (label.length == 1) {
       final c = label.codeUnitAt(0);
-      if ((c >= 0x30 && c <= 0x39) ||
-          (c >= 0x41 && c <= 0x5A) ||
-          (c >= 0x61 && c <= 0x7A)) {
+      if ((c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5A) || (c >= 0x61 && c <= 0x7A)) {
         return c >= 0x61 && c <= 0x7A ? c - 32 : c;
       }
     }
@@ -1959,9 +1776,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
 
     String token = '';
     final mappedChar = _mapCharacterForLayout(character, payload);
-    if (_isPrintableCharacter(mappedChar) &&
-        !(ctrl || meta) &&
-        (altGraph || !alt)) {
+    if (_isPrintableCharacter(mappedChar) && !(ctrl || meta) && (altGraph || !alt)) {
       token = _escapeSendKeysChar(mappedChar);
     } else {
       token = _specialKeyToSendKeysToken(keyName);
@@ -2001,18 +1816,11 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     return stroke;
   }
 
-  String _mapCharacterForLayout(
-    String character, [
-    Map<String, dynamic>? payload,
-  ]) {
+  String _mapCharacterForLayout(String character, [Map<String, dynamic>? payload]) {
     if (!_isPrintableCharacter(character)) return character;
-    final sourceFamily =
-        (payload?['sourceLayoutFamily'] ?? _remoteKeyboardLayoutFamily)
-            .toString();
+    final sourceFamily = (payload?['sourceLayoutFamily'] ?? _remoteKeyboardLayoutFamily).toString();
     final targetFamily = _localKeyboardLayoutFamily;
-    if (sourceFamily == targetFamily ||
-        sourceFamily == 'unknown' ||
-        targetFamily == 'unknown') {
+    if (sourceFamily == targetFamily || sourceFamily == 'unknown' || targetFamily == 'unknown') {
       return character;
     }
     // Keep literal characters as the source of truth for text fidelity across layouts.
@@ -2089,15 +1897,11 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     required Map<String, dynamic> payload,
   }) {
     if (!_canSignal) {
-      print(
-        '[RemoteSupportPage] Cannot signal: signalingService=${widget.signalingService}, userId=${widget.currentUserId}, sessionId=${widget.sessionId}',
-      );
+      print('[RemoteSupportPage] Cannot signal: signalingService=${widget.signalingService}, userId=${widget.currentUserId}, sessionId=${widget.sessionId}');
       return false;
     }
     if (messageType != 'screen_frame' && messageType != 'input_event') {
-      print(
-        '[RemoteSupportPage] Sending $messageType to ${widget.deviceId} via session ${widget.sessionId}',
-      );
+      print('[RemoteSupportPage] Sending $messageType to ${widget.deviceId} via session ${widget.sessionId}');
     }
     return widget.signalingService!.sendSessionMessage(
       sessionId: (widget.sessionId ?? '').toString(),
@@ -2115,7 +1919,10 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     _lastCaptureStatusSentMs = now;
     _sendSessionPayload(
       messageType: 'capture_status',
-      payload: {'status': status, 'detail': detail},
+      payload: {
+        'status': status,
+        'detail': detail,
+      },
     );
   }
 
@@ -2123,12 +1930,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     List<String> args, {
     Duration timeout = const Duration(seconds: 10),
   }) async {
-    final commands = <String>[
-      'powershell',
-      'powershell.exe',
-      'pwsh',
-      'pwsh.exe',
-    ];
+    final commands = <String>['powershell', 'powershell.exe', 'pwsh', 'pwsh.exe'];
     Object? lastError;
     for (final cmd in commands) {
       try {
@@ -2160,16 +1962,74 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
   }
 
   void _sendMoveIfNeeded(Offset p) {
+    _pendingMove = p;
+    if (_pendingMoveTimer?.isActive == true) return;
+
+    _pendingMoveTimer = Timer(const Duration(milliseconds: 16), () {
+      _pendingMoveTimer = null;
+      _dispatchPendingMove();
+    });
+  }
+
+  void _dispatchPendingMove() {
+    final pending = _pendingMove;
+    _pendingMove = null;
+    if (pending == null) return;
+
     const epsilon = 0.0008;
-    final sameAsLast =
-        _lastSentMoveX != null &&
+    final sameAsLast = _lastSentMoveX != null &&
         _lastSentMoveY != null &&
-        (p.dx - _lastSentMoveX!).abs() < epsilon &&
-        (p.dy - _lastSentMoveY!).abs() < epsilon;
+        (pending.dx - _lastSentMoveX!).abs() < epsilon &&
+        (pending.dy - _lastSentMoveY!).abs() < epsilon;
     if (sameAsLast) return;
-    _lastSentMoveX = p.dx;
-    _lastSentMoveY = p.dy;
-    _sendInputEvent('move', normalizedX: p.dx, normalizedY: p.dy);
+    _lastSentMoveX = pending.dx;
+    _lastSentMoveY = pending.dy;
+    _sendInputEvent('move', normalizedX: pending.dx, normalizedY: pending.dy);
+  }
+
+  void _flushPendingMove() {
+    if (_pendingMove == null) return;
+    _pendingMoveTimer?.cancel();
+    _pendingMoveTimer = null;
+    _dispatchPendingMove();
+  }
+
+  void _scheduleRemoteFrameApply() {
+    if (_pendingRemoteFrameTimer?.isActive == true) return;
+    _pendingRemoteFrameTimer = Timer(const Duration(milliseconds: 16), () {
+      _pendingRemoteFrameTimer = null;
+      final frameData = _pendingRemoteFrameData;
+      if (frameData == null || frameData.isEmpty) return;
+
+      try {
+        _remoteScreenFrame = base64Decode(frameData);
+        if (_pendingRemoteFrameWidth != null && _pendingRemoteFrameHeight != null) {
+          _remoteFrameWidth = _pendingRemoteFrameWidth!;
+          _remoteFrameHeight = _pendingRemoteFrameHeight!;
+        }
+        if (_pendingRemoteScreenCount != null) {
+          _remoteScreenCount = _pendingRemoteScreenCount!;
+        }
+        if (_pendingRemoteScreenIndex != null) {
+          _selectedRemoteScreenIndex = _pendingRemoteScreenIndex!;
+        }
+        _pendingRemoteFrameData = null;
+        _pendingRemoteFrameWidth = null;
+        _pendingRemoteFrameHeight = null;
+        _pendingRemoteScreenCount = null;
+        _pendingRemoteScreenIndex = null;
+        _framesReceived++;
+        if (_framesReceived % 30 == 0) {
+          print('[ScreenShare] Frame applied #$_framesReceived (${_remoteScreenFrame!.length} bytes)');
+        }
+        if (mounted) {
+          setState(() {});
+        }
+      } catch (e) {
+        print('[ScreenShare] Decode error: $e');
+        _remoteScreenFrame = null;
+      }
+    });
   }
 
   void _startSessionTimer() {
@@ -2179,6 +2039,44 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
         return;
       }
       setState(() {
+
+  void _scheduleRemoteFrameApply() {
+    if (_pendingRemoteFrameTimer?.isActive == true) return;
+    _pendingRemoteFrameTimer = Timer(const Duration(milliseconds: 16), () {
+      _pendingRemoteFrameTimer = null;
+      final frameData = _pendingRemoteFrameData;
+      if (frameData == null || frameData.isEmpty) return;
+
+      try {
+        _remoteScreenFrame = base64Decode(frameData);
+        if (_pendingRemoteFrameWidth != null && _pendingRemoteFrameHeight != null) {
+          _remoteFrameWidth = _pendingRemoteFrameWidth!;
+          _remoteFrameHeight = _pendingRemoteFrameHeight!;
+        }
+        if (_pendingRemoteScreenCount != null) {
+          _remoteScreenCount = _pendingRemoteScreenCount!;
+        }
+        if (_pendingRemoteScreenIndex != null) {
+          _selectedRemoteScreenIndex = _pendingRemoteScreenIndex!;
+        }
+        _pendingRemoteFrameData = null;
+        _pendingRemoteFrameWidth = null;
+        _pendingRemoteFrameHeight = null;
+        _pendingRemoteScreenCount = null;
+        _pendingRemoteScreenIndex = null;
+        _framesReceived++;
+        if (_framesReceived % 30 == 0) {
+          print('[ScreenShare] Frame applied #$_framesReceived (${_remoteScreenFrame!.length} bytes)');
+        }
+        if (mounted) {
+          setState(() {});
+        }
+      } catch (e) {
+        print('[ScreenShare] Decode error: $e');
+        _remoteScreenFrame = null;
+      }
+    });
+  }
         _sessionSeconds++;
         _sessionTime = _formatSessionTime(_sessionSeconds);
       });
@@ -2209,11 +2107,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     if (_isFullScreen) {
       _revealOverlayTemporarily();
     }
-    _showMessage(
-      context,
-      _isFullScreen ? tr('full_screen') : tr('exit_full_screen'),
-      _getColors(context),
-    );
+    _showMessage(context, _isFullScreen ? tr('full_screen') : tr('exit_full_screen'), _getColors(context));
   }
 
   @override
@@ -2235,10 +2129,15 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     _diagnosticsTimer?.cancel();
     _recordingTimer?.cancel();
     _reconnectTimer?.cancel();
+    _pendingMoveTimer?.cancel();
+    _pendingMoveTimer = null;
+    _pendingMove = null;
+    _pendingRemoteFrameTimer?.cancel();
+    _pendingRemoteFrameTimer = null;
+    _pendingRemoteFrameData = null;
     _keyboardLayoutTimer?.cancel();
     _keyStateSyncTimer?.cancel();
     _signalSubscription?.cancel();
-    _remoteFrameUpdateScheduled = false;
     _composerController.dispose();
     _chatScrollController.dispose();
     _remoteControlFocusNode.dispose();
@@ -2261,9 +2160,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                 style: TextStyle(color: colors['text']!),
               ),
             ),
-      body: isController
-          ? _buildControllerView(colors)
-          : _buildRemoteAgentView(colors),
+      body: isController ? _buildControllerView(colors) : _buildRemoteAgentView(colors),
     );
   }
 
@@ -2275,14 +2172,10 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
           _revealOverlayTemporarily();
         }
       },
-      onEnter: (_) {
-        _ensureRemoteKeyboardFocus();
-        _revealOverlayTemporarily();
-      },
+      onEnter: (_) => _revealOverlayTemporarily(),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: () {
-          _ensureRemoteKeyboardFocus();
           if (_panelMode != 'none') {
             setState(() => _panelMode = 'none');
           }
@@ -2339,10 +2232,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                   color: Colors.black.withValues(alpha: 0.35),
                   alignment: Alignment.center,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 14,
-                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
                     decoration: BoxDecoration(
                       color: Colors.black87,
                       borderRadius: BorderRadius.circular(10),
@@ -2360,20 +2250,14 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                   color: Colors.black.withValues(alpha: 0.45),
                   alignment: Alignment.center,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 18,
-                      vertical: 12,
-                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
                     decoration: BoxDecoration(
                       color: Colors.black87,
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: const Text(
                       'Session paused. Remote screen is frozen.',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                      ),
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
                     ),
                   ),
                 ),
@@ -2403,17 +2287,11 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                       top: 14,
                       left: 14,
                       child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                         color: Colors.redAccent,
                         child: Text(
                           'Connected with: ${widget.deviceId}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w700,
-                          ),
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
                         ),
                       ),
                     ),
@@ -2424,10 +2302,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                         alignment: Alignment.center,
                         child: const Text(
                           'This machine is locked by remote operator',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w700,
-                          ),
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
                         ),
                       ),
                     ),
@@ -2438,10 +2313,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                         alignment: Alignment.center,
                         child: const Text(
                           'Session paused by remote operator',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w700,
-                          ),
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
                         ),
                       ),
                     ),
@@ -2475,10 +2347,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   IconButton(
-                    icon: Icon(
-                      _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
-                      color: Colors.white,
-                    ),
+                    icon: Icon(_isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen, color: Colors.white),
                     tooltip: _isFullScreen ? 'Restore' : 'Full screen',
                     onPressed: () => _toggleFullScreen(),
                   ),
@@ -2505,48 +2374,21 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
       ),
       child: Row(
         children: [
-          Icon(
-            Icons.circle,
-            size: 9,
-            color: _isConnected ? Colors.green : Colors.redAccent,
-          ),
+          Icon(Icons.circle, size: 9, color: _isConnected ? Colors.green : Colors.redAccent),
           const SizedBox(width: 6),
-          Text(
-            _connectionStatus,
-            style: TextStyle(color: colors['text']!, fontSize: 12),
-          ),
+          Text(_connectionStatus, style: TextStyle(color: colors['text']!, fontSize: 12)),
           const SizedBox(width: 10),
-          Text(
-            'Session $_sessionTime',
-            style: TextStyle(color: colors['textSecondary']!, fontSize: 12),
-          ),
+          Text('Session $_sessionTime', style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
           const SizedBox(width: 10),
-          Icon(
-            _isEncrypted ? Icons.lock : Icons.lock_open,
-            size: 12,
-            color: _isEncrypted ? Colors.green : Colors.orange,
-          ),
+          Icon(_isEncrypted ? Icons.lock : Icons.lock_open, size: 12, color: _isEncrypted ? Colors.green : Colors.orange),
           const SizedBox(width: 4),
-          Text(
-            _encryptionType,
-            style: TextStyle(color: colors['textSecondary']!, fontSize: 12),
-          ),
+          Text(_encryptionType, style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
           const SizedBox(width: 10),
-          Text(
-            'Ping $_pingMs ms',
-            style: TextStyle(color: colors['textSecondary']!, fontSize: 12),
-          ),
+          Text('Ping $_pingMs ms', style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
           const SizedBox(width: 10),
-          Text(
-            _bandwidthText,
-            style: TextStyle(color: colors['textSecondary']!, fontSize: 12),
-          ),
+          Text(_bandwidthText, style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
           const Spacer(),
-          _buildSmallOverlayButton(
-            Icons.screenshot_monitor,
-            _takeScreenshot,
-            colors,
-          ),
+          _buildSmallOverlayButton(Icons.screenshot_monitor, _takeScreenshot, colors),
           const SizedBox(width: 6),
           _buildSmallOverlayButton(
             _isRecording ? Icons.stop_circle : Icons.fiber_manual_record,
@@ -2561,12 +2403,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
             colors,
           ),
           const SizedBox(width: 6),
-          _buildSmallOverlayButton(
-            Icons.close,
-            () => _closeSession(),
-            colors,
-            isDanger: true,
-          ),
+          _buildSmallOverlayButton(Icons.close, () => _closeSession(), colors, isDanger: true),
         ],
       ),
     );
@@ -2607,26 +2444,11 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
       ),
       child: Column(
         children: [
-          _buildRoundToolButton(
-            Icons.swap_horiz,
-            'Transfer',
-            () => _togglePanel('transfer'),
-            colors,
-          ),
+          _buildRoundToolButton(Icons.swap_horiz, 'Transfer', () => _togglePanel('transfer'), colors),
           const SizedBox(height: 8),
-          _buildRoundToolButton(
-            Icons.settings_remote,
-            'System',
-            () => _togglePanel('system'),
-            colors,
-          ),
+          _buildRoundToolButton(Icons.settings_remote, 'System', () => _togglePanel('system'), colors),
           const SizedBox(height: 8),
-          _buildRoundToolButton(
-            Icons.network_check,
-            'Network',
-            () => _togglePanel('network'),
-            colors,
-          ),
+          _buildRoundToolButton(Icons.network_check, 'Network', () => _togglePanel('network'), colors),
         ],
       ),
     );
@@ -2652,11 +2474,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
             shape: BoxShape.circle,
             border: Border.all(color: colors['border']!),
           ),
-          child: Icon(
-            icon,
-            color: selected ? Colors.white : colors['text']!,
-            size: 18,
-          ),
+          child: Icon(icon, color: selected ? Colors.white : colors['text']!, size: 18),
         ),
       ),
     );
@@ -2707,10 +2525,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
           children: const [
             Icon(Icons.visibility_off, size: 72, color: Colors.white),
             SizedBox(height: 14),
-            Text(
-              'Screen is hidden for privacy',
-              style: TextStyle(color: Colors.white, fontSize: 17),
-            ),
+            Text('Screen is hidden for privacy', style: TextStyle(color: Colors.white, fontSize: 17)),
           ],
         ),
       );
@@ -2721,9 +2536,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
         color: Colors.black,
         alignment: Alignment.center,
         child: Text(
-          _captureError.isEmpty
-              ? 'Waiting for remote stream...'
-              : 'Capture issue: $_captureError',
+          _captureError.isEmpty ? 'Waiting for remote stream...' : 'Capture issue: $_captureError',
           style: const TextStyle(color: Colors.white70),
         ),
       );
@@ -2738,24 +2551,14 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
             focusNode: _remoteControlFocusNode,
             autofocus: !widget.sendLocalScreen,
             onKeyEvent: (event) {
-              if (!_canSendRemoteInput || _isDeviceLocked || _isSessionPaused) {
-                return;
-              }
-              if (event is KeyRepeatEvent) {
-                final managed = _isManagedRepeatKey(event.logicalKey);
-                final modifier = _isModifierLogical(event.logicalKey);
-                if (!managed && !modifier) {
-                  _sendKeyboardEvent(event, phase: 'down');
-                }
+              if (!_canSendRemoteInput || _isDeviceLocked || _isSessionPaused || !_keyboardInputEnabledForUser2) {
                 return;
               }
               if (event is KeyDownEvent) {
                 final logical = event.logicalKey.keyId;
                 final managed = _isManagedRepeatKey(event.logicalKey);
                 final modifier = _isModifierLogical(event.logicalKey);
-                if ((managed || modifier) &&
-                    _pressedLogicalKeys.contains(logical))
-                  return;
+                if ((managed || modifier) && _pressedLogicalKeys.contains(logical)) return;
                 _pressedLogicalKeys.add(logical);
                 _sendKeyboardEvent(event, phase: 'down');
                 if (managed) {
@@ -2808,8 +2611,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
 
                   final inX = (local.dx - offsetX);
                   final inY = (local.dy - offsetY);
-                  if (!_fillRemoteViewport &&
-                      (inX < 0 || inY < 0 || inX > drawW || inY > drawH)) {
+                  if (!_fillRemoteViewport && (inX < 0 || inY < 0 || inX > drawW || inY > drawH)) {
                     return null;
                   }
 
@@ -2819,65 +2621,46 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                 }
 
                 return Listener(
-                  onPointerDown:
-                      _canSendRemoteInput &&
-                          !_isDeviceLocked &&
-                          !_isSessionPaused &&
-                          _mouseInputEnabledForUser2
+                  onPointerDown: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
                       ? (event) {
-                          _ensureRemoteKeyboardFocus();
                           _revealOverlayTemporarily();
                           final p = normalize(event.localPosition);
                           if (p == null) return;
-                          _rightButtonPressed =
-                              event.buttons == kSecondaryMouseButton;
+                          _flushPendingMove();
+                          _rightButtonPressed = event.buttons == kSecondaryMouseButton;
                           _sendInputEvent(
                             _rightButtonPressed ? 'right_down' : 'left_down',
                             normalizedX: p.dx,
                             normalizedY: p.dy,
                           );
+                          _remoteControlFocusNode.requestFocus();
                         }
-                      : (_) {
-                          _ensureRemoteKeyboardFocus();
-                          _revealOverlayTemporarily();
-                        },
-                  onPointerHover:
-                      _canSendRemoteInput &&
-                          !_isDeviceLocked &&
-                          !_isSessionPaused &&
-                          _mouseInputEnabledForUser2
+                      : (_) => _revealOverlayTemporarily(),
+                  onPointerHover: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
                       ? (event) {
                           final now = DateTime.now().millisecondsSinceEpoch;
-                          if (now - _lastPointerMoveMs < 8) return;
+                          if (now - _lastPointerMoveMs < 2) return;
                           _lastPointerMoveMs = now;
                           final p = normalize(event.localPosition);
                           if (p == null) return;
                           _sendMoveIfNeeded(p);
                         }
                       : null,
-                  onPointerMove:
-                      _canSendRemoteInput &&
-                          !_isDeviceLocked &&
-                          !_isSessionPaused &&
-                          _mouseInputEnabledForUser2
+                  onPointerMove: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
                       ? (event) {
                           final now = DateTime.now().millisecondsSinceEpoch;
-                          if (now - _lastPointerMoveMs < 8) return;
+                          if (now - _lastPointerMoveMs < 2) return;
                           _lastPointerMoveMs = now;
                           final p = normalize(event.localPosition);
                           if (p == null) return;
                           _sendMoveIfNeeded(p);
                         }
                       : null,
-                  onPointerUp:
-                      _canSendRemoteInput &&
-                          !_isDeviceLocked &&
-                          !_isSessionPaused &&
-                          _mouseInputEnabledForUser2
+                  onPointerUp: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
                       ? (event) {
-                          _ensureRemoteKeyboardFocus();
                           final p = normalize(event.localPosition);
                           if (p == null) return;
+                          _flushPendingMove();
                           _sendInputEvent(
                             _rightButtonPressed ? 'right_up' : 'left_up',
                             normalizedX: p.dx,
@@ -2886,13 +2669,10 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                           _rightButtonPressed = false;
                         }
                       : null,
-                  onPointerSignal:
-                      _canSendRemoteInput &&
-                          !_isDeviceLocked &&
-                          !_isSessionPaused &&
-                          _mouseInputEnabledForUser2
+                  onPointerSignal: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
                       ? (event) {
                           if (event is PointerScrollEvent) {
+                            _flushPendingMove();
                             _sendWheelFromDelta(event.scrollDelta.dy);
                           }
                         }
@@ -2922,11 +2702,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                   const SizedBox(height: 16),
                   const Text(
                     'Session Paused',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 24,
-                      fontWeight: FontWeight.w600,
-                    ),
+                    style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 32),
                   Row(
@@ -2938,14 +2714,9 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                         label: const Text('Resume'),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.green,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 28,
-                            vertical: 14,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
+                          foregroundColor:Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                         ),
                       ),
                       const SizedBox(width: 16),
@@ -2956,13 +2727,8 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.red,
                           foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 28,
-                            vertical: 14,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
+                          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                         ),
                       ),
                     ],
@@ -2981,14 +2747,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
       children: [
         Row(
           children: [
-            Text(
-              'Chat',
-              style: TextStyle(
-                color: colors['text']!,
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
+            Text('Chat', style: TextStyle(color: colors['text']!, fontSize: 16, fontWeight: FontWeight.w700)),
             const Spacer(),
             IconButton(
               icon: Icon(Icons.close, color: colors['textSecondary']!),
@@ -3065,14 +2824,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
       children: [
         Row(
           children: [
-            Text(
-              'File Transfer',
-              style: TextStyle(
-                color: colors['text']!,
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
+            Text('File Transfer', style: TextStyle(color: colors['text']!, fontSize: 16, fontWeight: FontWeight.w700)),
             const Spacer(),
             IconButton(
               icon: Icon(Icons.close, color: colors['textSecondary']!),
@@ -3165,19 +2917,9 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
   Widget _buildSystemPanel(Map<String, Color> colors) {
     return ListView(
       children: [
-        Text(
-          'System Controls',
-          style: TextStyle(
-            color: colors['text']!,
-            fontSize: 16,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
+        Text('System Controls', style: TextStyle(color: colors['text']!, fontSize: 16, fontWeight: FontWeight.w700)),
         const SizedBox(height: 10),
-        Text(
-          'Session Management',
-          style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600),
-        ),
+        Text('Session Management', style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600)),
         const SizedBox(height: 8),
         Row(
           children: [
@@ -3202,24 +2944,16 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
           ],
         ),
         const SizedBox(height: 10),
-        Text(
-          'User 2 Input Control',
-          style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600),
-        ),
+        Text('User 2 Input Control', style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600)),
         const SizedBox(height: 8),
         Row(
           children: [
             Expanded(
               child: _buildActionButton(
-                _keyboardInputEnabledForUser2
-                    ? Icons.keyboard
-                    : Icons.keyboard_hide,
+                _keyboardInputEnabledForUser2 ? Icons.keyboard : Icons.keyboard_hide,
                 _keyboardInputEnabledForUser2 ? 'Keyboard ON' : 'Keyboard OFF',
                 () {
-                  setState(
-                    () => _keyboardInputEnabledForUser2 =
-                        !_keyboardInputEnabledForUser2,
-                  );
+                  setState(() => _keyboardInputEnabledForUser2 = !_keyboardInputEnabledForUser2);
                   _sendInputPolicy();
                 },
                 colors,
@@ -3232,10 +2966,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                 _mouseInputEnabledForUser2 ? Icons.mouse : Icons.mouse_outlined,
                 _mouseInputEnabledForUser2 ? 'Mouse ON' : 'Mouse OFF',
                 () {
-                  setState(
-                    () => _mouseInputEnabledForUser2 =
-                        !_mouseInputEnabledForUser2,
-                  );
+                  setState(() => _mouseInputEnabledForUser2 = !_mouseInputEnabledForUser2);
                   _sendInputPolicy();
                 },
                 colors,
@@ -3249,55 +2980,17 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
           spacing: 8,
           runSpacing: 8,
           children: [
-            _buildActionButton(
-              Icons.task_alt,
-              'Task Manager',
-              () => _sendSystemAction('task_manager'),
-              colors,
-            ),
-            _buildActionButton(
-              Icons.folder_open,
-              'File Explorer',
-              () => _sendSystemAction('file_explorer'),
-              colors,
-            ),
-            _buildActionButton(
-              Icons.terminal,
-              'Terminal',
-              () => _sendSystemAction('terminal'),
-              colors,
-            ),
-            _buildActionButton(
-              Icons.settings,
-              'Control Panel / Settings',
-              () => _sendSystemAction('control_panel'),
-              colors,
-            ),
-            _buildActionButton(
-              Icons.playlist_play,
-              'Run Dialog',
-              () => _sendSystemAction('run_dialog'),
-              colors,
-            ),
-            _buildActionButton(
-              Icons.lock_outline,
-              'Lock Screen',
-              () => _sendSystemAction('lock_screen'),
-              colors,
-            ),
-            _buildActionButton(
-              Icons.logout,
-              'Log Out',
-              () => _sendSystemAction('logout'),
-              colors,
-            ),
+            _buildActionButton(Icons.task_alt, 'Task Manager', () => _sendSystemAction('task_manager'), colors),
+            _buildActionButton(Icons.folder_open, 'File Explorer', () => _sendSystemAction('file_explorer'), colors),
+            _buildActionButton(Icons.terminal, 'Terminal', () => _sendSystemAction('terminal'), colors),
+            _buildActionButton(Icons.settings, 'Control Panel / Settings', () => _sendSystemAction('control_panel'), colors),
+            _buildActionButton(Icons.playlist_play, 'Run Dialog', () => _sendSystemAction('run_dialog'), colors),
+            _buildActionButton(Icons.lock_outline, 'Lock Screen', () => _sendSystemAction('lock_screen'), colors),
+            _buildActionButton(Icons.logout, 'Log Out', () => _sendSystemAction('logout'), colors),
           ],
         ),
         const SizedBox(height: 14),
-        Text(
-          'Display',
-          style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600),
-        ),
+        Text('Display', style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600)),
         const SizedBox(height: 8),
         _buildPresetSelectors(colors),
         const SizedBox(height: 14),
@@ -3325,10 +3018,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
           ],
         ),
         const SizedBox(height: 8),
-        Text(
-          'Remote Audio Volume',
-          style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600),
-        ),
+        Text('Remote Audio Volume', style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600)),
         Slider(
           value: _remoteAudioVolume,
           min: 0.0,
@@ -3340,10 +3030,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
             unawaited(_remoteAudioService.setClientVolume(value));
           },
         ),
-        Text(
-          'Remote Audio Bitrate (${_remoteAudioBitrateKbps} kbps)',
-          style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600),
-        ),
+        Text('Remote Audio Bitrate (${_remoteAudioBitrateKbps} kbps)', style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600)),
         Slider(
           value: _remoteAudioBitrateKbps.toDouble(),
           min: 64,
@@ -3385,10 +3072,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
           ],
         ),
         const SizedBox(height: 14),
-        Text(
-          'File Paths',
-          style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600),
-        ),
+        Text('File Paths', style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600)),
         const SizedBox(height: 8),
         Container(
           padding: const EdgeInsets.all(10),
@@ -3444,29 +3128,19 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Screenshots Path:',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
+                const Text('Screenshots Path:', style: TextStyle(fontWeight: FontWeight.w600)),
                 const SizedBox(height: 8),
                 TextField(
                   controller: TextEditingController(text: tempScreenshot),
-                  decoration: const InputDecoration(
-                    hintText: 'Enter screenshots path',
-                  ),
+                  decoration: const InputDecoration(hintText: 'Enter screenshots path'),
                   onChanged: (v) => tempScreenshot = v,
                 ),
                 const SizedBox(height: 16),
-                const Text(
-                  'Recordings Path:',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
+                const Text('Recordings Path:', style: TextStyle(fontWeight: FontWeight.w600)),
                 const SizedBox(height: 8),
                 TextField(
                   controller: TextEditingController(text: tempRecordings),
-                  decoration: const InputDecoration(
-                    hintText: 'Enter recordings path',
-                  ),
+                  decoration: const InputDecoration(hintText: 'Enter recordings path'),
                   onChanged: (v) => tempRecordings = v,
                 ),
               ],
@@ -3479,8 +3153,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
             ),
             TextButton(
               onPressed: () {
-                if (tempScreenshot.trim().isNotEmpty &&
-                    tempRecordings.trim().isNotEmpty) {
+                if (tempScreenshot.trim().isNotEmpty && tempRecordings.trim().isNotEmpty) {
                   try {
                     io.Directory(tempScreenshot).createSync(recursive: true);
                     io.Directory(tempRecordings).createSync(recursive: true);
@@ -3488,25 +3161,13 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                       _screenshotPath = tempScreenshot;
                       _recordingsPath = tempRecordings;
                     });
-                    _showMessage(
-                      context,
-                      'Paths updated successfully',
-                      _getColors(context),
-                    );
+                    _showMessage(context, 'Paths updated successfully', _getColors(context));
                     Navigator.pop(ctx);
                   } catch (e) {
-                    _showMessage(
-                      context,
-                      'Error creating directories: $e',
-                      _getColors(context),
-                    );
+                    _showMessage(context, 'Error creating directories: $e', _getColors(context));
                   }
                 } else {
-                  _showMessage(
-                    context,
-                    'Both paths cannot be empty',
-                    _getColors(context),
-                  );
+                  _showMessage(context, 'Both paths cannot be empty', _getColors(context));
                 }
               },
               child: const Text('Save'),
@@ -3524,16 +3185,10 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
         const SizedBox(height: 8),
         DropdownButtonFormField<String>(
           initialValue: _captureResolutionLabel,
-          style: const TextStyle(
-            color: Colors.orangeAccent,
-            fontWeight: FontWeight.w700,
-          ),
+          style: const TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.w700),
           decoration: const InputDecoration(
             labelText: 'Resolution',
-            labelStyle: TextStyle(
-              color: Colors.orangeAccent,
-              fontWeight: FontWeight.w700,
-            ),
+            labelStyle: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.w700),
           ),
           items: const [
             DropdownMenuItem(value: 'Full Screen', child: Text('Full Screen')),
@@ -3546,29 +3201,17 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
         const SizedBox(height: 8),
         DropdownButtonFormField<String>(
           initialValue: _qualityLabel,
-          style: const TextStyle(
-            color: Colors.lightBlueAccent,
-            fontWeight: FontWeight.w700,
-          ),
+          style: const TextStyle(color: Colors.lightBlueAccent, fontWeight: FontWeight.w700),
           decoration: const InputDecoration(
             labelText: 'Quality',
-            labelStyle: TextStyle(
-              color: Colors.lightBlueAccent,
-              fontWeight: FontWeight.w700,
-            ),
+            labelStyle: TextStyle(color: Colors.lightBlueAccent, fontWeight: FontWeight.w700),
           ),
           items: const [
-            DropdownMenuItem(
-              value: 'Auto',
-              child: Text('Auto (connection-based)'),
-            ),
+            DropdownMenuItem(value: 'Auto', child: Text('Auto (connection-based)')),
             DropdownMenuItem(value: 'Low', child: Text('Low (performance)')),
             DropdownMenuItem(value: 'Medium', child: Text('Medium')),
             DropdownMenuItem(value: 'High', child: Text('High (quality)')),
-            DropdownMenuItem(
-              value: 'Ultra',
-              child: Text('Ultra (max bandwidth)'),
-            ),
+            DropdownMenuItem(value: 'Ultra', child: Text('Ultra (max bandwidth)')),
           ],
           onChanged: (v) {
             if (v != null) _setQualityPreset(v);
@@ -3600,10 +3243,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
               },
               borderRadius: BorderRadius.circular(6),
               child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
                   color: selected ? colors['accent']! : colors['cardBg']!,
                   borderRadius: BorderRadius.circular(6),
@@ -3628,41 +3268,21 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
   Widget _buildNetworkPanel(Map<String, Color> colors) {
     return ListView(
       children: [
-        Text(
-          'Network Tools',
-          style: TextStyle(
-            color: colors['text']!,
-            fontSize: 16,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
+        Text('Network Tools', style: TextStyle(color: colors['text']!, fontSize: 16, fontWeight: FontWeight.w700)),
         const SizedBox(height: 10),
         _buildMetricLine('Ping', '$_pingMs ms', colors),
-        _buildMetricLine(
-          'Connection',
-          _isConnected ? 'Connected' : 'Disconnected',
-          colors,
-        ),
+        _buildMetricLine('Connection', _isConnected ? 'Connected' : 'Disconnected', colors),
         _buildMetricLine('Bitrate', _bandwidthText, colors),
         _buildMetricLine('Quality', _connectionQualityText, colors),
         _buildMetricLine('Frames RX', '$_framesReceived', colors),
         _buildMetricLine('Frames TX', '$_framesSent', colors),
         const SizedBox(height: 10),
-        _buildActionButton(
-          Icons.refresh,
-          'Refresh Diagnostics',
-          () => _refreshPing(),
-          colors,
-        ),
+        _buildActionButton(Icons.refresh, 'Refresh Diagnostics', () => _refreshPing(), colors),
       ],
     );
   }
 
-  Widget _buildMetricLine(
-    String label,
-    String value,
-    Map<String, Color> colors,
-  ) {
+  Widget _buildMetricLine(String label, String value, Map<String, Color> colors) {
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
@@ -3675,13 +3295,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
         children: [
           Text(label, style: TextStyle(color: colors['textSecondary']!)),
           const Spacer(),
-          Text(
-            value,
-            style: TextStyle(
-              color: colors['text']!,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
+          Text(value, style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600)),
         ],
       ),
     );
@@ -3736,29 +3350,18 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                     isReceived
                         ? 'Re├ºu de: $from${fileSize.isNotEmpty ? '  ΓÇó  $fileSize' : ''}'
                         : 'Envoy├⌐${fileSize.isNotEmpty ? '  ΓÇó  $fileSize' : ''}',
-                    style: TextStyle(
-                      color: colors['textSecondary'],
-                      fontSize: 10,
-                    ),
+                    style: TextStyle(color: colors['textSecondary'], fontSize: 10),
                   ),
                   if (path.isNotEmpty)
                     Text(
                       'Path: $path',
-                      style: TextStyle(
-                        color: colors['textSecondary'],
-                        fontSize: 10,
-                      ),
+                      style: TextStyle(color: colors['textSecondary'], fontSize: 10),
                       overflow: TextOverflow.ellipsis,
                     ),
-                  if (status.isNotEmpty ||
-                      speed.isNotEmpty ||
-                      progress.isNotEmpty)
+                  if (status.isNotEmpty || speed.isNotEmpty || progress.isNotEmpty)
                     Text(
                       'Status: $status  ${progress.isNotEmpty ? 'ΓÇó $progress%' : ''}  ${speed.isNotEmpty ? 'ΓÇó $speed' : ''}',
-                      style: TextStyle(
-                        color: colors['textSecondary'],
-                        fontSize: 10,
-                      ),
+                      style: TextStyle(color: colors['textSecondary'], fontSize: 10),
                     ),
                 ],
               ),
@@ -3775,11 +3378,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                       color: colors['accent']!,
                       borderRadius: BorderRadius.circular(6),
                     ),
-                    child: const Icon(
-                      Icons.save_alt,
-                      color: Colors.white,
-                      size: 14,
-                    ),
+                    child: const Icon(Icons.save_alt, color: Colors.white, size: 14),
                   ),
                 ),
               )
@@ -3813,11 +3412,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                       color: Colors.red.shade500,
                       borderRadius: BorderRadius.circular(6),
                     ),
-                    child: const Icon(
-                      Icons.close,
-                      color: Colors.white,
-                      size: 14,
-                    ),
+                    child: const Icon(Icons.close, color: Colors.white, size: 14),
                   ),
                 ),
               ),
@@ -3867,10 +3462,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
         children: [
           Icon(icon, size: 18),
           const SizedBox(width: 8),
-          Text(
-            label,
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
-          ),
+          Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
         ],
       ),
     );
@@ -3878,15 +3470,11 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
 
   Widget _buildMessageBubble(String message, Map<String, Color> colors) {
     final isPeer = message.startsWith('Peer::');
-    final clean = isPeer
-        ? message.substring('Peer::'.length)
-        : message.replaceFirst('You: ', '');
+    final clean = isPeer ? message.substring('Peer::'.length) : message.replaceFirst('You: ', '');
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
-        mainAxisAlignment: isPeer
-            ? MainAxisAlignment.start
-            : MainAxisAlignment.end,
+        mainAxisAlignment: isPeer ? MainAxisAlignment.start : MainAxisAlignment.end,
         children: [
           Flexible(
             child: Container(
@@ -3914,13 +3502,14 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
 
     setState(() {
       _chatMessages.add('You: $value');
-      _sendSessionPayload(messageType: 'chat', payload: {'text': value});
+      _sendSessionPayload(
+        messageType: 'chat',
+        payload: {'text': value},
+      );
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_chatScrollController.hasClients) {
-        _chatScrollController.jumpTo(
-          _chatScrollController.position.maxScrollExtent,
-        );
+        _chatScrollController.jumpTo(_chatScrollController.position.maxScrollExtent);
       }
     });
     _composerController.clear();
@@ -3944,11 +3533,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     }
     const maxSize = 8 * 1024 * 1024; // 8 MB
     if (bytes.length > maxSize) {
-      _showMessage(
-        context,
-        'Fichier trop grand (max 8 MB)',
-        _getColors(context),
-      );
+      _showMessage(context, 'Fichier trop grand (max 8 MB)', _getColors(context));
       return;
     }
     final fileName = file.name;
@@ -3974,11 +3559,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
         'fileData': '',
       });
     });
-    _showMessage(
-      context,
-      '${tr('selected_for_upload')}: $fileName',
-      _getColors(context),
-    );
+    _showMessage(context, '${tr('selected_for_upload')}: $fileName', _getColors(context));
   }
 
   Future<void> _saveReceivedFile(Map<String, String> transfer) async {
@@ -4002,22 +3583,14 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
       final bytes = base64Decode(fileData);
       await io.File(outputPath).writeAsBytes(bytes);
       if (!mounted) return;
-      _showMessage(
-        context,
-        'Fichier sauvegard├⌐: $outputPath',
-        _getColors(context),
-      );
+      _showMessage(context, 'Fichier sauvegard├⌐: $outputPath', _getColors(context));
     } catch (e) {
       if (!mounted) return;
       _showMessage(context, 'Erreur sauvegarde: $e', _getColors(context));
     }
   }
 
-  void _showMessage(
-    BuildContext context,
-    String message,
-    Map<String, Color> colors,
-  ) {
+  void _showMessage(BuildContext context, String message, Map<String, Color> colors) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
@@ -4033,10 +3606,13 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     );
     if (!mounted || dir == null || dir.isEmpty) return;
     setState(() => _receiveTargetPath = dir);
-
+    
     // Request list of files from remote machine for browsing
-    _sendSessionPayload(messageType: 'list_files', payload: {'path': ''});
-
+    _sendSessionPayload(
+      messageType: 'list_files',
+      payload: {'path': ''},
+    );
+    
     _showMessage(context, 'Receive folder set: $dir', _getColors(context));
   }
 
@@ -4053,8 +3629,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
       if (!screenshotsDir.existsSync()) {
         screenshotsDir.createSync(recursive: true);
       }
-      final outputPath =
-          '${screenshotsDir.path}\\remote_screenshot_${_timestampForFile()}.jpg';
+      final outputPath = '${screenshotsDir.path}\\remote_screenshot_${_timestampForFile()}.jpg';
 
       await io.File(outputPath).writeAsBytes(_remoteScreenFrame!, flush: true);
       if (!mounted) return;
@@ -4075,20 +3650,14 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
   }
 
   Future<void> _sendScreenFrame() async {
-    if (!_canSignal || !_isScreenSharing) return;
-    if (_isCapturing) {
-      _screenFrameCaptureRequested = true;
-      return;
-    }
+    if (!_canSignal || !_isScreenSharing || _isCapturing) return;
     _isCapturing = true;
     try {
       final bytes = await _captureLocalScreenToJpegBytes();
       if (!mounted) return;
       if (bytes == null || bytes.isEmpty) {
         print('[ScreenShare] Capture returned null/empty');
-        final detail = _captureError.isNotEmpty
-            ? _captureError
-            : 'capture null';
+        final detail = _captureError.isNotEmpty ? _captureError : 'capture null';
         if (mounted && _captureError.isEmpty) {
           setState(() => _captureError = detail);
         }
@@ -4098,8 +3667,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
       const maxFrameBytes = 20 * 1024 * 1024;
       if (bytes.length > maxFrameBytes) {
         print('[ScreenShare] Frame too large: ${bytes.length} bytes');
-        if (mounted)
-          setState(() => _captureError = 'too large: ${bytes.length}');
+        if (mounted) setState(() => _captureError = 'too large: ${bytes.length}');
         _sendCaptureStatus('error', 'Frame too large: ${bytes.length} bytes');
         return;
       }
@@ -4123,31 +3691,16 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
         _sendCaptureStatus('error', 'Session send failed');
         return;
       }
-      if (mounted)
-        setState(() {
-          _framesSent++;
-          _captureError = '';
-        });
+      if (mounted) setState(() { _framesSent++; _captureError = ''; });
       _sendCaptureStatus('ok', '');
       if (_framesSent % 30 == 0) {
-        print(
-          '[ScreenShare] Sent frame #$_framesSent (${bytes.length} bytes) ${_localFrameWidth}x$_localFrameHeight',
-        );
+        print('[ScreenShare] Sent frame #$_framesSent (${bytes.length} bytes) ${_localFrameWidth}x$_localFrameHeight');
       }
     } catch (e) {
       if (mounted) setState(() => _captureError = 'capture/send exception: $e');
       _sendCaptureStatus('error', 'Capture/send exception: $e');
     } finally {
       _isCapturing = false;
-      if (_screenFrameCaptureRequested &&
-          mounted &&
-          _isScreenSharing &&
-          _canSignal) {
-        _screenFrameCaptureRequested = false;
-        unawaited(Future<void>.microtask(_sendScreenFrame));
-      } else {
-        _screenFrameCaptureRequested = false;
-      }
     }
   }
 
@@ -4155,9 +3708,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     if (!io.Platform.isWindows) return null;
 
     // Use stable paths so antivirus exclusions can target one precise location.
-    final stableDir = io.Directory(
-      '${io.Platform.environment['LOCALAPPDATA']}\\BIMStreaming\\screenshare',
-    );
+    final stableDir = io.Directory('${io.Platform.environment['LOCALAPPDATA']}\\BIMStreaming\\screenshare');
     if (!stableDir.existsSync()) {
       stableDir.createSync(recursive: true);
     }
@@ -4166,8 +3717,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     final escapedOutput = outputPath.replaceAll("'", "''");
 
     // Script ├⌐crit dans un fichier (.ps1) pour ├⌐viter tout probl├¿me d'encodage en ligne de commande
-    final scriptContent =
-        r'''Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+    final scriptContent = r'''Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -4205,21 +3755,18 @@ Write-Output "$tw,$th,$($b.Left),$($b.Top),$($b.Width),$($b.Height)"
 $params.Dispose()
 $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
 '''
-            .replaceAll('OUTPUT_PATH', escapedOutput)
-            .replaceAll('MAX_WIDTH', _captureMaxWidth.toString())
-            .replaceAll('SCREEN_INDEX', _selectedLocalScreenIndex.toString())
-            .replaceAll('JPEG_QUALITY', '${_captureJpegQuality}L');
+        .replaceAll('OUTPUT_PATH', escapedOutput)
+        .replaceAll('MAX_WIDTH', _captureMaxWidth.toString())
+        .replaceAll('SCREEN_INDEX', _selectedLocalScreenIndex.toString())
+        .replaceAll('JPEG_QUALITY', '${_captureJpegQuality}L');
 
     await io.File(scriptPath).writeAsString(scriptContent);
 
     try {
-      final result = await _runPowerShell([
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-File',
-        scriptPath,
-      ], timeout: const Duration(seconds: 12));
+      final result = await _runPowerShell(
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
+        timeout: const Duration(seconds: 12),
+      );
       if (result.exitCode != 0) {
         var err = '${result.stderr}'.trim();
         if (err.isEmpty) {
@@ -4229,11 +3776,7 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
           err = 'capture timed out after 12s';
         }
         print('[ScreenShare] PS1 failed (exit=${result.exitCode}): $err');
-        if (mounted)
-          setState(
-            () => _captureError =
-                'PS1 exit=${result.exitCode}: ${err.substring(0, err.length.clamp(0, 120))}',
-          );
+        if (mounted) setState(() => _captureError = 'PS1 exit=${result.exitCode}: ${err.substring(0, err.length.clamp(0, 120))}');
         return await _captureLocalScreenFallbackPngBytes(stableDir);
       }
       final file = io.File(outputPath);
@@ -4243,9 +3786,10 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
         return await _captureLocalScreenFallbackPngBytes(stableDir);
       }
       final out = '${result.stdout}'.trim();
-      final line = out
-          .split(RegExp(r'[\r\n]+'))
-          .firstWhere((l) => l.contains(','), orElse: () => '');
+      final line = out.split(RegExp(r'[\r\n]+')).firstWhere(
+        (l) => l.contains(','),
+        orElse: () => '',
+      );
       if (line.isNotEmpty) {
         final parts = line.split(',');
         if (parts.length >= 2) {
@@ -4257,19 +3801,15 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
           }
         }
         if (parts.length >= 6) {
-          _localCaptureLeft =
-              int.tryParse(parts[2].trim()) ?? _localCaptureLeft;
+          _localCaptureLeft = int.tryParse(parts[2].trim()) ?? _localCaptureLeft;
           _localCaptureTop = int.tryParse(parts[3].trim()) ?? _localCaptureTop;
-          _localCaptureWidth =
-              int.tryParse(parts[4].trim()) ?? _localCaptureWidth;
-          _localCaptureHeight =
-              int.tryParse(parts[5].trim()) ?? _localCaptureHeight;
+          _localCaptureWidth = int.tryParse(parts[4].trim()) ?? _localCaptureWidth;
+          _localCaptureHeight = int.tryParse(parts[5].trim()) ?? _localCaptureHeight;
         }
       }
       final bytes = await file.readAsBytes();
       if (bytes.isEmpty) {
-        if (mounted)
-          setState(() => _captureError = 'capture produced empty JPEG');
+        if (mounted) setState(() => _captureError = 'capture produced empty JPEG');
         return await _captureLocalScreenFallbackPngBytes(stableDir);
       }
       return bytes;
@@ -4278,18 +3818,13 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
       if (mounted) setState(() => _captureError = e.toString());
       return await _captureLocalScreenFallbackPngBytes(stableDir);
     } finally {
-      try {
-        io.File(outputPath).deleteSync();
-      } catch (_) {}
+      try { io.File(outputPath).deleteSync(); } catch (_) {}
     }
   }
 
-  Future<Uint8List?> _captureLocalScreenFallbackPngBytes(
-    io.Directory stableDir,
-  ) async {
+  Future<Uint8List?> _captureLocalScreenFallbackPngBytes(io.Directory stableDir) async {
     final outputPath = '${stableDir.path}\\frame_fallback.png';
-    final script =
-        r'''
+    final script = r'''
 Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 $all=[System.Windows.Forms.Screen]::AllScreens
 $idx=SCREEN_INDEX
@@ -4303,38 +3838,29 @@ $bmp.Save('OUTPUT_PATH',[System.Drawing.Imaging.ImageFormat]::Png)
 Write-Output "$($bmp.Width),$($bmp.Height),$($b.Left),$($b.Top),$($b.Width),$($b.Height)"
 $g.Dispose();$bmp.Dispose()
 '''
-            .replaceAll('OUTPUT_PATH', outputPath.replaceAll("'", "''"))
-            .replaceAll('SCREEN_INDEX', _selectedLocalScreenIndex.toString());
+        .replaceAll('OUTPUT_PATH', outputPath.replaceAll("'", "''"))
+        .replaceAll('SCREEN_INDEX', _selectedLocalScreenIndex.toString());
 
     try {
-      final result = await _runPowerShell([
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-Command',
-        script,
-      ], timeout: const Duration(seconds: 10));
+      final result = await _runPowerShell(
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+        timeout: const Duration(seconds: 10),
+      );
       if (result.exitCode != 0) {
         var err = '${result.stderr}'.trim();
         if (err.isEmpty) err = '${result.stdout}'.trim();
         if (mounted && err.isNotEmpty) {
-          setState(
-            () => _captureError =
-                'Fallback capture failed: ${err.substring(0, err.length.clamp(0, 120))}',
-          );
+          setState(() => _captureError = 'Fallback capture failed: ${err.substring(0, err.length.clamp(0, 120))}');
         }
         return null;
       }
       final file = io.File(outputPath);
       if (!file.existsSync()) {
-        if (mounted)
-          setState(() => _captureError = 'Fallback capture file not found');
+        if (mounted) setState(() => _captureError = 'Fallback capture file not found');
         return null;
       }
       final out = '${result.stdout}'.trim();
-      final line = out
-          .split(RegExp(r'[\r\n]+'))
-          .firstWhere((l) => l.contains(','), orElse: () => '');
+      final line = out.split(RegExp(r'[\r\n]+')).firstWhere((l) => l.contains(','), orElse: () => '');
       if (line.isNotEmpty) {
         final parts = line.split(',');
         if (parts.length >= 2) {
@@ -4346,31 +3872,24 @@ $g.Dispose();$bmp.Dispose()
           }
         }
         if (parts.length >= 6) {
-          _localCaptureLeft =
-              int.tryParse(parts[2].trim()) ?? _localCaptureLeft;
+          _localCaptureLeft = int.tryParse(parts[2].trim()) ?? _localCaptureLeft;
           _localCaptureTop = int.tryParse(parts[3].trim()) ?? _localCaptureTop;
-          _localCaptureWidth =
-              int.tryParse(parts[4].trim()) ?? _localCaptureWidth;
-          _localCaptureHeight =
-              int.tryParse(parts[5].trim()) ?? _localCaptureHeight;
+          _localCaptureWidth = int.tryParse(parts[4].trim()) ?? _localCaptureWidth;
+          _localCaptureHeight = int.tryParse(parts[5].trim()) ?? _localCaptureHeight;
         }
       }
       final bytes = await file.readAsBytes();
       if (bytes.isEmpty) {
-        if (mounted)
-          setState(() => _captureError = 'Fallback capture produced empty PNG');
+        if (mounted) setState(() => _captureError = 'Fallback capture produced empty PNG');
         return null;
       }
       if (mounted) setState(() => _captureError = '');
       return bytes;
     } catch (e) {
-      if (mounted)
-        setState(() => _captureError = 'Fallback capture exception: $e');
+      if (mounted) setState(() => _captureError = 'Fallback capture exception: $e');
       return null;
     } finally {
-      try {
-        io.File(outputPath).deleteSync();
-      } catch (_) {}
+      try { io.File(outputPath).deleteSync(); } catch (_) {}
     }
   }
 
@@ -4381,24 +3900,17 @@ $g.Dispose();$bmp.Dispose()
     if (next) {
       _recordingTimer?.cancel();
       _recordingTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
-        if (!_isRecording ||
-            _remoteScreenFrame == null ||
-            _remoteScreenFrame!.isEmpty)
-          return;
+        if (!_isRecording || _remoteScreenFrame == null || _remoteScreenFrame!.isEmpty) return;
         try {
           final dir = io.Directory(_recordingsPath);
           if (!dir.existsSync()) {
             dir.createSync(recursive: true);
           }
-          final path =
-              '${dir.path}\\frame_${_timestampForFile()}_${_recordedFrames.length + 1}.jpg';
+          final path = '${dir.path}\\frame_${_timestampForFile()}_${_recordedFrames.length + 1}.jpg';
           await io.File(path).writeAsBytes(_remoteScreenFrame!, flush: true);
           if (!mounted) return;
           setState(() {
-            _recordedFrames.add({
-              'path': path,
-              'time': DateTime.now().toIso8601String(),
-            });
+            _recordedFrames.add({'path': path, 'time': DateTime.now().toIso8601String()});
           });
         } catch (_) {
           // Ignore intermittent write failures.
@@ -4434,11 +3946,7 @@ $g.Dispose();$bmp.Dispose()
       payload: {'enabled': _audioEnabled},
     );
     unawaited(_syncRemoteAudioPipeline());
-    _showMessage(
-      context,
-      _audioEnabled ? tr('audio_enabled') : tr('audio_disabled'),
-      _getColors(context),
-    );
+    _showMessage(context, _audioEnabled ? tr('audio_enabled') : tr('audio_disabled'), _getColors(context));
   }
 
   void _lockDevice() {
@@ -4476,11 +3984,7 @@ $g.Dispose();$bmp.Dispose()
                 _connectionStatus = 'Rebooting remote machine...';
               });
               _sendSystemAction('reboot');
-              _showMessage(
-                context,
-                tr('device_rebooting'),
-                _getColors(context),
-              );
+              _showMessage(context, tr('device_rebooting'), _getColors(context));
               _startReconnectLoop();
             },
             child: Text(tr('btn_reboot')),
@@ -4497,7 +4001,7 @@ $g.Dispose();$bmp.Dispose()
       messageType: 'privacy_mode',
       payload: {'enabled': _isBlackoutMode},
     );
-
+    
     // Also send system action to machine B to hide/show display
     if (_isBlackoutMode) {
       // Hide display - black out the system screen
@@ -4506,14 +4010,8 @@ $g.Dispose();$bmp.Dispose()
       // Show display - restore the system screen
       _applySystemAction({'action': 'privacy_mode_off'});
     }
-
-    _showMessage(
-      context,
-      _isBlackoutMode
-          ? tr('privacy_mode_enabled')
-          : tr('privacy_mode_disabled'),
-      _getColors(context),
-    );
+    
+    _showMessage(context, _isBlackoutMode ? tr('privacy_mode_enabled') : tr('privacy_mode_disabled'), _getColors(context));
   }
 
   void _sendSystemAction(String action) {
@@ -4577,7 +4075,7 @@ $null = Add-Type -MemberDefinition '[DllImport("user32.dll")] public static exte
             '-ExecutionPolicy',
             'Bypass',
             '-Command',
-            r'''Move-Mouse''',
+            r'''Move-Mouse'''
           ]);
           break;
       }
@@ -4596,16 +4094,12 @@ $null = Add-Type -MemberDefinition '[DllImport("user32.dll")] public static exte
       if (!recordingsDir.existsSync()) {
         recordingsDir.createSync(recursive: true);
       }
-      final listPath =
-          '${recordingsDir.path}\\frames_${_timestampForFile()}.txt';
-      final outPath =
-          '${recordingsDir.path}\\session_${_timestampForFile()}.mp4';
+      final listPath = '${recordingsDir.path}\\frames_${_timestampForFile()}.txt';
+      final outPath = '${recordingsDir.path}\\session_${_timestampForFile()}.mp4';
 
       final buffer = StringBuffer();
       for (final frame in _recordedFrames) {
-        final p = (frame['path'] ?? '')
-            .replaceAll('\\', '/')
-            .replaceAll("'", "''");
+        final p = (frame['path'] ?? '').replaceAll('\\', '/').replaceAll("'", "''");
         if (p.isEmpty) continue;
         buffer.writeln("file '$p'");
         buffer.writeln('duration ${1 / _recordingFps}');
@@ -4613,20 +4107,23 @@ $null = Add-Type -MemberDefinition '[DllImport("user32.dll")] public static exte
 
       try {
         await io.File(listPath).writeAsString(buffer.toString());
-        final result = await io.Process.run('ffmpeg', [
-          '-y',
-          '-f',
-          'concat',
-          '-safe',
-          '0',
-          '-i',
-          listPath,
-          '-vf',
-          'fps=$_recordingFps',
-          '-pix_fmt',
-          'yuv420p',
-          outPath,
-        ]);
+        final result = await io.Process.run(
+          'ffmpeg',
+          [
+            '-y',
+            '-f',
+            'concat',
+            '-safe',
+            '0',
+            '-i',
+            listPath,
+            '-vf',
+            'fps=$_recordingFps',
+            '-pix_fmt',
+            'yuv420p',
+            outPath,
+          ],
+        );
 
         if (result.exitCode == 0 && io.File(outPath).existsSync()) {
           return outPath;
@@ -4644,28 +4141,16 @@ $null = Add-Type -MemberDefinition '[DllImport("user32.dll")] public static exte
     return null;
   }
 
-  Widget _buildActionButton(
-    IconData icon,
-    String label,
-    VoidCallback onTap,
-    Map<String, Color> colors, {
-    bool isActive = false,
-    bool isDanger = false,
-    bool enabled = true,
-  }) {
+  Widget _buildActionButton(IconData icon, String label, VoidCallback onTap, Map<String, Color> colors, {bool isActive = false, bool isDanger = false, bool enabled = true}) {
     final bgColor = !enabled
         ? colors['cardBg']!
-        : (isDanger
-              ? Colors.red[600]
-              : (isActive ? colors['accent']! : colors['cardBg']!));
+        : (isDanger ? Colors.red[600] : (isActive ? colors['accent']! : colors['cardBg']!));
     final borderColor = !enabled
         ? colors['border']!
         : (isDanger ? Colors.red[700]! : colors['border']!);
     final fgColor = !enabled
         ? colors['textSecondary']!
-        : (isDanger
-              ? Colors.white
-              : (isActive ? Colors.white : colors['text']!));
+        : (isDanger ? Colors.white : (isActive ? Colors.white : colors['text']!));
 
     return Tooltip(
       message: label,
@@ -4683,14 +4168,7 @@ $null = Add-Type -MemberDefinition '[DllImport("user32.dll")] public static exte
             children: [
               Icon(icon, color: fgColor, size: 16),
               const SizedBox(width: 4),
-              Text(
-                label,
-                style: TextStyle(
-                  color: fgColor,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
+              Text(label, style: TextStyle(color: fgColor, fontSize: 12, fontWeight: FontWeight.w500)),
             ],
           ),
         ),
@@ -4704,9 +4182,7 @@ $null = Add-Type -MemberDefinition '[DllImport("user32.dll")] public static exte
       'bg': isDark ? const Color(0xFF1A1A1A) : const Color(0xFFF5F5F5),
       'cardBg': isDark ? const Color(0xFF2A2A2A) : Colors.white,
       'text': isDark ? Colors.white : Colors.black,
-      'textSecondary': isDark
-          ? const Color(0xFF999999)
-          : const Color(0xFF666666),
+      'textSecondary': isDark ? const Color(0xFF999999) : const Color(0xFF666666),
       'accent': isDark ? const Color(0xFF4A90E2) : const Color(0xFF2E5BF8),
       'border': isDark ? const Color(0xFF404040) : const Color(0xFFE0E0E0),
     };
