@@ -89,6 +89,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   static const int _defaultCaptureMaxWidth = 1280;
   static const int _defaultJpegQuality = 50;
   static const int _defaultCaptureIntervalMs = 55;
+  static const bool _remoteAudioFeatureEnabled = false;
 
   // ===== NEW: Performance Tracking & Diagnostics =====
   int _captureTimeMs = 0;
@@ -106,7 +107,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   // ===== NEW: Cursor Optimization =====
   double _cursorPredictX = 0.5;
   double _cursorPredictY = 0.5;
-  int _cursorUpdateFreqMs = 4; // Ultra-low-latency target for cursor/move updates
+  int _cursorUpdateFreqMs = 6; // Low-latency but more stable under rapid clicking
   final List<Offset> _cursorPositionHistory = [];
   // ===== END: Cursor Optimization =====
 
@@ -142,7 +143,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   String _encryptionType = 'AES-256 Encrypted';
   bool _isFullScreen = false;
   bool _isRecording = false;
-  bool _audioEnabled = true;
+  bool _audioEnabled = false;
   bool _isBlackoutMode = false;
   bool _isPrivacyModeForRemote = false;
   bool _isLockedForRemoteUser = false;
@@ -181,6 +182,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   final FocusNode _remoteControlFocusNode = FocusNode();
   int _lastPointerMoveMs = 0;
   bool _rightButtonPressed = false;
+  bool _mouseButtonDown = false;
   bool _isClosingSession = false;
   int _remoteFrameWidth = 16;
   int _remoteFrameHeight = 9;
@@ -314,8 +316,10 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     _refreshLocalScreenInfo();
     _autoEnterFullscreenForController();
     _pinRemoteAgentWindowIfNeeded();
-    unawaited(_initAudioUdpSocket());
-    unawaited(_syncRemoteAudioPipeline());
+    if (_remoteAudioFeatureEnabled) {
+      unawaited(_initAudioUdpSocket());
+      unawaited(_syncRemoteAudioPipeline());
+    }
     _remoteControlFocusNode.addListener(() {
       if (!_remoteControlFocusNode.hasFocus) {
         _stopAllManagedRepeats();
@@ -873,7 +877,7 @@ Write-Output "$count,$width,$height"
         ? Map<String, dynamic>.from(data['payload'] as Map)
         : <String, dynamic>{};
 
-    if (messageType == 'screen_frame' && _audioEnabled && !_remoteAudioActive) {
+    if (messageType == 'screen_frame' && _remoteAudioFeatureEnabled && _audioEnabled && !_remoteAudioActive) {
       unawaited(_syncRemoteAudioPipeline());
     }
 
@@ -932,6 +936,14 @@ Write-Output "$count,$width,$height"
     }
 
     if (messageType == 'audio_toggle') {
+      if (!_remoteAudioFeatureEnabled) {
+        if (mounted) {
+          setState(() {
+            _audioEnabled = false;
+          });
+        }
+        return;
+      }
       if (widget.sendLocalScreen) {
         setState(() {
           _audioEnabled = payload['enabled'] == true;
@@ -947,6 +959,7 @@ Write-Output "$count,$width,$height"
     }
 
     if (messageType == 'remote_audio') {
+      if (!_remoteAudioFeatureEnabled) return;
       unawaited(_handleRemoteAudioSignal(payload));
       return;
     }
@@ -1406,6 +1419,7 @@ Write-Output "$count,$width,$height"
   }
 
   bool _sendRemoteAudioPayload(Map<String, dynamic> payload) {
+    if (!_remoteAudioFeatureEnabled) return false;
     if (_audioUdpReady && payload['kind'] == 'packet' && _audioUdpSocket != null && _audioPeerAddress != null && _audioPeerPort != null) {
       final envelope = {
         'type': 'remote_audio_udp',
@@ -1567,6 +1581,16 @@ Write-Output "$count,$width,$height"
   }
 
   Future<void> _syncRemoteAudioPipeline() async {
+    if (!_remoteAudioFeatureEnabled) {
+      if (_remoteAudioActive) {
+        await _remoteAudioService.stopHost();
+        await _remoteAudioService.stopClient();
+        _remoteAudioActive = false;
+      }
+      _remoteAudioCompatTimer?.cancel();
+      _remoteAudioCompatTimer = null;
+      return;
+    }
     if (!_isConnected || !_audioEnabled || !_canSignal) {
       if (_remoteAudioActive) {
         await _remoteAudioService.stopHost();
@@ -3149,6 +3173,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                           _localCursorY = p.dy;
                           _flushPendingMove();
                           _rightButtonPressed = event.buttons == kSecondaryMouseButton;
+                          _mouseButtonDown = true;
                           _sendInputEvent(
                             _rightButtonPressed ? 'right_down' : 'left_down',
                             normalizedX: p.dx,
@@ -3179,6 +3204,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                       : null,
                   onPointerUp: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
                       ? (event) {
+                        if (!_mouseButtonDown) return;
                           final p = normalize(event.localPosition);
                           if (p == null) return;
                           _localCursorX = p.dx;
@@ -3189,6 +3215,20 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                             normalizedX: p.dx,
                             normalizedY: p.dy,
                           );
+                          _mouseButtonDown = false;
+                          _rightButtonPressed = false;
+                        }
+                      : null,
+                  onPointerCancel: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                      ? (event) {
+                          if (!_mouseButtonDown) return;
+                          _flushPendingMove();
+                          _sendInputEvent(
+                            _rightButtonPressed ? 'right_up' : 'left_up',
+                            normalizedX: _localCursorX,
+                            normalizedY: _localCursorY,
+                          );
+                          _mouseButtonDown = false;
                           _rightButtonPressed = false;
                         }
                       : null,
@@ -4498,8 +4538,10 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
       _syncLocalCursorFromSystem();
     }
     
-    // Update cursor prediction frame for smooth motion interpolation
-    _updateCursorPredictionFrame();
+    // Avoid extra UI churn while actively holding mouse button down.
+    if (!_mouseButtonDown) {
+      _updateCursorPredictionFrame();
+    }
     
     // Check if cursor position has changed significantly
     final dx = (_localCursorX - _lastSentCursorX).abs();
@@ -4508,7 +4550,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     // Send update if cursor moved (even slightly) or hasn't been sent recently
     final timeSinceLastSend = _cursorMovementStopwatch.elapsedMilliseconds;
     final significantMovement = dx > 0.001 || dy > 0.001;
-    final timeoutElapsed = timeSinceLastSend > 100;  // Max 100ms without update
+    final timeoutElapsed = timeSinceLastSend > 120;  // Keep alive updates
     
     if (significantMovement || timeoutElapsed) {
       _sendCursorUpdate();
@@ -4540,9 +4582,10 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
   void _sendCursorUpdate() {
     if (!_canSignal) return;
     
-    // Native cursor-shape polling (fast enough for near-real-time sync).
+    // Native cursor-shape polling.
+    // Keep this moderate to avoid adding jitter during heavy click bursts.
     final now = DateTime.now().millisecondsSinceEpoch;
-    if (now - (_lastCursorShapeUpdateMs ?? 0) > 60) {
+    if (!_mouseButtonDown && now - (_lastCursorShapeUpdateMs ?? 0) > 220) {
       _lastCursorShapeUpdateMs = now;
       _cursorShapeType = _detectSystemCursorShape();
     }
