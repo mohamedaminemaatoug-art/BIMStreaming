@@ -93,9 +93,10 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   double _remoteCursorVelocityX = 0.0;          // Cursor velocity for prediction
   double _remoteCursorVelocityY = 0.0;          // Cursor velocity for prediction
   int _lastRemoteCursorUpdateMs = 0;            // Last time we received cursor update
-  bool _showRemoteCursor = true;                // Show/hide remote cursor overlay
+  bool _showRemoteCursor = false;               // Show/hide remote cursor overlay
   String _cursorShapeType = 'arrow';            // Current cursor shape (arrow, hand, text, etc)
   int? _lastCursorShapeUpdateMs = 0;            // Last time we detected cursor shape (cache: every 200ms)
+  bool _cursorShapeDetectionInFlight = false;   // Prevent overlapping cursor-shape probes
   final Stopwatch _cursorMovementStopwatch = Stopwatch();
   // ===== END: TeamViewer-Style Cursor Channel =====
 
@@ -154,7 +155,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   int _localCaptureTop = 0;
   int _localCaptureWidth = 0;
   int _localCaptureHeight = 0;
-  bool _fillRemoteViewport = false;
+  bool _fillRemoteViewport = true;
   int _lastInputSentAtMs = 0;
   int _inputSequence = 0;
   int _lastAppliedInputSequence = 0;
@@ -363,6 +364,10 @@ Write-Output "$count,$width,$height"
         if (parts.length >= 3) {
           _screenWidthActual = int.tryParse(parts[1]) ?? 1920;
           _screenHeightActual = int.tryParse(parts[2]) ?? 1080;
+          if (_captureResolutionLabel == 'Full Screen') {
+            _captureMaxWidth = _recommendedFullScreenCaptureWidth();
+            _fillRemoteViewport = true;
+          }
         }
         
         if (_selectedLocalScreenIndex >= _localScreenCount) {
@@ -569,7 +574,7 @@ Write-Output "$count,$width,$height"
       switch (preset) {
         case 'Full Screen':
           _fillRemoteViewport = true;
-          _captureMaxWidth = _defaultCaptureMaxWidth;
+          _captureMaxWidth = _recommendedFullScreenCaptureWidth();
           break;
         case 'Adapter':
           _fillRemoteViewport = false;
@@ -580,6 +585,13 @@ Write-Output "$count,$width,$height"
       }
     });
     _sendDisplayConfig();
+  }
+
+  int _recommendedFullScreenCaptureWidth() {
+    final longEdge = _screenWidthActual > _screenHeightActual
+        ? _screenWidthActual
+        : _screenHeightActual;
+    return longEdge.clamp(_defaultCaptureMaxWidth, 3200);
   }
 
   void _setQualityPreset(String preset) {
@@ -918,6 +930,7 @@ Write-Output "$count,$width,$height"
         }
         if (resolution.isNotEmpty) {
           _captureResolutionLabel = resolution;
+          if (resolution == 'Full Screen') _captureMaxWidth = _recommendedFullScreenCaptureWidth();
           if (resolution == '720p') _captureMaxWidth = 1280;
           if (resolution == '1080p') _captureMaxWidth = 1920;
           if (resolution == '540p') _captureMaxWidth = 960;
@@ -1483,34 +1496,23 @@ Write-Output "$count,$width,$height"
   void _applyRemoteInputNative(String action, double? normX, double? normY, int wheelDelta) {
     if (!io.Platform.isWindows) return;
     try {
-      // OPTIMIZATION: Native SetCursorPos (~2ms vs ~100-500ms PowerShell)
-      // Convert normalized coordinates to absolute pixel coordinates
-      if (normX != null && normY != null && (action == 'move')) {
-        // ✅ CRITICAL FIX: Use RECEIVER's actual screen dimensions, not sender's capture bounds
-        // This ensures cursor position matches across different resolutions
-        // Example: Sender 1920x1080 → Receiver 1366x768: normalized (0.5,0.5) = center on receiver
-        final px = (_screenWidthActual.toDouble() * normX.clamp(0.0, 1.0)).toInt();
-        final py = (_screenHeightActual.toDouble() * normY.clamp(0.0, 1.0)).toInt();
-        
-        // Clamp to valid screen range
-        final finalPx = px.clamp(0, _screenWidthActual - 1);
-        final finalPy = py.clamp(0, _screenHeightActual - 1);
-        
-        // Update cursor prediction for client-side rendering
+      // Map normalized coordinates into the exact captured rectangle.
+      // This keeps remote click targets aligned even with multi-monitor offsets/DPI.
+      if (normX != null && normY != null) {
+        final capLeft = _localCaptureLeft;
+        final capTop = _localCaptureTop;
+        final capWidth = _localCaptureWidth > 0 ? _localCaptureWidth : _screenWidthActual;
+        final capHeight = _localCaptureHeight > 0 ? _localCaptureHeight : _screenHeightActual;
+        final relX = ((capWidth - 1) * normX.clamp(0.0, 1.0)).round().clamp(0, capWidth - 1);
+        final relY = ((capHeight - 1) * normY.clamp(0.0, 1.0)).round().clamp(0, capHeight - 1);
+        final finalPx = capLeft + relX;
+        final finalPy = capTop + relY;
+        win32.SetCursorPos(finalPx, finalPy);
+
         _cursorPredictX = normX;
         _cursorPredictY = normY;
-        
-        try {
-          // Direct Win32 API call: SetCursorPos (2ms vs 100-500ms PowerShell)
-          win32.SetCursorPos(finalPx, finalPy);
-        } catch (e) {
-          // Fallback silently
-          print('[Input] SetCursorPos($finalPx, $finalPy) failed: $e');
-        }
       }
-      
-      // Mouse buttons and wheel are handled via PowerShell fallback
-      // (Can be extended with FFI bindings if needed)
+
     } catch (e) {
       print('[Input] Native handler exception: $e');
     }
@@ -1619,9 +1621,8 @@ Write-Output "$count,$width,$height"
         : 0;
     final key = (payload['key'] ?? '').toString();
 
-    // OPTIMIZATION: Use native Win32 for mouse operations (2ms vs 100-500ms PowerShell)
-    // Only fall back to PowerShell for keyboard if needed
-    if (mouseActions.contains(action)) {
+    // Use native path for move only; button/wheel continue via PowerShell path below.
+    if (action == 'move') {
       _applyRemoteInputNative(action, x, y, wheelDelta);
       return;
     }
@@ -2335,6 +2336,8 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
   }
 
   void _sendMoveIfNeeded(Offset p) {
+    _localCursorX = p.dx;
+    _localCursorY = p.dy;
     _pendingMove = p;
     if (_pendingMoveTimer?.isActive == true) return;
 
@@ -2972,45 +2975,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                   final h = box.size.height;
                   if (w <= 0 || h <= 0) return null;
                   _maybeSendViewportHint(Size(w, h));
-
-                  final frameAspect = _remoteFrameWidth / _remoteFrameHeight;
-                  final viewAspect = w / h;
-                  double drawW;
-                  double drawH;
-                  double offsetX = 0;
-                  double offsetY = 0;
-
-                  if (_fillRemoteViewport) {
-                    if (frameAspect > viewAspect) {
-                      drawH = h;
-                      drawW = h * frameAspect;
-                      offsetX = (w - drawW) / 2;
-                    } else {
-                      drawW = w;
-                      drawH = w / frameAspect;
-                      offsetY = (h - drawH) / 2;
-                    }
-                  } else {
-                    if (frameAspect > viewAspect) {
-                      drawW = w;
-                      drawH = w / frameAspect;
-                      offsetY = (h - drawH) / 2;
-                    } else {
-                      drawH = h;
-                      drawW = h * frameAspect;
-                      offsetX = (w - drawW) / 2;
-                    }
-                  }
-
-                  final inX = (local.dx - offsetX);
-                  final inY = (local.dy - offsetY);
-                  if (!_fillRemoteViewport && (inX < 0 || inY < 0 || inX > drawW || inY > drawH)) {
-                    return null;
-                  }
-
-                  final nx = (inX / drawW).clamp(0.0, 1.0);
-                  final ny = (inY / drawH).clamp(0.0, 1.0);
-                  return Offset(nx, ny);
+                  return _normalizeLocalToRemote(local, Size(w, h));
                 }
 
                 return Listener(
@@ -3019,6 +2984,8 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                           _revealOverlayTemporarily();
                           final p = normalize(event.localPosition);
                           if (p == null) return;
+                          _localCursorX = p.dx;
+                          _localCursorY = p.dy;
                           _flushPendingMove();
                           _rightButtonPressed = event.buttons == kSecondaryMouseButton;
                           _sendInputEvent(
@@ -3053,6 +3020,8 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                       ? (event) {
                           final p = normalize(event.localPosition);
                           if (p == null) return;
+                          _localCursorX = p.dx;
+                          _localCursorY = p.dy;
                           _flushPendingMove();
                           _sendInputEvent(
                             _rightButtonPressed ? 'right_up' : 'left_up',
@@ -4214,7 +4183,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
   /// Detects the current system cursor shape using PowerShell
   /// Returns logical cursor type (pointer, text, hand, resize-x, resize-y, loading)
   /// Light & fast - only sends the type string, not icon data (saves bandwidth)
-  String _detectSystemCursorShape() {
+  Future<String> _detectSystemCursorShape() async {
     if (!io.Platform.isWindows) return 'pointer';
     
     try {
@@ -4371,9 +4340,18 @@ public static class NativeCursor {
     
     // Detect system cursor shape (cached every 200ms to avoid expensive API calls)
     final now = DateTime.now().millisecondsSinceEpoch;
-    if (now - (_lastCursorShapeUpdateMs ?? 0) > 200) {
-      _cursorShapeType = _detectSystemCursorShape();
+    if (now - (_lastCursorShapeUpdateMs ?? 0) > 200 && !_cursorShapeDetectionInFlight) {
       _lastCursorShapeUpdateMs = now;
+      _cursorShapeDetectionInFlight = true;
+      unawaited(
+        _detectSystemCursorShape().then((shape) {
+          _cursorShapeType = shape;
+        }).catchError((Object e) {
+          debugPrint('[Cursor] Detection failed: $e');
+        }).whenComplete(() {
+          _cursorShapeDetectionInFlight = false;
+        }),
+      );
     }
     
     // Build cursor payload (very small: 2 floats + type string = ~30-50 bytes)
@@ -4399,6 +4377,82 @@ public static class NativeCursor {
 
   /// Remote cursor rendering - Draw cursor locally WHILE waiting for video
   /// This is the "magic trick" that makes TeamViewer feel instant!
+  Rect _computeRemoteFrameDrawRect(Size viewportSize) {
+    final w = viewportSize.width;
+    final h = viewportSize.height;
+    if (w <= 0 || h <= 0) return Rect.zero;
+
+    final frameW = _remoteFrameWidth <= 0 ? w : _remoteFrameWidth;
+    final frameH = _remoteFrameHeight <= 0 ? h : _remoteFrameHeight;
+    final frameAspect = frameW / frameH;
+    final viewAspect = w / h;
+
+    double drawW;
+    double drawH;
+    double offsetX = 0;
+    double offsetY = 0;
+
+    if (_fillRemoteViewport) {
+      if (frameAspect > viewAspect) {
+        drawH = h;
+        drawW = h * frameAspect;
+        offsetX = (w - drawW) / 2;
+      } else {
+        drawW = w;
+        drawH = w / frameAspect;
+        offsetY = (h - drawH) / 2;
+      }
+    } else {
+      if (frameAspect > viewAspect) {
+        drawW = w;
+        drawH = w / frameAspect;
+        offsetY = (h - drawH) / 2;
+      } else {
+        drawH = h;
+        drawW = h * frameAspect;
+        offsetX = (w - drawW) / 2;
+      }
+    }
+
+    return Rect.fromLTWH(offsetX, offsetY, drawW, drawH);
+  }
+
+  Offset? _normalizeLocalToRemote(Offset local, Size viewportSize) {
+    final frameRect = _computeRemoteFrameDrawRect(viewportSize);
+    if (frameRect.width <= 0 || frameRect.height <= 0) return null;
+
+    final inX = local.dx - frameRect.left;
+    final inY = local.dy - frameRect.top;
+    if (!_fillRemoteViewport &&
+        (inX < 0 || inY < 0 || inX > frameRect.width || inY > frameRect.height)) {
+      return null;
+    }
+
+    final nx = (inX / frameRect.width).clamp(0.0, 1.0);
+    final ny = (inY / frameRect.height).clamp(0.0, 1.0);
+    return Offset(nx, ny);
+  }
+
+  Offset _cursorHotspotForShape(String shapeType) {
+    switch (shapeType) {
+      case 'text':
+        return const Offset(10, 10);
+      case 'hand':
+        return const Offset(5, 2);
+      case 'resize-x':
+      case 'resize-y':
+        return const Offset(10, 10);
+      case 'loading':
+      case 'wait':
+        return const Offset(9, 9);
+      case 'pointer':
+      case 'arrow':
+      default:
+        // Arrow hotspot is near the top-left tip, not center.
+        return const Offset(1, 1);
+    }
+  }
+
   Widget _buildRemoteCursorOverlay(Widget child) {
     // Use interpolated position for smooth rendering.
     final displayX = _remoteCursorDisplayX;
@@ -4406,6 +4460,7 @@ public static class NativeCursor {
     final smoothI = 0.15;
     final smoothX = displayX + ((_remoteCursorPredictX - displayX) * smoothI).clamp(-0.1, 0.1);
     final smoothY = displayY + ((_remoteCursorPredictY - displayY) * smoothI).clamp(-0.1, 0.1);
+    final hotspot = _cursorHotspotForShape(_cursorShapeType);
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -4414,13 +4469,17 @@ public static class NativeCursor {
         if (!width.isFinite || !height.isFinite || width <= 0 || height <= 0) {
           return child;
         }
+        final frameRect = _computeRemoteFrameDrawRect(Size(width, height));
+        if (frameRect.width <= 0 || frameRect.height <= 0) {
+          return child;
+        }
 
         return Stack(
           children: [
             child,
             Positioned(
-              left: smoothX * width - 10,
-              top: smoothY * height - 10,
+              left: frameRect.left + (smoothX * frameRect.width) - hotspot.dx,
+              top: frameRect.top + (smoothY * frameRect.height) - hotspot.dy,
               child: _showRemoteCursor ? _buildCursorShape(_cursorShapeType) : const SizedBox(),
             ),
           ],
@@ -4521,6 +4580,13 @@ public static class NativeCursor {
     
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final deltaMs = (nowMs - _lastRemoteCursorUpdateMs).toDouble();
+
+    if (_showRemoteCursor && deltaMs > 1200) {
+      setState(() {
+        _showRemoteCursor = false;
+      });
+      return;
+    }
     
     // Apply velocity prediction (extrapolate where cursor should be)
     // This anticipates the cursor movement based on velocity
