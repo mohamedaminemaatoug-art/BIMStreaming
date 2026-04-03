@@ -2847,6 +2847,9 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
     setState(() => _isSupportVideoExpanded = nextExpanded);
 
     if (!kIsWeb && io.Platform.isWindows) {
+      await windowManager.setTitleBarStyle(
+        nextExpanded ? TitleBarStyle.hidden : TitleBarStyle.normal,
+      );
       await windowManager.setFullScreen(nextExpanded);
     }
   }

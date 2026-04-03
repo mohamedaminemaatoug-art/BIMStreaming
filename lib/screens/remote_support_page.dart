@@ -336,6 +336,11 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
         }
       });
     }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _sendResolutionUpdate();
+      }
+    });
   }
 
   void _initializeUserPaths() {
@@ -369,6 +374,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       final isFs = await windowManager.isFullScreen();
+      await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
       if (!isFs) {
         await windowManager.setFullScreen(true);
       }
@@ -383,6 +389,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       await windowManager.setAlwaysOnTop(true);
+      await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
       await windowManager.setFullScreen(true);
       if (!mounted) return;
       setState(() => _isFullScreen = true);
@@ -425,6 +432,7 @@ Write-Output "$count,$width,$height"
             _setVirtualResolutionFromLongEdge(_recommendedFullScreenCaptureWidth());
             _fillRemoteViewport = true;
           }
+          _sendResolutionUpdate();
         }
         
         if (_selectedLocalScreenIndex >= _localScreenCount) {
@@ -783,6 +791,19 @@ Write-Output "$count,$width,$height"
     );
   }
 
+  void _sendResolutionUpdate() {
+    if (!_canSignal) return;
+    _sendSessionPayload(
+      messageType: 'resolution_update',
+      payload: {
+        'width': _localCaptureWidth > 0 ? _localCaptureWidth : _screenWidthActual,
+        'height': _localCaptureHeight > 0 ? _localCaptureHeight : _screenHeightActual,
+        'virtualWidth': _virtualWidth,
+        'virtualHeight': _virtualHeight,
+      },
+    );
+  }
+
   void _maybeSendViewportHint(Size viewportSize) {
     if (widget.sendLocalScreen) return;
     if (!_canSignal) return;
@@ -804,6 +825,14 @@ Write-Output "$count,$width,$height"
         'viewportWidth': viewportSize.width,
         'viewportHeight': viewportSize.height,
         'viewportDpr': dpr,
+      },
+    );
+    _sendSessionPayload(
+      messageType: 'resolution_request',
+      payload: {
+        'width': viewportSize.width,
+        'height': viewportSize.height,
+        'dpr': dpr,
       },
     );
   }
@@ -1037,6 +1066,48 @@ Write-Output "$count,$width,$height"
           });
           _restartScreenShareTimerIfNeeded();
         }
+      }
+      return;
+    }
+
+    if (messageType == 'resolution_request') {
+      if (!widget.sendLocalScreen) return;
+      final width = payload['width'] is num ? (payload['width'] as num).toDouble() : 0.0;
+      final height = payload['height'] is num ? (payload['height'] as num).toDouble() : 0.0;
+      if (width > 0 && height > 0) {
+        final targetLongEdge = width > height ? width : height;
+        final bounded = targetLongEdge.clamp(960.0, 3840.0).toInt();
+        if ((_captureMaxWidth - bounded).abs() >= 32) {
+          setState(() {
+            _captureMaxWidth = bounded;
+            _captureResolutionLabel = 'Adapted Resolution';
+            _fillRemoteViewport = true;
+          });
+          _restartScreenShareTimerIfNeeded();
+          _sendResolutionUpdate();
+        }
+      }
+      return;
+    }
+
+    if (messageType == 'resolution_update') {
+      final width = payload['width'] is num ? (payload['width'] as num).toInt() : 0;
+      final height = payload['height'] is num ? (payload['height'] as num).toInt() : 0;
+      final virtualWidth = payload['virtualWidth'] is num ? (payload['virtualWidth'] as num).toInt() : 0;
+      final virtualHeight = payload['virtualHeight'] is num ? (payload['virtualHeight'] as num).toInt() : 0;
+      if (width > 0 && height > 0) {
+        setState(() {
+          _remoteRealWidth = width;
+          _remoteRealHeight = height;
+          if (virtualWidth > 0 && virtualHeight > 0) {
+            _remoteVirtualWidth = virtualWidth;
+            _remoteVirtualHeight = virtualHeight;
+          } else {
+            _remoteVirtualWidth = width;
+            _remoteVirtualHeight = height;
+          }
+          _remoteScaleRatio = _remoteVirtualWidth > 0 ? (_remoteRealWidth / _remoteVirtualWidth) : 1.0;
+        });
       }
       return;
     }
@@ -2688,6 +2759,9 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     final isFullScreen = await windowManager.isFullScreen();
     if (!mounted) return;
     setState(() => _isFullScreen = isFullScreen);
+    await windowManager.setTitleBarStyle(
+      isFullScreen ? TitleBarStyle.hidden : TitleBarStyle.normal,
+    );
     if (isFullScreen) {
       _revealOverlayTemporarily();
     }
@@ -2695,6 +2769,9 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
 
   Future<void> _toggleFullScreen() async {
     final nextValue = !_isFullScreen;
+    await windowManager.setTitleBarStyle(
+      nextValue ? TitleBarStyle.hidden : TitleBarStyle.normal,
+    );
     await windowManager.setFullScreen(nextValue);
     if (!mounted) return;
     setState(() => _isFullScreen = nextValue);
@@ -3291,15 +3368,41 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                           }
                         }
                       : null,
-                  child: _buildRemoteCursorOverlay(
-                    Image.memory(
-                      _remoteScreenFrame!,
-                      width: double.infinity,
-                      height: double.infinity,
-                      fit: _fillRemoteViewport ? BoxFit.cover : BoxFit.contain,
-                      gaplessPlayback: true,
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final viewportWidth = constraints.maxWidth;
+                        final viewportHeight = constraints.maxHeight;
+                        if (viewportWidth <= 0 || viewportHeight <= 0) {
+                          return const SizedBox.shrink();
+                        }
+
+                        // Keep host scaling in sync after window/fullscreen transitions.
+                        _maybeSendViewportHint(Size(viewportWidth, viewportHeight));
+
+                        final sourceWidth = _remoteVirtualWidth > 0 ? _remoteVirtualWidth : _remoteFrameWidth;
+                        final sourceHeight = _remoteVirtualHeight > 0 ? _remoteVirtualHeight : _remoteFrameHeight;
+
+                        return Center(
+                          child: FittedBox(
+                            fit: BoxFit.contain,
+                            alignment: Alignment.center,
+                            child: SizedBox(
+                              width: sourceWidth.toDouble(),
+                              height: sourceHeight.toDouble(),
+                              child: _buildRemoteCursorOverlay(
+                                Image.memory(
+                                  _remoteScreenFrame!,
+                                  width: sourceWidth.toDouble(),
+                                  height: sourceHeight.toDouble(),
+                                  fit: BoxFit.fill,
+                                  gaplessPlayback: true,
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
                     ),
-                  ),
                 );
               },
             ),
@@ -4383,6 +4486,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
       });
       
       _sendCaptureStatus('ok', '');
+      _sendResolutionUpdate();
       if (_framesSent % 30 == 0) {
         print('[ScreenShare] Sent frame #$_framesSent (${bytes.length} bytes) ${_localFrameWidth}x$_localFrameHeight quality=$quality');
       }
@@ -4747,7 +4851,8 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
       viewportSize: viewportSize,
       sourceWidth: _remoteVirtualWidth > 0 ? _remoteVirtualWidth : _remoteFrameWidth,
       sourceHeight: _remoteVirtualHeight > 0 ? _remoteVirtualHeight : _remoteFrameHeight,
-      fillViewport: _fillRemoteViewport,
+      // Rendering is always BoxFit.contain; keep input mapping identical.
+      fillViewport: false,
     );
   }
 
