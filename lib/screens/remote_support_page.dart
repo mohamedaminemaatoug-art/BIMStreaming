@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
 import 'package:flutter/material.dart';
@@ -40,7 +40,7 @@ class RemoteSupportPage extends StatefulWidget {
 class _RemoteSupportPageState extends State<RemoteSupportPage> {
   static const int _defaultCaptureMaxWidth = 1280;
   static const int _defaultJpegQuality = 50;
-  static const int _defaultCaptureIntervalMs = 150;
+  static const int _defaultCaptureIntervalMs = 55;
 
   bool _isConnected = true;
   String _connectionStatus = 'Connected';
@@ -98,10 +98,35 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   int _localCaptureWidth = 0;
   int _localCaptureHeight = 0;
   bool _fillRemoteViewport = false;
-  int _lastAppliedMoveMs = 0;
+  int _lastInputSentAtMs = 0;
+  int _inputSequence = 0;
+  int _lastAppliedInputSequence = 0;
+  int _lastAppliedMoveSequence = 0;
   int _lastCaptureStatusSentMs = 0;
   double? _lastSentMoveX;
   double? _lastSentMoveY;
+  int _lastMoveSentAtMs = 0;
+  int _moveDeltaSinceKeyframe = 0;
+  double _remoteCursorNormX = 0.5;
+  double _remoteCursorNormY = 0.5;
+  bool _remoteCursorInitialized = false;
+  int _inputPacketsReceived = 0;
+  int _inputPacketsDropped = 0;
+  String _packetLossText = '0.0%';
+  String _fpsText = '0';
+  int _lastFrameSentHash = 0;
+  int _lastFrameSentAtMs = 0;
+  int _lastViewportHintAtMs = 0;
+  double _lastViewportHintW = 0;
+  double _lastViewportHintH = 0;
+  double _lastViewportHintDpr = 0;
+  int _remoteProtocolVersion = 1;
+  bool _remoteSupportsMoveDelta = false;
+  bool _remoteSupportsViewportHint = false;
+  double? _pendingRemoteMoveX;
+  double? _pendingRemoteMoveY;
+  Timer? _pendingRemoteMoveTimer;
+  bool _remoteMoveInFlight = false;
   Offset? _pendingMove;
   Timer? _pendingMoveTimer;
   double _wheelAccumulator = 0.0;
@@ -281,6 +306,16 @@ Write-Output $count
   void _connectSessionSignalIfAvailable() {
     if (!_canSignal) return;
     _signalSubscription = widget.signalingService!.events.listen(_handleSignalEvent);
+    _sendSessionPayload(
+      messageType: 'transport_capabilities',
+      payload: {
+        'protocolVersion': 2,
+        'supportsMoveDelta': true,
+        'supportsViewportHint': true,
+        'videoMode': 'ws_jpeg_adaptive',
+        'inputMode': 'ws_input_v2',
+      },
+    );
   }
 
   void _startAutomaticScreenShareIfPossible() {
@@ -348,11 +383,18 @@ Write-Output $count
       final elapsed = now.difference(prev).inMilliseconds.clamp(1, 1000000);
       final frameDelta = _framesReceived - _lastNetFrameCounter;
       final kbps = ((frameDelta * 140.0 * 8.0) / (elapsed / 1000.0)).toStringAsFixed(0);
+      final fps = ((frameDelta * 1000.0) / elapsed).clamp(0, 120).toStringAsFixed(1);
+      final processedInputs = _inputPacketsReceived + _inputPacketsDropped;
+      final packetLoss = processedInputs == 0
+          ? 0.0
+          : (_inputPacketsDropped * 100.0 / processedInputs);
       final q = _pingMs <= 50
           ? 'Excellent'
           : (_pingMs <= 100 ? 'Good' : (_pingMs <= 180 ? 'Fair' : 'Poor'));
       setState(() {
         _bandwidthText = '$kbps kb/s';
+        _fpsText = fps;
+        _packetLossText = '${packetLoss.toStringAsFixed(1)}%';
         _connectionQualityText = q;
         _lastNetFrameCounter = _framesReceived;
         _lastNetSampleAt = now;
@@ -476,23 +518,23 @@ Write-Output $count
           break;
         case 'Low':
           _captureJpegQuality = 45;
-          _captureFrameIntervalMs = 75;
+          _captureFrameIntervalMs = 65;
           _autoQualityMode = 'Manual';
           break;
         case 'Medium':
           _captureJpegQuality = _defaultJpegQuality;
-          _captureFrameIntervalMs = 55;
+          _captureFrameIntervalMs = 45;
           _autoQualityMode = 'Manual';
           break;
         case 'High':
           _captureJpegQuality = 92;
-          _captureFrameIntervalMs = 38;
+          _captureFrameIntervalMs = 33;
           _captureMaxWidth = _defaultCaptureMaxWidth;
           _autoQualityMode = 'Manual';
           break;
         case 'Ultra':
           _captureJpegQuality = 96;
-          _captureFrameIntervalMs = 28;
+          _captureFrameIntervalMs = 25;
           _captureMaxWidth = 3200;
           _autoQualityMode = 'Manual';
           break;
@@ -508,6 +550,7 @@ Write-Output $count
 
   void _applyAutoQuality() {
     if (_autoQualityMode != 'Auto') return;
+    final inputBurst = DateTime.now().millisecondsSinceEpoch - _lastInputSentAtMs < 80;
     // Auto-adjust quality based on bandwidth and ping
     // Excellent (ping <= 50ms): Medium quality
     // Good (ping <= 100ms): Low quality
@@ -521,15 +564,18 @@ Write-Output $count
                 ? 45
                 : 40));
     final newIntervalMs = _pingMs <= 40
-        ? 100
+      ? 33
         : (_pingMs <= 80
-            ? 150
+        ? 45
             : (_pingMs <= 140
-                ? 200
-                : 250));
+          ? 65
+          : 95));
+    final tunedIntervalMs = inputBurst
+      ? (newIntervalMs + 20).clamp(40, 140)
+      : newIntervalMs.clamp(25, 120);
     setState(() {
       _captureJpegQuality = newQuality;
-      _captureFrameIntervalMs = newIntervalMs;
+      _captureFrameIntervalMs = tunedIntervalMs;
     });
     _restartScreenShareTimerIfNeeded();
   }
@@ -541,6 +587,31 @@ Write-Output $count
         'screenIndex': _selectedRemoteScreenIndex,
         'resolution': _captureResolutionLabel,
         'quality': _qualityLabel,
+      },
+    );
+  }
+
+  void _maybeSendViewportHint(Size viewportSize) {
+    if (widget.sendLocalScreen) return;
+    if (!_canSignal) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final dpr = MediaQuery.of(context).devicePixelRatio;
+    final dx = (viewportSize.width - _lastViewportHintW).abs();
+    final dy = (viewportSize.height - _lastViewportHintH).abs();
+    final ddpr = (dpr - _lastViewportHintDpr).abs();
+    final changed = dx >= 16 || dy >= 16 || ddpr >= 0.05;
+    if (!changed && (now - _lastViewportHintAtMs) < 1200) return;
+    if ((now - _lastViewportHintAtMs) < 350) return;
+    _lastViewportHintAtMs = now;
+    _lastViewportHintW = viewportSize.width;
+    _lastViewportHintH = viewportSize.height;
+    _lastViewportHintDpr = dpr;
+    _sendSessionPayload(
+      messageType: 'viewport_hint',
+      payload: {
+        'viewportWidth': viewportSize.width,
+        'viewportHeight': viewportSize.height,
+        'viewportDpr': dpr,
       },
     );
   }
@@ -622,7 +693,21 @@ Write-Output $count
 
     if (messageType == 'input_event') {
       if (widget.sendLocalScreen) {
-        _enqueueRemoteInput(() => _applyRemoteInput(payload));
+        _inputPacketsReceived++;
+        final seq = payload['seq'] is num ? (payload['seq'] as num).toInt() : 0;
+        if (seq > 0 && seq <= _lastAppliedInputSequence) {
+          _inputPacketsDropped++;
+          return;
+        }
+        if (seq > 0) {
+          _lastAppliedInputSequence = seq;
+        }
+        final action = (payload['action'] ?? '').toString();
+        if (action == 'move' || action == 'move_delta') {
+          _enqueueRemoteMove(payload);
+        } else {
+          _enqueueRemoteInput(() => _applyRemoteInput(payload));
+        }
       }
       return;
     }
@@ -702,6 +787,44 @@ Write-Output $count
       return;
     }
 
+    if (messageType == 'transport_capabilities') {
+      final protocol = payload['protocolVersion'] is num
+          ? (payload['protocolVersion'] as num).toInt()
+          : 1;
+      setState(() {
+        _remoteProtocolVersion = protocol;
+        _remoteSupportsMoveDelta = payload['supportsMoveDelta'] == true;
+        _remoteSupportsViewportHint = payload['supportsViewportHint'] == true;
+      });
+      return;
+    }
+
+    if (messageType == 'viewport_hint') {
+      if (!widget.sendLocalScreen) return;
+      final w = payload['viewportWidth'] is num
+          ? (payload['viewportWidth'] as num).toDouble()
+          : 0.0;
+      final h = payload['viewportHeight'] is num
+          ? (payload['viewportHeight'] as num).toDouble()
+          : 0.0;
+      final dpr = payload['viewportDpr'] is num
+          ? (payload['viewportDpr'] as num).toDouble()
+          : 1.0;
+      if (w > 0 && h > 0) {
+        final targetLongEdge = (w > h ? w : h) * dpr;
+        final bounded = targetLongEdge.clamp(960.0, 2560.0).toInt();
+        if ((_captureMaxWidth - bounded).abs() >= 48) {
+          setState(() {
+            _captureMaxWidth = bounded;
+            _captureResolutionLabel = 'Adapted Resolution';
+            _fillRemoteViewport = true;
+          });
+          _restartScreenShareTimerIfNeeded();
+        }
+      }
+      return;
+    }
+
     if (messageType == 'display_config') {
       final idxRaw = payload['screenIndex'];
       final resolution = (payload['resolution'] ?? '').toString();
@@ -727,10 +850,10 @@ Write-Output $count
           if (quality == 'Medium') _captureJpegQuality = _defaultJpegQuality;
           if (quality == 'High') _captureJpegQuality = 92;
           if (quality == 'Ultra') _captureJpegQuality = 96;
-          if (quality == 'Low') _captureFrameIntervalMs = 75;
-          if (quality == 'Medium') _captureFrameIntervalMs = 55;
-          if (quality == 'High') _captureFrameIntervalMs = 38;
-          if (quality == 'Ultra') _captureFrameIntervalMs = 28;
+          if (quality == 'Low') _captureFrameIntervalMs = 65;
+          if (quality == 'Medium') _captureFrameIntervalMs = 45;
+          if (quality == 'High') _captureFrameIntervalMs = 33;
+          if (quality == 'Ultra') _captureFrameIntervalMs = 25;
           _restartScreenShareTimerIfNeeded();
         }
       }
@@ -1256,7 +1379,14 @@ Write-Output $count
     Map<String, dynamic>? extra,
   }) {
     if (!_canSendRemoteInput) return;
-    final payload = <String, dynamic>{'action': action};
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _lastInputSentAtMs = now;
+    final payload = <String, dynamic>{
+      'action': action,
+      'seq': ++_inputSequence,
+      'sentAt': now,
+      'channel': 'input',
+    };
     if (normalizedX != null) payload['x'] = normalizedX.clamp(0.0, 1.0);
     if (normalizedY != null) payload['y'] = normalizedY.clamp(0.0, 1.0);
     if (wheelDelta != null) payload['wheelDelta'] = wheelDelta;
@@ -1335,7 +1465,6 @@ Write-Output $count
       return;
     }
     if (action == 'key_press' && payload['legacyCompat'] == true) {
-      // Ignore compatibility duplicate on updated receivers.
       return;
     }
     if (action == 'reset_all_keys') {
@@ -1356,10 +1485,9 @@ Write-Output $count
       await _applyRemoteKeyboardEvent(payload);
       return;
     }
-    if (action == 'move') {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      if (now - _lastAppliedMoveMs < 12) return;
-      _lastAppliedMoveMs = now;
+    if (action == 'move' || action == 'move_delta') {
+      _enqueueRemoteMove(payload);
+      return;
     }
 
     final x = (payload['x'] is num) ? (payload['x'] as num).toDouble() : null;
@@ -1464,6 +1592,114 @@ switch ($action) {
     }
   }
 
+  void _enqueueRemoteMove(Map<String, dynamic> payload) {
+    final action = (payload['action'] ?? '').toString();
+    if (action != 'move' && action != 'move_delta') return;
+    final seq = payload['seq'] is num ? (payload['seq'] as num).toInt() : 0;
+    if (seq > 0 && seq <= _lastAppliedMoveSequence) {
+      _inputPacketsDropped++;
+      return;
+    }
+    if (seq > 0) _lastAppliedMoveSequence = seq;
+
+    double? x = (payload['x'] is num) ? (payload['x'] as num).toDouble() : null;
+    double? y = (payload['y'] is num) ? (payload['y'] as num).toDouble() : null;
+    final sentAt = payload['sentAt'] is num ? (payload['sentAt'] as num).toInt() : 0;
+    final vx = payload['vx'] is num ? (payload['vx'] as num).toDouble() : 0.0;
+    final vy = payload['vy'] is num ? (payload['vy'] as num).toDouble() : 0.0;
+
+    if (action == 'move_delta') {
+      final dx = payload['dx'] is num ? (payload['dx'] as num).toDouble() : 0.0;
+      final dy = payload['dy'] is num ? (payload['dy'] as num).toDouble() : 0.0;
+      final baseX = payload['baseX'] is num
+          ? (payload['baseX'] as num).toDouble()
+          : (_remoteCursorInitialized ? _remoteCursorNormX : 0.5);
+      final baseY = payload['baseY'] is num
+          ? (payload['baseY'] as num).toDouble()
+          : (_remoteCursorInitialized ? _remoteCursorNormY : 0.5);
+      x = (baseX + dx).clamp(0.0, 1.0);
+      y = (baseY + dy).clamp(0.0, 1.0);
+    }
+
+    if (x == null || y == null) return;
+    var predictedX = x;
+    var predictedY = y;
+    if (sentAt > 0) {
+      final ageMs = (DateTime.now().millisecondsSinceEpoch - sentAt).clamp(0, 180);
+      final oneWaySec = (ageMs / 2000.0);
+      predictedX = (predictedX + (vx * oneWaySec)).clamp(0.0, 1.0);
+      predictedY = (predictedY + (vy * oneWaySec)).clamp(0.0, 1.0);
+    }
+
+    _remoteCursorNormX = predictedX;
+    _remoteCursorNormY = predictedY;
+    _remoteCursorInitialized = true;
+    _pendingRemoteMoveX = predictedX;
+    _pendingRemoteMoveY = predictedY;
+    _schedulePendingRemoteMoveDispatch();
+  }
+
+  void _schedulePendingRemoteMoveDispatch() {
+    if (_remoteMoveInFlight) return;
+    if (_pendingRemoteMoveTimer?.isActive == true) return;
+    _pendingRemoteMoveTimer = Timer(const Duration(milliseconds: 6), () {
+      _pendingRemoteMoveTimer = null;
+      unawaited(_dispatchPendingRemoteMove());
+    });
+  }
+
+  Future<void> _dispatchPendingRemoteMove() async {
+    if (_remoteMoveInFlight) return;
+    final x = _pendingRemoteMoveX;
+    final y = _pendingRemoteMoveY;
+    if (x == null || y == null) return;
+    _pendingRemoteMoveX = null;
+    _pendingRemoteMoveY = null;
+    _remoteMoveInFlight = true;
+    try {
+      await _applyRemotePointerMove(x, y);
+    } finally {
+      _remoteMoveInFlight = false;
+      if (_pendingRemoteMoveX != null && _pendingRemoteMoveY != null) {
+        _schedulePendingRemoteMoveDispatch();
+      }
+    }
+  }
+
+  Future<void> _applyRemotePointerMove(double x, double y) async {
+    final script = r'''
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$x = __X__
+$y = __Y__
+$capLeft = __CAP_LEFT__
+$capTop = __CAP_TOP__
+$capWidth = __CAP_WIDTH__
+$capHeight = __CAP_HEIGHT__
+
+$bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+if ($capWidth -gt 0 -and $capHeight -gt 0) {
+  $bounds = New-Object System.Drawing.Rectangle($capLeft, $capTop, $capWidth, $capHeight)
+}
+$px = $bounds.Left + [int]([double]($bounds.Width - 1) * $x)
+$py = $bounds.Top + [int]([double]($bounds.Height - 1) * $y)
+[System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point($px, $py)
+'''
+        .replaceAll('__X__', x.toStringAsFixed(6))
+        .replaceAll('__Y__', y.toStringAsFixed(6))
+        .replaceAll('__CAP_LEFT__', _localCaptureLeft.toString())
+        .replaceAll('__CAP_TOP__', _localCaptureTop.toString())
+        .replaceAll('__CAP_WIDTH__', _localCaptureWidth.toString())
+        .replaceAll('__CAP_HEIGHT__', _localCaptureHeight.toString());
+    try {
+      await _runPowerShell(
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+        timeout: const Duration(milliseconds: 900),
+      );
+    } catch (_) {
+      // Keep session alive on pointer injection failures.
+    }
+  }
   Future<void> _applyRemoteKeyboardEvent(Map<String, dynamic> payload) async {
     final phase = (payload['phase'] ?? 'down').toString();
     if (phase != 'down' && phase != 'up') return;
@@ -1903,11 +2139,18 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     if (messageType != 'screen_frame' && messageType != 'input_event') {
       print('[RemoteSupportPage] Sending $messageType to ${widget.deviceId} via session ${widget.sessionId}');
     }
+    final payloadWithChannel = Map<String, dynamic>.from(payload);
+    payloadWithChannel.putIfAbsent(
+      'channel',
+      () => messageType == 'screen_frame'
+          ? 'video'
+          : (messageType == 'input_event' ? 'input' : 'control'),
+    );
     return widget.signalingService!.sendSessionMessage(
       sessionId: (widget.sessionId ?? '').toString(),
       toUserId: widget.deviceId,
       messageType: messageType,
-      payload: payload,
+      payload: payloadWithChannel,
     );
   }
 
@@ -1965,7 +2208,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     _pendingMove = p;
     if (_pendingMoveTimer?.isActive == true) return;
 
-    _pendingMoveTimer = Timer(const Duration(milliseconds: 16), () {
+    _pendingMoveTimer = Timer(const Duration(milliseconds: 4), () {
       _pendingMoveTimer = null;
       _dispatchPendingMove();
     });
@@ -1982,9 +2225,51 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
         (pending.dx - _lastSentMoveX!).abs() < epsilon &&
         (pending.dy - _lastSentMoveY!).abs() < epsilon;
     if (sameAsLast) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final dtMs = (_lastMoveSentAtMs == 0)
+        ? 0
+        : (now - _lastMoveSentAtMs).clamp(1, 1000);
+    final dx = _lastSentMoveX == null ? 0.0 : (pending.dx - _lastSentMoveX!);
+    final dy = _lastSentMoveY == null ? 0.0 : (pending.dy - _lastSentMoveY!);
+    final vx = dtMs > 0 ? (dx * 1000.0 / dtMs) : 0.0;
+    final vy = dtMs > 0 ? (dy * 1000.0 / dtMs) : 0.0;
+    final sendAbsolute = _lastSentMoveX == null ||
+      !_remoteSupportsMoveDelta ||
+      _moveDeltaSinceKeyframe >= 8 ||
+      dx.abs() > 0.25 ||
+      dy.abs() > 0.25;
+
+    if (sendAbsolute) {
+      _sendInputEvent(
+        'move',
+        normalizedX: pending.dx,
+        normalizedY: pending.dy,
+        extra: {
+          'vx': vx,
+          'vy': vy,
+          'dtMs': dtMs,
+        },
+      );
+      _moveDeltaSinceKeyframe = 0;
+    } else {
+      _sendInputEvent(
+        'move_delta',
+        extra: {
+          'dx': dx,
+          'dy': dy,
+          'baseX': _lastSentMoveX,
+          'baseY': _lastSentMoveY,
+          'vx': vx,
+          'vy': vy,
+          'dtMs': dtMs,
+        },
+      );
+      _moveDeltaSinceKeyframe++;
+    }
+
     _lastSentMoveX = pending.dx;
     _lastSentMoveY = pending.dy;
-    _sendInputEvent('move', normalizedX: pending.dx, normalizedY: pending.dy);
+    _lastMoveSentAtMs = now;
   }
 
   void _flushPendingMove() {
@@ -2039,44 +2324,6 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
         return;
       }
       setState(() {
-
-  void _scheduleRemoteFrameApply() {
-    if (_pendingRemoteFrameTimer?.isActive == true) return;
-    _pendingRemoteFrameTimer = Timer(const Duration(milliseconds: 16), () {
-      _pendingRemoteFrameTimer = null;
-      final frameData = _pendingRemoteFrameData;
-      if (frameData == null || frameData.isEmpty) return;
-
-      try {
-        _remoteScreenFrame = base64Decode(frameData);
-        if (_pendingRemoteFrameWidth != null && _pendingRemoteFrameHeight != null) {
-          _remoteFrameWidth = _pendingRemoteFrameWidth!;
-          _remoteFrameHeight = _pendingRemoteFrameHeight!;
-        }
-        if (_pendingRemoteScreenCount != null) {
-          _remoteScreenCount = _pendingRemoteScreenCount!;
-        }
-        if (_pendingRemoteScreenIndex != null) {
-          _selectedRemoteScreenIndex = _pendingRemoteScreenIndex!;
-        }
-        _pendingRemoteFrameData = null;
-        _pendingRemoteFrameWidth = null;
-        _pendingRemoteFrameHeight = null;
-        _pendingRemoteScreenCount = null;
-        _pendingRemoteScreenIndex = null;
-        _framesReceived++;
-        if (_framesReceived % 30 == 0) {
-          print('[ScreenShare] Frame applied #$_framesReceived (${_remoteScreenFrame!.length} bytes)');
-        }
-        if (mounted) {
-          setState(() {});
-        }
-      } catch (e) {
-        print('[ScreenShare] Decode error: $e');
-        _remoteScreenFrame = null;
-      }
-    });
-  }
         _sessionSeconds++;
         _sessionTime = _formatSessionTime(_sessionSeconds);
       });
@@ -2135,6 +2382,10 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     _pendingRemoteFrameTimer?.cancel();
     _pendingRemoteFrameTimer = null;
     _pendingRemoteFrameData = null;
+    _pendingRemoteMoveTimer?.cancel();
+    _pendingRemoteMoveTimer = null;
+    _pendingRemoteMoveX = null;
+    _pendingRemoteMoveY = null;
     _keyboardLayoutTimer?.cancel();
     _keyStateSyncTimer?.cancel();
     _signalSubscription?.cancel();
@@ -2387,6 +2638,10 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
           Text('Ping $_pingMs ms', style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
           const SizedBox(width: 10),
           Text(_bandwidthText, style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
+          const SizedBox(width: 10),
+          Text('FPS $_fpsText', style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
+          const SizedBox(width: 10),
+          Text('Loss $_packetLossText', style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
           const Spacer(),
           _buildSmallOverlayButton(Icons.screenshot_monitor, _takeScreenshot, colors),
           const SizedBox(width: 6),
@@ -2579,6 +2834,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                   final w = box.size.width;
                   final h = box.size.height;
                   if (w <= 0 || h <= 0) return null;
+                  _maybeSendViewportHint(Size(w, h));
 
                   final frameAspect = _remoteFrameWidth / _remoteFrameHeight;
                   final viewAspect = w / h;
@@ -3273,6 +3529,14 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
         _buildMetricLine('Ping', '$_pingMs ms', colors),
         _buildMetricLine('Connection', _isConnected ? 'Connected' : 'Disconnected', colors),
         _buildMetricLine('Bitrate', _bandwidthText, colors),
+        _buildMetricLine('FPS', _fpsText, colors),
+        _buildMetricLine('Packet loss', _packetLossText, colors),
+        _buildMetricLine('Protocol', 'v$_remoteProtocolVersion', colors),
+        _buildMetricLine(
+          'Peer Capabilities',
+          'delta=${_remoteSupportsMoveDelta ? 'on' : 'off'} viewport=${_remoteSupportsViewportHint ? 'on' : 'off'}',
+          colors,
+        ),
         _buildMetricLine('Quality', _connectionQualityText, colors),
         _buildMetricLine('Frames RX', '$_framesReceived', colors),
         _buildMetricLine('Frames TX', '$_framesSent', colors),
@@ -3348,8 +3612,8 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                   ),
                   Text(
                     isReceived
-                        ? 'Re├ºu de: $from${fileSize.isNotEmpty ? '  ΓÇó  $fileSize' : ''}'
-                        : 'Envoy├⌐${fileSize.isNotEmpty ? '  ΓÇó  $fileSize' : ''}',
+                        ? 'Reâ”œÂºu de: $from${fileSize.isNotEmpty ? '  Î“Ã‡Ã³  $fileSize' : ''}'
+                        : 'Envoyâ”œâŒ${fileSize.isNotEmpty ? '  Î“Ã‡Ã³  $fileSize' : ''}',
                     style: TextStyle(color: colors['textSecondary'], fontSize: 10),
                   ),
                   if (path.isNotEmpty)
@@ -3360,7 +3624,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                     ),
                   if (status.isNotEmpty || speed.isNotEmpty || progress.isNotEmpty)
                     Text(
-                      'Status: $status  ${progress.isNotEmpty ? 'ΓÇó $progress%' : ''}  ${speed.isNotEmpty ? 'ΓÇó $speed' : ''}',
+                      'Status: $status  ${progress.isNotEmpty ? 'Î“Ã‡Ã³ $progress%' : ''}  ${speed.isNotEmpty ? 'Î“Ã‡Ã³ $speed' : ''}',
                       style: TextStyle(color: colors['textSecondary'], fontSize: 10),
                     ),
                 ],
@@ -3565,7 +3829,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
   Future<void> _saveReceivedFile(Map<String, String> transfer) async {
     final fileData = transfer['fileData'] ?? '';
     if (fileData.isEmpty) {
-      _showMessage(context, 'Aucune donn├⌐e disponible', _getColors(context));
+      _showMessage(context, 'Aucune donnâ”œâŒe disponible', _getColors(context));
       return;
     }
     String? outputPath;
@@ -3583,7 +3847,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
       final bytes = base64Decode(fileData);
       await io.File(outputPath).writeAsBytes(bytes);
       if (!mounted) return;
-      _showMessage(context, 'Fichier sauvegard├⌐: $outputPath', _getColors(context));
+      _showMessage(context, 'Fichier sauvegardâ”œâŒ: $outputPath', _getColors(context));
     } catch (e) {
       if (!mounted) return;
       _showMessage(context, 'Erreur sauvegarde: $e', _getColors(context));
@@ -3651,6 +3915,9 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
 
   Future<void> _sendScreenFrame() async {
     if (!_canSignal || !_isScreenSharing || _isCapturing) return;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    // Keep cursor and keyboard latency under control during interaction bursts.
+    if (nowMs - _lastInputSentAtMs < 24) return;
     _isCapturing = true;
     try {
       final bytes = await _captureLocalScreenToJpegBytes();
@@ -3671,11 +3938,18 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
         _sendCaptureStatus('error', 'Frame too large: ${bytes.length} bytes');
         return;
       }
+      final hash = _quickFrameHash(bytes);
+      if (hash == _lastFrameSentHash && (nowMs - _lastFrameSentAtMs) < 700) {
+        return;
+      }
       final b64 = base64Encode(bytes);
       final sent = _sendSessionPayload(
         messageType: 'screen_frame',
         payload: {
           'frameData': b64,
+          'channel': 'video',
+          'sentAt': nowMs,
+          'frameHash': hash,
           'frameWidth': _localFrameWidth,
           'frameHeight': _localFrameHeight,
           'screenCount': _localScreenCount,
@@ -3691,6 +3965,8 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
         _sendCaptureStatus('error', 'Session send failed');
         return;
       }
+      _lastFrameSentHash = hash;
+      _lastFrameSentAtMs = nowMs;
       if (mounted) setState(() { _framesSent++; _captureError = ''; });
       _sendCaptureStatus('ok', '');
       if (_framesSent % 30 == 0) {
@@ -3702,6 +3978,16 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     } finally {
       _isCapturing = false;
     }
+  }
+
+  int _quickFrameHash(Uint8List bytes) {
+    if (bytes.isEmpty) return 0;
+    final step = (bytes.length ~/ 32).clamp(1, 4096);
+    var h = bytes.length;
+    for (var i = 0; i < bytes.length; i += step) {
+      h = ((h * 33) ^ bytes[i]) & 0x7fffffff;
+    }
+    return h;
   }
 
   Future<Uint8List?> _captureLocalScreenToJpegBytes() async {
@@ -3716,7 +4002,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     final scriptPath = '${stableDir.path}\\capture.ps1';
     final escapedOutput = outputPath.replaceAll("'", "''");
 
-    // Script ├⌐crit dans un fichier (.ps1) pour ├⌐viter tout probl├¿me d'encodage en ligne de commande
+    // Script â”œâŒcrit dans un fichier (.ps1) pour â”œâŒviter tout problâ”œÂ¿me d'encodage en ligne de commande
     final scriptContent = r'''Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 Add-Type @"
 using System;
