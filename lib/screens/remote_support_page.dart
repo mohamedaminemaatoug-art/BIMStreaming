@@ -209,6 +209,9 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   bool _showTopOverlay = true;
   bool _showLeftFloatingButtons = true;
   bool _hideAllHud = false;
+  DynamicLibrary? _user32Lib;
+  void Function(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo)? _nativeMouseEvent;
+  bool _nativeMouseEventInitFailed = false;
   int _captureMaxWidth = _defaultCaptureMaxWidth;
   int _captureJpegQuality = _defaultJpegQuality;
   String _captureResolutionLabel = 'Full Screen';
@@ -1567,6 +1570,32 @@ Write-Output "$count,$width,$height"
   /// High-speed native Win32 cursor control using FFI
   /// Replaces slow PowerShell execution with direct Win32 API calls
   /// IMPORTANT: Always denormalizes against host capture bounds (virtual pipeline).
+  void _ensureNativeMouseEvent() {
+    if (_nativeMouseEvent != null || _nativeMouseEventInitFailed || !io.Platform.isWindows) {
+      return;
+    }
+    try {
+      _user32Lib ??= DynamicLibrary.open('user32.dll');
+      _nativeMouseEvent = _user32Lib!.lookupFunction<
+          Void Function(Uint32 dwFlags, Uint32 dx, Uint32 dy, Int32 dwData, IntPtr dwExtraInfo),
+          void Function(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo)>('mouse_event');
+    } catch (e) {
+      _nativeMouseEventInitFailed = true;
+      debugPrint('[Input] mouse_event init failed: $e');
+    }
+  }
+
+  void _emitNativeMouseEvent(int flags, {int data = 0}) {
+    _ensureNativeMouseEvent();
+    final fn = _nativeMouseEvent;
+    if (fn == null) return;
+    try {
+      fn(flags, 0, 0, data, 0);
+    } catch (e) {
+      debugPrint('[Input] mouse_event failed: $e');
+    }
+  }
+
   void _applyRemoteInputNative(String action, double? normX, double? normY, int wheelDelta) {
     if (!io.Platform.isWindows) return;
     try {
@@ -1587,6 +1616,24 @@ Write-Output "$count,$width,$height"
 
         _cursorPredictX = normX;
         _cursorPredictY = normY;
+      }
+
+      switch (action) {
+        case 'left_down':
+          _emitNativeMouseEvent(win32.MOUSEEVENTF_LEFTDOWN);
+          break;
+        case 'left_up':
+          _emitNativeMouseEvent(win32.MOUSEEVENTF_LEFTUP);
+          break;
+        case 'right_down':
+          _emitNativeMouseEvent(win32.MOUSEEVENTF_RIGHTDOWN);
+          break;
+        case 'right_up':
+          _emitNativeMouseEvent(win32.MOUSEEVENTF_RIGHTUP);
+          break;
+        case 'wheel':
+          _emitNativeMouseEvent(win32.MOUSEEVENTF_WHEEL, data: wheelDelta);
+          break;
       }
 
     } catch (e) {
@@ -1697,8 +1744,8 @@ Write-Output "$count,$width,$height"
         : 0;
     final key = (payload['key'] ?? '').toString();
 
-    // Use native path for move only; button/wheel continue via PowerShell path below.
-    if (action == 'move') {
+    // Handle all mouse actions natively to avoid PowerShell stalls/freezes.
+    if (mouseActions.contains(action)) {
       _applyRemoteInputNative(action, x, y, wheelDelta);
       return;
     }
