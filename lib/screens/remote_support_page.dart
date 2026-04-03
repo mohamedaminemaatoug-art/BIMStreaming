@@ -671,6 +671,41 @@ Write-Output "$count,$width,$height"
     _captureMaxWidth = safeLongEdge;
   }
 
+  void _applyAdaptiveResolutionFromController({
+    required double viewportWidth,
+    required double viewportHeight,
+    required double dpr,
+  }) {
+    if (!widget.sendLocalScreen) return;
+    if (viewportWidth <= 0 || viewportHeight <= 0) return;
+
+    final safeDpr = dpr <= 0 ? 1.0 : dpr;
+    final targetPixelWidth = (viewportWidth * safeDpr).round().clamp(320, 7680);
+    final targetPixelHeight = (viewportHeight * safeDpr).round().clamp(320, 4320);
+    final targetLongEdge = (targetPixelWidth > targetPixelHeight ? targetPixelWidth : targetPixelHeight)
+        .clamp(960, 3840);
+
+    final previousMaxWidth = _captureMaxWidth;
+    final previousVirtualWidth = _virtualWidth;
+    final previousVirtualHeight = _virtualHeight;
+
+    setState(() {
+      _captureResolutionLabel = 'Adaptive Device Fit';
+      _setVirtualResolutionFromLongEdge(targetLongEdge);
+      _fillRemoteViewport = true;
+    });
+
+    final changed =
+        (previousMaxWidth - _captureMaxWidth).abs() >= 24 ||
+        (previousVirtualWidth - _virtualWidth).abs() >= 24 ||
+        (previousVirtualHeight - _virtualHeight).abs() >= 24;
+
+    if (changed) {
+      _restartScreenShareTimerIfNeeded();
+      _sendResolutionUpdate();
+    }
+  }
+
   void _applyVirtualResolutionPolicy() {
     if (_captureResolutionLabel != 'Full Screen') return;
     if (_autoQualityMode == 'Auto') {
@@ -1055,18 +1090,11 @@ Write-Output "$count,$width,$height"
       final dpr = payload['viewportDpr'] is num
           ? (payload['viewportDpr'] as num).toDouble()
           : 1.0;
-      if (w > 0 && h > 0) {
-        final targetLongEdge = (w > h ? w : h) * dpr;
-        final bounded = targetLongEdge.clamp(960.0, 2560.0).toInt();
-        if ((_captureMaxWidth - bounded).abs() >= 48) {
-          setState(() {
-            _captureMaxWidth = bounded;
-            _captureResolutionLabel = 'Adapted Resolution';
-            _fillRemoteViewport = true;
-          });
-          _restartScreenShareTimerIfNeeded();
-        }
-      }
+      _applyAdaptiveResolutionFromController(
+        viewportWidth: w,
+        viewportHeight: h,
+        dpr: dpr,
+      );
       return;
     }
 
@@ -1074,19 +1102,12 @@ Write-Output "$count,$width,$height"
       if (!widget.sendLocalScreen) return;
       final width = payload['width'] is num ? (payload['width'] as num).toDouble() : 0.0;
       final height = payload['height'] is num ? (payload['height'] as num).toDouble() : 0.0;
-      if (width > 0 && height > 0) {
-        final targetLongEdge = width > height ? width : height;
-        final bounded = targetLongEdge.clamp(960.0, 3840.0).toInt();
-        if ((_captureMaxWidth - bounded).abs() >= 32) {
-          setState(() {
-            _captureMaxWidth = bounded;
-            _captureResolutionLabel = 'Adapted Resolution';
-            _fillRemoteViewport = true;
-          });
-          _restartScreenShareTimerIfNeeded();
-          _sendResolutionUpdate();
-        }
-      }
+      final dpr = payload['dpr'] is num ? (payload['dpr'] as num).toDouble() : 1.0;
+      _applyAdaptiveResolutionFromController(
+        viewportWidth: width,
+        viewportHeight: height,
+        dpr: dpr,
+      );
       return;
     }
 
@@ -1299,6 +1320,7 @@ Write-Output "$count,$width,$height"
       if (isFs) {
         await windowManager.setFullScreen(false);
       }
+      await windowManager.setTitleBarStyle(TitleBarStyle.normal);
       final isMin = await windowManager.isMinimized();
       if (isMin) {
         await windowManager.restore();
