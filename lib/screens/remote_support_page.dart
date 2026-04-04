@@ -2388,152 +2388,18 @@ switch ($action) {
     _applyRemoteInputNative('move', x, y, 0);
   }
   Future<void> _applyRemoteKeyboardEventLegacy(Map<String, dynamic> payload) async {
-    final phase = (payload['phase'] ?? 'down').toString();
-    if (phase != 'down' && phase != 'up') return;
-    final isModifier = _isModifierKey(payload);
-    if (phase == 'up' && !isModifier) {
-      // Non-modifier keys are injected as a full tap on key-down.
-      return;
-    }
-    final vkCode = _resolveVirtualKey(payload);
-    final keyStroke = _buildSendKeysStroke(payload);
-    final character = _mapCharacterForLayout((payload['character'] ?? '').toString(), payload);
-    final isNumpad = payload['isNumpad'] == true;
-    final useCtrl = payload['ctrl'] == true;
-    final useAlt = payload['alt'] == true;
-    final useMeta = payload['meta'] == true;
-    final useAltGraph = payload['altGraph'] == true;
-    final shouldSendUnicode =
-        phase == 'down' &&
-        !isModifier &&
-        !isNumpad &&
-        _isPrintableCharacter(character) &&
-        !(useCtrl || useMeta) &&
-        (useAltGraph || !useAlt);
-    final unicode = shouldSendUnicode ? character.runes.first : 0;
-
-    final script = r'''
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public static class NativeInput {
-  [StructLayout(LayoutKind.Sequential)]
-  public struct INPUT {
-    public uint type;
-    public InputUnion U;
-  }
-
-  [StructLayout(LayoutKind.Explicit)]
-  public struct InputUnion {
-    [FieldOffset(0)]
-    public KEYBDINPUT ki;
-  }
-
-  [StructLayout(LayoutKind.Sequential)]
-  public struct KEYBDINPUT {
-    public ushort wVk;
-    public ushort wScan;
-    public uint dwFlags;
-    public uint time;
-    public UIntPtr dwExtraInfo;
-  }
-
-  [DllImport("user32.dll", SetLastError=true)]
-  public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
-
-  [DllImport("user32.dll", SetLastError=true)]
-  public static extern uint MapVirtualKey(uint uCode, uint uMapType);
-}
-"@
-
-$phase = '__PHASE__'
-$vk = __VK__
-$unicode = __UNICODE__
-$sendUnicode = __SEND_UNICODE__
-$stroke = '__STROKE__'
-
-function Send-Key([int]$k, [bool]$up) {
-  $input = New-Object NativeInput+INPUT
-  $input.type = 1
-  $kb = New-Object NativeInput+KEYBDINPUT
-  $kb.wVk = [UInt16]$k
-  $kb.wScan = [UInt16][NativeInput]::MapVirtualKey([UInt32]$k, 0)
-  $flags = 0x0008
-  if ($up) { $flags = $flags -bor 0x0002 }
-  if ($k -in 0x25,0x26,0x27,0x28,0x21,0x22,0x23,0x24,0x2D,0x2E,0xA2,0xA3,0xA4,0xA5,0x90,0x91,0x6F,0x6A,0x6B,0x6D,0x6E) { $flags = $flags -bor 0x0001 }
-  $kb.dwFlags = $flags
-  $kb.time = 0
-  $kb.dwExtraInfo = [UIntPtr]::Zero
-  $input.U.ki = $kb
-  [void][NativeInput]::SendInput(1, @($input), [Runtime.InteropServices.Marshal]::SizeOf([type][NativeInput+INPUT]))
-}
-
-function Tap-Key([int]$k) {
-  Send-Key $k $false
-  Send-Key $k $true
-}
-
-function Send-Unicode([int]$codePoint) {
-  $down = New-Object NativeInput+INPUT
-  $down.type = 1
-  $kbDown = New-Object NativeInput+KEYBDINPUT
-  $kbDown.wVk = 0
-  $kbDown.wScan = [UInt16]$codePoint
-  $kbDown.dwFlags = 0x0004
-  $kbDown.time = 0
-  $kbDown.dwExtraInfo = [UIntPtr]::Zero
-  $down.U.ki = $kbDown
-
-  $up = New-Object NativeInput+INPUT
-  $up.type = 1
-  $kbUp = New-Object NativeInput+KEYBDINPUT
-  $kbUp.wVk = 0
-  $kbUp.wScan = [UInt16]$codePoint
-  $kbUp.dwFlags = 0x0004 -bor 0x0002
-  $kbUp.time = 0
-  $kbUp.dwExtraInfo = [UIntPtr]::Zero
-  $up.U.ki = $kbUp
-
-  [void][NativeInput]::SendInput(2, @($down, $up), [Runtime.InteropServices.Marshal]::SizeOf([type][NativeInput+INPUT]))
-}
-
-if ($sendUnicode -eq 1 -and $phase -eq 'down' -and $unicode -gt 0) {
-  Send-Unicode $unicode
-  return
-}
-
-if ($vk -gt 0) {
-  if ($phase -eq 'down') {
-    $modifiers = @(0x10, 0xA0, 0xA1, 0x11, 0xA2, 0xA3, 0x12, 0xA4, 0xA5, 0x5B, 0x5C)
-    if ($modifiers -contains $vk) {
-      Send-Key $vk $false
-    } else {
-      Tap-Key $vk
-    }
-  } elseif ($phase -eq 'up') {
-    Send-Key $vk $true
-  }
-  return
-}
-
-if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
-  [System.Windows.Forms.SendKeys]::SendWait($stroke)
-}
-'''
-        .replaceAll('__PHASE__', phase)
-        .replaceAll('__VK__', vkCode.toString())
-        .replaceAll('__UNICODE__', unicode.toString())
-        .replaceAll('__SEND_UNICODE__', shouldSendUnicode ? '1' : '0')
-        .replaceAll('__STROKE__', keyStroke.replaceAll("'", "''"));
-
     try {
-      await _runPowerShell(
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
-        timeout: const Duration(seconds: 2),
+      final keyboardEvent = KeyboardKeyEvent.fromJson(payload);
+      final result = await _keyboardInjectionEngine.injectKeyboardEvent(
+        keyboardEvent,
+        hostLayout: _keyboardLayoutTranslator.hostLayout?.layoutId ?? 'unknown',
+        hostLayoutFamily: _keyboardLayoutTranslator.hostLayoutFamily,
       );
-    } catch (_) {
-      // Keep session alive on key injection failures.
+      if (!result) {
+        print('[Keyboard] Legacy native fallback failed for ${keyboardEvent.keyName}');
+      }
+    } catch (e) {
+      print('[Keyboard] Legacy fallback exception: $e');
     }
   }
 

@@ -4,7 +4,10 @@
 /// Provides multiple injection strategies (SendInput, Unicode, text) with fallback logic.
 
 import 'dart:async';
+import 'dart:ffi';
 import 'dart:io' as io;
+import 'package:ffi/ffi.dart';
+import 'package:win32/win32.dart';
 import 'keyboard_protocol.dart';
 import 'keyboard_layout_translator.dart';
 import 'keyboard_state_manager.dart';
@@ -29,9 +32,6 @@ class KeyboardHostInjectionEngine {
 
   /// Callback when injection fails.
   final void Function(int physicalCode, String reason)? onInjectionFailed;
-
-  /// Timeout for injection operations.
-  static const Duration _injectionTimeout = Duration(seconds: 2);
 
   /// Virtual key code mappings (Windows-specific).
   static const Map<String, int> _specialKeyVkMap = {
@@ -136,68 +136,20 @@ class KeyboardHostInjectionEngine {
     final codePoint = character.codeUnitAt(0);
     if (codePoint == 0) return false;
 
-    final script = r'''
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public static class NativeInput {
-  [StructLayout(LayoutKind.Sequential)]
-  public struct INPUT {
-    public uint type;
-    public InputUnion U;
-  }
-
-  [StructLayout(LayoutKind.Explicit)]
-  public struct InputUnion {
-    [FieldOffset(0)]
-    public KEYBDINPUT ki;
-  }
-
-  [StructLayout(LayoutKind.Sequential)]
-  public struct KEYBDINPUT {
-    public ushort wVk;
-    public ushort wScan;
-    public uint dwFlags;
-    public uint time;
-    public UIntPtr dwExtraInfo;
-  }
-
-  [DllImport("user32.dll", SetLastError=true)]
-  public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
-}
-"@
-
-$unicode = __CODEPOINT__
-
-$down = New-Object NativeInput+INPUT
-$down.type = 1
-$kbDown = New-Object NativeInput+KEYBDINPUT
-$kbDown.wVk = 0
-$kbDown.wScan = [UInt16]$unicode
-$kbDown.dwFlags = 0x0004
-$kbDown.time = 0
-$kbDown.dwExtraInfo = [UIntPtr]::Zero
-$down.U.ki = $kbDown
-
-$up = New-Object NativeInput+INPUT
-$up.type = 1
-$kbUp = New-Object NativeInput+KEYBDINPUT
-$kbUp.wVk = 0
-$kbUp.wScan = [UInt16]$unicode
-$kbUp.dwFlags = 0x0004 -bor 0x0002
-$kbUp.time = 0
-$kbUp.dwExtraInfo = [UIntPtr]::Zero
-$up.U.ki = $kbUp
-
-[void][NativeInput]::SendInput(2, @($down, $up), [Runtime.InteropServices.Marshal]::SizeOf([type][NativeInput+INPUT]))
-'''
-        .replaceAll('__CODEPOINT__', codePoint.toString());
-
     try {
-      await executePowerShell(
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
-        timeout: _injectionTimeout,
-      );
+      final inputs = calloc<INPUT>(2);
+      try {
+        (inputs + 0).ref = _buildUnicodeInput(codePoint, isKeyUp: false);
+        (inputs + 1).ref = _buildUnicodeInput(codePoint, isKeyUp: true);
+        final sent = SendInput(2, inputs, sizeOf<INPUT>());
+        if (sent != 2) {
+          onInjectionFailed?.call(event.physicalCode, 'unicode sendinput returned $sent');
+          return false;
+        }
+      } finally {
+        calloc.free(inputs);
+      }
+
       onInjectionOccurred?.call(event.physicalCode, 'unicode');
       return true;
     } catch (e) {
@@ -213,65 +165,19 @@ $up.U.ki = $kbUp
 
     final isKeyDown = event.phase == 'down';
 
-    final script = r'''
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public static class NativeInput {
-  [StructLayout(LayoutKind.Sequential)]
-  public struct INPUT {
-    public uint type;
-    public InputUnion U;
-  }
-
-  [StructLayout(LayoutKind.Explicit)]
-  public struct InputUnion {
-    [FieldOffset(0)]
-    public KEYBDINPUT ki;
-  }
-
-  [StructLayout(LayoutKind.Sequential)]
-  public struct KEYBDINPUT {
-    public ushort wVk;
-    public ushort wScan;
-    public uint dwFlags;
-    public uint time;
-    public UIntPtr dwExtraInfo;
-  }
-
-  [DllImport("user32.dll", SetLastError=true)]
-  public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
-
-  [DllImport("user32.dll", SetLastError=true)]
-  public static extern uint MapVirtualKey(uint uCode, uint uMapType);
-}
-"@
-
-$vk = __VK__
-$isDown = __IS_DOWN__
-
-$input = New-Object NativeInput+INPUT
-$input.type = 1
-$kb = New-Object NativeInput+KEYBDINPUT
-$kb.wVk = [UInt16]$vk
-$kb.wScan = [UInt16][NativeInput]::MapVirtualKey([UInt32]$vk, 0)
-$flags = 0x0008
-if (-not $isDown) { $flags = $flags -bor 0x0002 }
-$kb.dwFlags = $flags
-$kb.time = 0
-$kb.dwExtraInfo = [UIntPtr]::Zero
-$input.U.ki = $kb
-
-[void][NativeInput]::SendInput(1, @($input), [Runtime.InteropServices.Marshal]::SizeOf([type][NativeInput+INPUT]))
-'''
-        .replaceAll('__VK__', vkCode.toString())
-        .replaceAll('__IS_DOWN__', isKeyDown ? 'true' : 'false');
-
     try {
-      await executePowerShell(
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
-        timeout: _injectionTimeout,
-      );
+      final inputs = calloc<INPUT>(1);
+      try {
+        (inputs + 0).ref = _buildVirtualKeyInput(vkCode, isKeyUp: !isKeyDown);
+        final sent = SendInput(1, inputs, sizeOf<INPUT>());
+        if (sent != 1) {
+          onInjectionFailed?.call(event.physicalCode, 'vk sendinput returned $sent');
+          return false;
+        }
+      } finally {
+        calloc.free(inputs);
+      }
+
       onInjectionOccurred?.call(event.physicalCode, 'vk_${vkCode.toRadixString(16).padLeft(2, '0')}');
       return true;
     } catch (e) {
@@ -285,20 +191,39 @@ $input.U.ki = $kb
     KeyboardKeyEvent event,
     String character,
   ) async {
-    final stroke = _buildSendKeysStroke(event, character);
-    if (stroke.isEmpty) return false;
-
-    final script = '''
-Add-Type -AssemblyName System.Windows.Forms
-[System.Windows.Forms.SendKeys]::SendWait('$stroke')
-'''
-        .replaceAll("'", "''");
-
     try {
-      await executePowerShell(
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
-        timeout: _injectionTimeout,
-      );
+      final inputs = <INPUT>[];
+      final modifierVks = <int>[];
+
+      if (event.modifiers.control) modifierVks.add(VK_CONTROL);
+      if (event.modifiers.alt && !event.modifiers.altGraph) modifierVks.add(VK_MENU);
+      if (event.modifiers.shift) modifierVks.add(VK_SHIFT);
+      if (event.modifiers.meta) modifierVks.add(VK_LWIN);
+
+      for (final vk in modifierVks) {
+        inputs.add(_buildVirtualKeyInput(vk, isKeyUp: false));
+      }
+
+      if (KeyboardInputAbstraction.isPrintableCharacter(character)) {
+        final codePoint = character.runes.first;
+        inputs.add(_buildUnicodeInput(codePoint, isKeyUp: false));
+        inputs.add(_buildUnicodeInput(codePoint, isKeyUp: true));
+      } else {
+        final vkCode = _resolveVirtualKeyCode(event);
+        if (vkCode == 0) return false;
+        inputs.add(_buildVirtualKeyInput(vkCode, isKeyUp: false));
+        inputs.add(_buildVirtualKeyInput(vkCode, isKeyUp: true));
+      }
+
+      for (final vk in modifierVks.reversed) {
+        inputs.add(_buildVirtualKeyInput(vk, isKeyUp: true));
+      }
+
+      if (!_sendKeyboardInputs(inputs)) {
+        onInjectionFailed?.call(event.physicalCode, 'sendkeys sendinput returned failure');
+        return false;
+      }
+
       onInjectionOccurred?.call(event.physicalCode, 'sendkeys');
       return true;
     } catch (e) {
@@ -326,67 +251,14 @@ Add-Type -AssemblyName System.Windows.Forms
 
     if (vkCode == 0) return false;
 
-    final isKeyDown = event.phase == 'down';
-
-    final script = r'''
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public static class NativeInput {
-  [StructLayout(LayoutKind.Sequential)]
-  public struct INPUT {
-    public uint type;
-    public InputUnion U;
-  }
-
-  [StructLayout(LayoutKind.Explicit)]
-  public struct InputUnion {
-    [FieldOffset(0)]
-    public KEYBDINPUT ki;
-  }
-
-  [StructLayout(LayoutKind.Sequential)]
-  public struct KEYBDINPUT {
-    public ushort wVk;
-    public ushort wScan;
-    public uint dwFlags;
-    public uint time;
-    public UIntPtr dwExtraInfo;
-  }
-
-  [DllImport("user32.dll", SetLastError=true)]
-  public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
-
-  [DllImport("user32.dll", SetLastError=true)]
-  public static extern uint MapVirtualKey(uint uCode, uint uMapType);
-}
-"@
-
-$vk = __VK__
-$isDown = __IS_DOWN__
-
-$input = New-Object NativeInput+INPUT
-$input.type = 1
-$kb = New-Object NativeInput+KEYBDINPUT
-$kb.wVk = [UInt16]$vk
-$kb.wScan = [UInt16][NativeInput]::MapVirtualKey([UInt32]$vk, 0)
-$flags = 0x0008
-if (-not $isDown) { $flags = $flags -bor 0x0002 }
-$kb.dwFlags = $flags
-$kb.time = 0
-$kb.dwExtraInfo = [UIntPtr]::Zero
-$input.U.ki = $kb
-
-[void][NativeInput]::SendInput(1, @($input), [Runtime.InteropServices.Marshal]::SizeOf([type][NativeInput+INPUT]))
-'''
-        .replaceAll('__VK__', vkCode.toString())
-        .replaceAll('__IS_DOWN__', isKeyDown ? 'true' : 'false');
-
     try {
-      await executePowerShell(
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
-        timeout: _injectionTimeout,
-      );
+      if (!_sendKeyboardInputs([
+        _buildVirtualKeyInput(vkCode, isKeyUp: event.phase != 'down'),
+      ])) {
+        onInjectionFailed?.call(event.physicalCode, 'modifier sendinput returned failure');
+        return false;
+      }
+
       onInjectionOccurred?.call(event.physicalCode, 'modifier_0x${vkCode.toRadixString(16)}');
       return true;
     } catch (e) {
@@ -462,56 +334,53 @@ $input.U.ki = $kb
     return 0;
   }
 
-  String _buildSendKeysStroke(KeyboardKeyEvent event, String character) {
-    final buffer = StringBuffer();
+  bool _sendKeyboardInputs(List<INPUT> inputs) {
+    if (inputs.isEmpty) return false;
 
-    // Add modifiers.
-    if (event.modifiers.control) buffer.write('^');
-    if (event.modifiers.alt && !event.modifiers.altGraph) buffer.write('%');
-    if (event.modifiers.shift) buffer.write('+');
-
-    // Add key token.
-    if (KeyboardInputAbstraction.isPrintableCharacter(character)) {
-      buffer.write(character);
-    } else {
-      final token = _specialKeyToSendKeysToken(event.keyName);
-      buffer.write(token);
+    final pInputs = calloc<INPUT>(inputs.length);
+    try {
+      for (var i = 0; i < inputs.length; i++) {
+        (pInputs + i).ref = inputs[i];
+      }
+      final sent = SendInput(inputs.length, pInputs, sizeOf<INPUT>());
+      return sent == inputs.length;
+    } finally {
+      calloc.free(pInputs);
     }
-
-    return buffer.toString();
   }
 
-  String _specialKeyToSendKeysToken(String keyName) {
-    final lower = keyName.toLowerCase();
-    const map = {
-      'enter': '{ENTER}',
-      'tab': '{TAB}',
-      'escape': '{ESC}',
-      'backspace': '{BACKSPACE}',
-      'delete': '{DELETE}',
-      'insert': '{INSERT}',
-      'home': '{HOME}',
-      'end': '{END}',
-      'page up': '{PGUP}',
-      'page down': '{PGDN}',
-      'arrow left': '{LEFT}',
-      'arrow right': '{RIGHT}',
-      'arrow up': '{UP}',
-      'arrow down': '{DOWN}',
-      'f1': '{F1}',
-      'f2': '{F2}',
-      'f3': '{F3}',
-      'f4': '{F4}',
-      'f5': '{F5}',
-      'f6': '{F6}',
-      'f7': '{F7}',
-      'f8': '{F8}',
-      'f9': '{F9}',
-      'f10': '{F10}',
-      'f11': '{F11}',
-      'f12': '{F12}',
-    };
-    return map[lower] ?? '';
+  INPUT _buildUnicodeInput(int codePoint, {required bool isKeyUp}) {
+    final input = calloc<INPUT>();
+    final key = calloc<KEYBDINPUT>();
+    input.ref.type = INPUT_KEYBOARD;
+    key.ref
+      ..wVk = 0
+      ..wScan = codePoint
+      ..dwFlags = KEYEVENTF_UNICODE | (isKeyUp ? KEYEVENTF_KEYUP : 0)
+      ..time = 0
+      ..dwExtraInfo = 0;
+    input.ref.ki = key.ref;
+    final value = input.ref;
+    calloc.free(key);
+    calloc.free(input);
+    return value;
+  }
+
+  INPUT _buildVirtualKeyInput(int vkCode, {required bool isKeyUp}) {
+    final input = calloc<INPUT>();
+    final key = calloc<KEYBDINPUT>();
+    input.ref.type = INPUT_KEYBOARD;
+    key.ref
+      ..wVk = vkCode
+      ..wScan = MapVirtualKey(vkCode, MAPVK_VK_TO_VSC)
+      ..dwFlags = KEYEVENTF_SCANCODE | (isKeyUp ? KEYEVENTF_KEYUP : 0)
+      ..time = 0
+      ..dwExtraInfo = 0;
+    input.ref.ki = key.ref;
+    final value = input.ref;
+    calloc.free(key);
+    calloc.free(input);
+    return value;
   }
 }
 
