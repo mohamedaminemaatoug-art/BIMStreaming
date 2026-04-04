@@ -96,7 +96,9 @@ class KeyboardHostInjectionEngine {
 
     try {
       // Translate character if needed.
-      String translatedCharacter = event.keyLabel;
+      String translatedCharacter = event.characterCodePoint > 0
+          ? String.fromCharCode(event.characterCodePoint)
+          : event.keyLabel;
       if (translatedCharacter.isNotEmpty &&
           KeyboardInputAbstraction.isPrintableCharacter(translatedCharacter)) {
         translatedCharacter = layoutTranslator.translateCharacter(translatedCharacter);
@@ -325,9 +327,13 @@ class KeyboardHostInjectionEngine {
       if (code >= 0x30 && code <= 0x39) return code; // 0-9
     }
 
-    // Numpad numbers.
+    // Numpad numbers: if the event has a printable digit, map to top-row digit
+    // so typing works even when host has no physical numpad.
     final numpadMatch = RegExp(r'numpad\s*(\d)').firstMatch(keyNameLower);
     if (numpadMatch != null) {
+      if (event.characterCodePoint >= 0x30 && event.characterCodePoint <= 0x39) {
+        return event.characterCodePoint; // '0'..'9'
+      }
       return 0x60 + int.parse(numpadMatch.group(1)!); // NUMPAD0 - NUMPAD9
     }
 

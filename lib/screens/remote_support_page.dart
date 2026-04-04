@@ -2760,12 +2760,6 @@ switch ($action) {
     // Keyboard System V2 - Remote Handler
     try {
       final keyboardEvent = KeyboardKeyEvent.fromJson(payload);
-      final syncLayout = _keyboardLayoutTranslator.clientLayout?.layoutId ?? 'unknown';
-
-      // Sync layout if needed
-      if (keyboardEvent.clientLayout != syncLayout) {
-        await _keyboardLayoutTranslator.detectClientLayout();
-      }
 
       // Inject the key using the best strategy for this layout
       final result = await _keyboardInjectionEngine.injectKeyboardEvent(
