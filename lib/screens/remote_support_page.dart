@@ -8,18 +8,9 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:window_manager/window_manager.dart';
-import 'package:ffi/ffi.dart' hide Size;
+import 'package:ffi/ffi.dart';
 import 'package:image/image.dart' as img;
-import 'package:win32/win32.dart' as win32
-    show
-        SetCursorPos,
-        GetCursorPos,
-    POINT,
-        MOUSEEVENTF_LEFTDOWN,
-        MOUSEEVENTF_LEFTUP,
-        MOUSEEVENTF_RIGHTDOWN,
-        MOUSEEVENTF_RIGHTUP,
-        MOUSEEVENTF_WHEEL;
+import 'package:win32/win32.dart' as win32;
 import '../services/signaling_client_service.dart';
 import '../services/remote_audio_service.dart';
 
@@ -263,6 +254,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   String _qualityLabel = 'Medium';
   String _autoQualityMode = 'Manual';
   int _captureFrameIntervalMs = _defaultCaptureIntervalMs;
+  bool _forceNativeScreenCapture = false;
   String _screenshotPath = '';
   String _recordingsPath = '';
   int _selectedRemoteScreenIndex = 0;
@@ -5089,6 +5081,10 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
   Future<Uint8List?> _captureLocalScreenToJpegBytes() async {
     if (!io.Platform.isWindows) return null;
 
+    if (_forceNativeScreenCapture) {
+      return _captureLocalScreenNativeJpegBytes();
+    }
+
     // Use stable paths so antivirus exclusions can target one precise location.
     final stableDir = io.Directory('${io.Platform.environment['LOCALAPPDATA']}\\BIMStreaming\\screenshare');
     if (!stableDir.existsSync()) {
@@ -5157,6 +5153,18 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
         if (err.isEmpty && result.exitCode == 124) {
           err = 'capture timed out after 12s';
         }
+        final lower = err.toLowerCase();
+        final blockedBySecurity =
+            lower.contains('scriptcontainedmaliciouscontent') ||
+            lower.contains('malicious content') ||
+            lower.contains('antivirus');
+        if (blockedBySecurity) {
+          _forceNativeScreenCapture = true;
+          if (mounted) {
+            setState(() => _captureError = 'PowerShell capture blocked by security policy; using native capture fallback.');
+          }
+          return _captureLocalScreenNativeJpegBytes();
+        }
         print('[ScreenShare] PS1 failed (exit=${result.exitCode}): $err');
         if (mounted) setState(() => _captureError = 'PS1 exit=${result.exitCode}: ${err.substring(0, err.length.clamp(0, 120))}');
         return await _captureLocalScreenFallbackPngBytes(stableDir);
@@ -5201,6 +5209,141 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
       return await _captureLocalScreenFallbackPngBytes(stableDir);
     } finally {
       try { io.File(outputPath).deleteSync(); } catch (_) {}
+    }
+  }
+
+  Uint8List? _captureLocalScreenNativeJpegBytes() {
+    if (!io.Platform.isWindows) return null;
+
+    int capLeft = 0;
+    int capTop = 0;
+    int capWidth = win32.GetSystemMetrics(win32.SM_CXSCREEN);
+    int capHeight = win32.GetSystemMetrics(win32.SM_CYSCREEN);
+
+    if (_selectedLocalScreenIndex > 0) {
+      capLeft = win32.GetSystemMetrics(win32.SM_XVIRTUALSCREEN);
+      capTop = win32.GetSystemMetrics(win32.SM_YVIRTUALSCREEN);
+      capWidth = win32.GetSystemMetrics(win32.SM_CXVIRTUALSCREEN);
+      capHeight = win32.GetSystemMetrics(win32.SM_CYVIRTUALSCREEN);
+    }
+
+    if (capWidth <= 0 || capHeight <= 0) {
+      if (mounted) setState(() => _captureError = 'Native capture invalid screen bounds');
+      return null;
+    }
+
+    final hScreenDc = win32.GetDC(0);
+    if (hScreenDc == 0) {
+      if (mounted) setState(() => _captureError = 'Native capture GetDC failed');
+      return null;
+    }
+
+    final hMemoryDc = win32.CreateCompatibleDC(hScreenDc);
+    if (hMemoryDc == 0) {
+      win32.ReleaseDC(0, hScreenDc);
+      if (mounted) setState(() => _captureError = 'Native capture CreateCompatibleDC failed');
+      return null;
+    }
+
+    final hBitmap = win32.CreateCompatibleBitmap(hScreenDc, capWidth, capHeight);
+    if (hBitmap == 0) {
+      win32.DeleteDC(hMemoryDc);
+      win32.ReleaseDC(0, hScreenDc);
+      if (mounted) setState(() => _captureError = 'Native capture CreateCompatibleBitmap failed');
+      return null;
+    }
+
+    final oldObject = win32.SelectObject(hMemoryDc, hBitmap);
+    final copied = win32.BitBlt(
+      hMemoryDc,
+      0,
+      0,
+      capWidth,
+      capHeight,
+      hScreenDc,
+      capLeft,
+      capTop,
+      win32.SRCCOPY | win32.CAPTUREBLT,
+    );
+
+    if (copied == 0) {
+      win32.SelectObject(hMemoryDc, oldObject);
+      win32.DeleteObject(hBitmap);
+      win32.DeleteDC(hMemoryDc);
+      win32.ReleaseDC(0, hScreenDc);
+      if (mounted) setState(() => _captureError = 'Native capture BitBlt failed');
+      return null;
+    }
+
+    final bmi = calloc<win32.BITMAPINFO>();
+    final byteCount = capWidth * capHeight * 4;
+    final pixelBuffer = calloc<Uint8>(byteCount);
+
+    try {
+      bmi.ref.bmiHeader.biSize = sizeOf<win32.BITMAPINFOHEADER>();
+      bmi.ref.bmiHeader.biWidth = capWidth;
+      bmi.ref.bmiHeader.biHeight = -capHeight;
+      bmi.ref.bmiHeader.biPlanes = 1;
+      bmi.ref.bmiHeader.biBitCount = 32;
+      bmi.ref.bmiHeader.biCompression = win32.BI_RGB;
+
+      final rows = win32.GetDIBits(
+        hMemoryDc,
+        hBitmap,
+        0,
+        capHeight,
+        pixelBuffer.cast(),
+        bmi,
+        win32.DIB_RGB_COLORS,
+      );
+
+      if (rows == 0) {
+        if (mounted) setState(() => _captureError = 'Native capture GetDIBits failed');
+        return null;
+      }
+
+      final raw = pixelBuffer.asTypedList(byteCount);
+      final source = img.Image.fromBytes(
+        width: capWidth,
+        height: capHeight,
+        bytes: raw.buffer,
+        numChannels: 4,
+        order: img.ChannelOrder.bgra,
+      );
+
+      img.Image output = source;
+      if (capWidth > _captureMaxWidth) {
+        final scale = _captureMaxWidth / capWidth;
+        final targetW = _captureMaxWidth;
+        final targetH = (capHeight * scale).round().clamp(1, 4320);
+        output = img.copyResize(
+          source,
+          width: targetW,
+          height: targetH,
+          interpolation: img.Interpolation.cubic,
+        );
+      }
+
+      _localFrameWidth = output.width;
+      _localFrameHeight = output.height;
+      _localCaptureLeft = capLeft;
+      _localCaptureTop = capTop;
+      _localCaptureWidth = capWidth;
+      _localCaptureHeight = capHeight;
+
+      final jpg = img.encodeJpg(output, quality: _captureJpegQuality);
+      if (mounted) setState(() => _captureError = '');
+      return Uint8List.fromList(jpg);
+    } catch (e) {
+      if (mounted) setState(() => _captureError = 'Native capture exception: $e');
+      return null;
+    } finally {
+      calloc.free(pixelBuffer);
+      calloc.free(bmi);
+      win32.SelectObject(hMemoryDc, oldObject);
+      win32.DeleteObject(hBitmap);
+      win32.DeleteDC(hMemoryDc);
+      win32.ReleaseDC(0, hScreenDc);
     }
   }
 
