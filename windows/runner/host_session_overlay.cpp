@@ -25,6 +25,7 @@ constexpr COLORREF kTextColor = RGB(255, 255, 255);
 std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> g_channel;
 HWND g_window = nullptr;
 bool g_class_registered = false;
+HHOOK g_mouse_hook = nullptr;
 std::wstring g_label = L"Session Active";
 
 RECT GetVirtualScreenRect() {
@@ -149,6 +150,27 @@ RECT GetButtonRect(HWND hwnd) {
   return RECT{buttonLeft, buttonTop, buttonRight, buttonBottom};
 }
 
+bool IsInjectedMouseEvent(const MSLLHOOKSTRUCT& info) {
+  return (info.flags & LLMHF_INJECTED) != 0 ||
+         (info.flags & LLMHF_LOWER_IL_INJECTED) != 0;
+}
+
+LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wparam, LPARAM lparam) {
+  if (nCode == HC_ACTION && g_window != nullptr) {
+    const auto* info = reinterpret_cast<MSLLHOOKSTRUCT*>(lparam);
+    if (info != nullptr && !IsInjectedMouseEvent(*info)) {
+      if (wparam == WM_LBUTTONUP) {
+        RECT buttonRect = GetButtonRect(g_window);
+        if (PtInRect(&buttonRect, info->pt)) {
+          NotifyDisconnectRequested();
+        }
+      }
+    }
+  }
+
+  return CallNextHookEx(g_mouse_hook, nCode, wparam, lparam);
+}
+
 void UpdateOverlayBounds(HWND hwnd) {
   const RECT rect = GetVirtualScreenRect();
   SetWindowPos(hwnd, HWND_TOPMOST, rect.left, rect.top,
@@ -222,6 +244,24 @@ void RegisterOverlayClass() {
   g_class_registered = true;
 }
 
+void EnsureMouseHook() {
+  if (g_mouse_hook != nullptr) {
+    return;
+  }
+
+  g_mouse_hook = SetWindowsHookExW(WH_MOUSE_LL, LowLevelMouseProc,
+                                   GetModuleHandle(nullptr), 0);
+}
+
+void RemoveMouseHook() {
+  if (g_mouse_hook == nullptr) {
+    return;
+  }
+
+  UnhookWindowsHookEx(g_mouse_hook);
+  g_mouse_hook = nullptr;
+}
+
 void HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue>& method_call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
@@ -284,6 +324,7 @@ bool Start(const std::wstring& label) {
 
   UpdateOverlayBounds(g_window);
   SetWindowDisplayAffinity(g_window, WDA_EXCLUDEFROMCAPTURE);
+  EnsureMouseHook();
   ShowWindow(g_window, SW_SHOWNOACTIVATE);
   UpdateWindow(g_window);
   InvalidateRect(g_window, nullptr, TRUE);
@@ -292,11 +333,13 @@ bool Start(const std::wstring& label) {
 
 bool Stop() {
   if (!g_window) {
+    RemoveMouseHook();
     return true;
   }
 
   DestroyWindow(g_window);
   g_window = nullptr;
+  RemoveMouseHook();
   return true;
 }
 
