@@ -396,8 +396,35 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     });
   }
 
+  void _refreshLocalScreenInfoFromFlutterView() {
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    if (views.isEmpty) return;
+    final size = views.first.physicalSize;
+    final width = size.width.round();
+    final height = size.height.round();
+    if (width <= 0 || height <= 0) return;
+
+    if (!mounted) {
+      _screenWidthActual = width;
+      _screenHeightActual = height;
+      return;
+    }
+
+    setState(() {
+      _screenWidthActual = width;
+      _screenHeightActual = height;
+      if (_captureResolutionLabel == 'Full Screen') {
+        _setVirtualResolutionFromLongEdge(_recommendedFullScreenCaptureWidth());
+        _fillRemoteViewport = true;
+      }
+    });
+  }
+
   Future<void> _refreshLocalScreenInfo() async {
     if (!io.Platform.isWindows) return;
+    // Prefer a local Flutter API baseline so resolution remains valid even if
+    // external PowerShell scripts are blocked by antivirus.
+    _refreshLocalScreenInfoFromFlutterView();
     
     // OPTIMIZATION: Also capture screen dimensions for proper cursor coordinate transformation
     final script = r'''
@@ -413,7 +440,10 @@ Write-Output "$count,$width,$height"
         ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
         timeout: const Duration(seconds: 4),
       );
-      if (result.exitCode != 0) return;
+      if (result.exitCode != 0) {
+        _refreshLocalScreenInfoFromFlutterView();
+        return;
+      }
       
       final output = '${result.stdout}'.trim();
       final parts = output.split(',');
@@ -426,8 +456,8 @@ Write-Output "$count,$width,$height"
         }
         // OPTIMIZATION: Capture actual screen dimensions for cursor coordinate fixing
         if (parts.length >= 3) {
-          _screenWidthActual = int.tryParse(parts[1]) ?? 1920;
-          _screenHeightActual = int.tryParse(parts[2]) ?? 1080;
+          _screenWidthActual = int.tryParse(parts[1]) ?? _screenWidthActual;
+          _screenHeightActual = int.tryParse(parts[2]) ?? _screenHeightActual;
           if (_captureResolutionLabel == 'Full Screen') {
             _setVirtualResolutionFromLongEdge(_recommendedFullScreenCaptureWidth());
             _fillRemoteViewport = true;
@@ -440,7 +470,7 @@ Write-Output "$count,$width,$height"
         }
       });
     } catch (_) {
-      // Keep defaults when screen enumeration fails.
+      _refreshLocalScreenInfoFromFlutterView();
     }
   }
 
