@@ -31,7 +31,7 @@ class KeyboardHostInjectionEngine {
   final void Function(int physicalCode, String reason)? onInjectionFailed;
 
   /// Timeout for injection operations.
-  static const Duration _injectionTimeout = Duration(milliseconds: 450);
+  static const Duration _injectionTimeout = Duration(seconds: 2);
 
   /// Virtual key code mappings (Windows-specific).
   static const Map<String, int> _specialKeyVkMap = {

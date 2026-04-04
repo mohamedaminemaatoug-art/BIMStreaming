@@ -2909,10 +2909,16 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
       );
 
       if (!result) {
-        print('[Keyboard] Key injection failed for ${keyboardEvent.keyName}');
+        print('[Keyboard] V2 injection failed for ${keyboardEvent.keyName}, falling back to legacy injector');
+        await _applyRemoteKeyboardEventLegacy(payload);
       }
     } catch (e) {
-      print('[Keyboard] Remote handler error: $e');
+      print('[Keyboard] Remote handler error: $e. Falling back to legacy injector');
+      try {
+        await _applyRemoteKeyboardEventLegacy(payload);
+      } catch (legacyError) {
+        print('[Keyboard] Legacy fallback failed: $legacyError');
+      }
     }
   }
 
