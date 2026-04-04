@@ -31,7 +31,7 @@ class KeyboardHostInjectionEngine {
   final void Function(int physicalCode, String reason)? onInjectionFailed;
 
   /// Timeout for injection operations.
-  static const Duration _injectionTimeout = Duration(seconds: 2);
+  static const Duration _injectionTimeout = Duration(milliseconds: 450);
 
   /// Virtual key code mappings (Windows-specific).
   static const Map<String, int> _specialKeyVkMap = {
@@ -100,6 +100,11 @@ class KeyboardHostInjectionEngine {
       if (translatedCharacter.isNotEmpty &&
           KeyboardInputAbstraction.isPrintableCharacter(translatedCharacter)) {
         translatedCharacter = layoutTranslator.translateCharacter(translatedCharacter);
+      }
+
+      // Skip key-up for printable characters to avoid duplicate text injection.
+      if (event.phase == 'up' && !event.isModifier && !_isControlKey(event.keyName)) {
+        return true;
       }
 
       // Choose injection strategy.
@@ -401,9 +406,13 @@ $input.U.ki = $kb
       return InjectionStrategy.modifierOnly;
     }
 
-    // Printable characters (without modifier keys): use Unicode.
+    // Printable text should follow controller intent, even with Shift.
+    // Only avoid Unicode for control/meta/alt shortcuts.
     if (KeyboardInputAbstraction.isPrintableCharacter(character) &&
-        !event.modifiers.isPressed) {
+        event.phase == 'down' &&
+        !event.modifiers.control &&
+        !event.modifiers.meta &&
+        (!event.modifiers.alt || event.modifiers.altGraph)) {
       return InjectionStrategy.unicode;
     }
 

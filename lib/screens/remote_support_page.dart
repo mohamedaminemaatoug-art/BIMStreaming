@@ -1152,10 +1152,19 @@ Write-Output "$count,$width,$height"
           'right_up',
           'wheel',
         };
+        const fastKeyboardActions = <String>{
+          'key_event',
+          'key_press',
+          'key_state_sync',
+          'reset_all_keys',
+        };
         if (action == 'move' || action == 'move_delta') {
           _enqueueRemoteMove(payload);
         } else if (fastMouseActions.contains(action)) {
           // Apply click/wheel immediately to minimize perceived latency.
+          unawaited(_applyRemoteInput(payload));
+        } else if (fastKeyboardActions.contains(action)) {
+          // Keep keyboard path low-latency and avoid queue backpressure.
           unawaited(_applyRemoteInput(payload));
         } else {
           _enqueueRemoteInput(() => _applyRemoteInput(payload));
