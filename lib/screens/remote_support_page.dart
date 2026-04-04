@@ -3533,55 +3533,31 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
             focusNode: _remoteControlFocusNode,
             autofocus: !widget.sendLocalScreen,
             onKeyEvent: (event) {
-              // Keyboard System V2
               if (!_canSendRemoteInput || _isDeviceLocked || _isSessionPaused || !_keyboardInputEnabledForUser2) {
                 return;
               }
 
               if (event is KeyDownEvent) {
-                try {
-                  final abstractedEvent = KeyboardInputAbstraction().abstractKeyEvent(
-                    event,
-                    clientLayout: _keyboardLayoutTranslator.clientLayout?.layoutId ?? 'unknown',
-                    clientLayoutFamily: _keyboardLayoutTranslator.clientLayoutFamily,
-                  );
+                final logical = event.logicalKey.keyId;
+                final managed = _isManagedRepeatKey(event.logicalKey);
+                final modifier = _isModifierLogical(event.logicalKey);
+                if ((managed || modifier) && _pressedLogicalKeys.contains(logical)) return;
+                _pressedLogicalKeys.add(logical);
 
-                  final activeKey = _keyboardStateManager.registerKeyDown(
-                    abstractedEvent.physicalCode,
-                    abstractedEvent.toJson(),
-                    sequenceNumber: abstractedEvent.sequenceNumber,
-                  );
+                // TeamViewer-style: forward controller keydown directly to host.
+                _sendKeyboardEvent(event, phase: 'down');
 
-                  if (activeKey != null) {
-                    final isManaged = _isManagedRepeatKeyV2(event.logicalKey);
-                    if (!abstractedEvent.isModifier && isManaged) {
-                      _keyboardRepeatController.startRepeat(
-                        abstractedEvent.physicalCode,
-                        abstractedEvent.toJson(),
-                        isModifier: false,
-                      );
-                    }
-                    _keyboardTransportLayer.enqueueEvent(abstractedEvent);
-                  }
-                } catch (e) {
-                  print('[Keyboard] KeyDown error: $e');
+                if (managed) {
+                  _startManagedRepeat(event);
                 }
               }
 
               if (event is KeyUpEvent) {
-                try {
-                  final abstractedEvent = KeyboardInputAbstraction().abstractKeyEvent(
-                    event,
-                    clientLayout: _keyboardLayoutTranslator.clientLayout?.layoutId ?? 'unknown',
-                    clientLayoutFamily: _keyboardLayoutTranslator.clientLayoutFamily,
-                  );
-                  final physicalCode = abstractedEvent.physicalCode;
-                  _keyboardRepeatController.stopRepeat(physicalCode);
-                  _keyboardStateManager.registerKeyUp(physicalCode);
-                  _keyboardTransportLayer.enqueueEvent(abstractedEvent);
-                } catch (e) {
-                  print('[Keyboard] KeyUp error: $e');
-                }
+                _stopManagedRepeat(event.logicalKey.keyId);
+                _pressedLogicalKeys.remove(event.logicalKey.keyId);
+
+                // TeamViewer-style: forward controller keyup directly to host.
+                _sendKeyboardEvent(event, phase: 'up');
               }
             },
             child: Builder(
