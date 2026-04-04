@@ -319,6 +319,9 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     _refreshLocalScreenInfo();
     _autoEnterFullscreenForController();
     _pinRemoteAgentWindowIfNeeded();
+    if (widget.sendLocalScreen && _isConnected) {
+      unawaited(_minimizeHostWindowForConnectedState());
+    }
     if (_remoteAudioFeatureEnabled) {
       unawaited(_initAudioUdpSocket());
       unawaited(_syncRemoteAudioPipeline());
@@ -393,12 +396,67 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     if (!widget.sendLocalScreen) return;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-      await windowManager.setAlwaysOnTop(true);
-      await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
-      await windowManager.setFullScreen(true);
-      if (!mounted) return;
-      setState(() => _isFullScreen = true);
+      await _minimizeHostWindowForConnectedState();
     });
+  }
+
+  Future<void> _minimizeHostWindowForConnectedState() async {
+    if (!widget.sendLocalScreen) return;
+    try {
+      await windowManager.setAlwaysOnTop(false);
+      await windowManager.setTitleBarStyle(TitleBarStyle.normal);
+      final isFs = await windowManager.isFullScreen();
+      if (isFs) {
+        await windowManager.setFullScreen(false);
+      }
+      final isMin = await windowManager.isMinimized();
+      if (!isMin) {
+        await windowManager.minimize();
+      }
+      if (!mounted) return;
+      setState(() => _isFullScreen = false);
+    } catch (_) {
+      // Best-effort host window minimize when session is connected.
+    }
+  }
+
+  bool get _hasHostSessionError {
+    if (!_isConnected) return true;
+    if (_captureError.trim().isNotEmpty) return true;
+    if (_nativeMouseEventInitFailed) return true;
+    if (_connectionStatus.toLowerCase().contains('failed')) return true;
+    if (_connectionStatus.toLowerCase().contains('reconnect')) return true;
+    return false;
+  }
+
+  String get _hostSessionBannerText {
+    final peerName = widget.deviceName.trim().isEmpty ? widget.deviceId : widget.deviceName;
+
+    if (!_isConnected) {
+      return 'Error: disconnected from $peerName';
+    }
+
+    if (_captureError.trim().isNotEmpty) {
+      return 'Error: $_captureError';
+    }
+
+    if (_nativeMouseEventInitFailed) {
+      return 'Error: mouse control initialization failed';
+    }
+
+    if (!_mouseInputEnabledForUser2) {
+      return 'Warning: mouse input is disabled';
+    }
+
+    if (_isSessionPausedRemote) {
+      return 'Warning: session paused by remote operator';
+    }
+
+    if (_connectionStatus.isNotEmpty && _connectionStatus != 'Connected') {
+      return _connectionStatus;
+    }
+
+    return 'Connected successfully to: $peerName';
   }
 
   void _refreshLocalScreenInfoFromFlutterView() {
@@ -1231,6 +1289,7 @@ Write-Output "$count,$width,$height"
       print('[RemoteSupportPage] Received $messageType from $fromUserId: $payload');
     }
 
+    var shouldRestoreHostWindow = false;
     setState(() {
       switch (messageType) {
         case 'chat':
@@ -1239,6 +1298,7 @@ Write-Output "$count,$width,$height"
             print('[Chat] Added from peer: $text');
             _isConnected = true;
             _connectionStatus = 'Connected';
+            shouldRestoreHostWindow = true;
             _chatMessages.add('Peer::$text');
             _panelMode = 'chat';
             WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1256,6 +1316,7 @@ Write-Output "$count,$width,$height"
           if (fileName.isNotEmpty) {
             _isConnected = true;
             _connectionStatus = 'Connected';
+            shouldRestoreHostWindow = true;
             _transfers.add({
               'type': 'received',
               'fileName': fileName,
@@ -1276,6 +1337,7 @@ Write-Output "$count,$width,$height"
           if (frameData.isNotEmpty) {
             _isConnected = true;
             _connectionStatus = 'Connected';
+            shouldRestoreHostWindow = true;
             if (_reconnectTimer != null) {
               _stopReconnectLoop();
             }
@@ -1314,6 +1376,10 @@ Write-Output "$count,$width,$height"
           break;
       }
     });
+
+    if (shouldRestoreHostWindow) {
+      unawaited(_minimizeHostWindowForConnectedState());
+    }
   }
 
   Future<void> _closeSession({bool notifyPeer = true}) async {
@@ -1418,6 +1484,7 @@ Write-Output "$count,$width,$height"
             _connectionStatus = 'Auto-reconnected';
             _isRebooting = false;
           });
+          unawaited(_minimizeHostWindowForConnectedState());
           _stopReconnectLoop();
         }
       } catch (_) {
@@ -3029,25 +3096,9 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
             color: Colors.black,
             child: Container(
               margin: EdgeInsets.zero,
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.redAccent, width: 4),
-              ),
               child: Stack(
                 children: [
                   Positioned.fill(child: _buildRemoteCanvas(colors)),
-                  if (!_hideAllHud)
-                    Positioned(
-                      top: 14,
-                      left: 14,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        color: Colors.redAccent,
-                        child: Text(
-                          'Connected with: ${widget.deviceId}',
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                    ),
                   if (_isLockedForRemoteUser)
                     Positioned.fill(
                       child: Container(
@@ -3075,44 +3126,6 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
             ),
           ),
         ),
-        Positioned(
-          left: 10,
-          top: 8,
-          child: Tooltip(
-            message: _hideAllHud ? 'Show bars' : 'Hide bars',
-            child: _buildSmallOverlayButton(
-              _hideAllHud ? Icons.visibility : Icons.visibility_off,
-              _toggleHudVisibility,
-              colors,
-            ),
-          ),
-        ),
-        if (!_hideAllHud)
-          Positioned(
-            right: 2,
-            top: 2,
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.35),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: Icon(_isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen, color: Colors.white),
-                    tooltip: _isFullScreen ? 'Restore' : 'Full screen',
-                    onPressed: () => _toggleFullScreen(),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close, color: Colors.white),
-                    tooltip: 'Close session',
-                    onPressed: () => _closeSession(),
-                  ),
-                ],
-              ),
-            ),
-          ),
       ],
     );
   }
@@ -3289,12 +3302,41 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     }
 
     if (_remoteScreenFrame == null) {
+      final statusText = widget.sendLocalScreen
+          ? _hostSessionBannerText
+          : (_captureError.isNotEmpty
+              ? 'Error: $_captureError'
+              : (_isConnected ? 'Connected successfully' : 'Error: disconnected'));
       return Container(
         color: Colors.black,
         alignment: Alignment.center,
-        child: Text(
-          _captureError.isEmpty ? 'Waiting for remote stream...' : 'Capture issue: $_captureError',
-          style: const TextStyle(color: Colors.white70),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              _captureError.isEmpty ? 'Waiting for remote stream...' : 'Capture issue: $_captureError',
+              style: const TextStyle(color: Colors.white70),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              decoration: BoxDecoration(
+                color: statusText.toLowerCase().startsWith('error')
+                    ? Colors.redAccent.withValues(alpha: 0.9)
+                    : Colors.black54,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.white24),
+              ),
+              child: Text(
+                statusText,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ],
         ),
       );
     }
