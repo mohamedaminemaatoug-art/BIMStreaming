@@ -858,13 +858,21 @@ Write-Output "$count,$width,$height"
 
   void _sendResolutionUpdate() {
     if (!_canSignal) return;
+    final effectiveWidth = _localFrameWidth > 0
+        ? _localFrameWidth
+        : (_localCaptureWidth > 0 ? _localCaptureWidth : _screenWidthActual);
+    final effectiveHeight = _localFrameHeight > 0
+        ? _localFrameHeight
+        : (_localCaptureHeight > 0 ? _localCaptureHeight : _screenHeightActual);
     _sendSessionPayload(
       messageType: 'resolution_update',
       payload: {
-        'width': _localCaptureWidth > 0 ? _localCaptureWidth : _screenWidthActual,
-        'height': _localCaptureHeight > 0 ? _localCaptureHeight : _screenHeightActual,
-        'virtualWidth': _virtualWidth,
-        'virtualHeight': _virtualHeight,
+        'width': effectiveWidth,
+        'height': effectiveHeight,
+        // Keep virtual dimensions aligned with real frame dimensions to avoid
+        // aspect drift on heterogeneous controller machines.
+        'virtualWidth': effectiveWidth,
+        'virtualHeight': effectiveHeight,
       },
     );
   }
@@ -3431,8 +3439,8 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
                         // Keep host scaling in sync after window/fullscreen transitions.
                         _maybeSendViewportHint(Size(viewportWidth, viewportHeight));
 
-                        final sourceWidth = _remoteVirtualWidth > 0 ? _remoteVirtualWidth : _remoteFrameWidth;
-                        final sourceHeight = _remoteVirtualHeight > 0 ? _remoteVirtualHeight : _remoteFrameHeight;
+                        final sourceWidth = _remoteFrameWidth > 0 ? _remoteFrameWidth : _remoteVirtualWidth;
+                        final sourceHeight = _remoteFrameHeight > 0 ? _remoteFrameHeight : _remoteVirtualHeight;
 
                         return Center(
                           child: FittedBox(
@@ -4502,8 +4510,8 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
           'frameHash': hash,
           'frameWidth': _localFrameWidth,
           'frameHeight': _localFrameHeight,
-          'virtualWidth': _virtualWidth,
-          'virtualHeight': _virtualHeight,
+          'virtualWidth': _localFrameWidth > 0 ? _localFrameWidth : _virtualWidth,
+          'virtualHeight': _localFrameHeight > 0 ? _localFrameHeight : _virtualHeight,
           'remoteWidth': _localCaptureWidth > 0 ? _localCaptureWidth : _screenWidthActual,
           'remoteHeight': _localCaptureHeight > 0 ? _localCaptureHeight : _screenHeightActual,
           'screenCount': _localScreenCount,
@@ -4891,8 +4899,8 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
   Rect _computeRemoteFrameDrawRect(Size viewportSize) {
     return computeDisplayBounds(
       viewportSize: viewportSize,
-      sourceWidth: _remoteVirtualWidth > 0 ? _remoteVirtualWidth : _remoteFrameWidth,
-      sourceHeight: _remoteVirtualHeight > 0 ? _remoteVirtualHeight : _remoteFrameHeight,
+      sourceWidth: _remoteFrameWidth > 0 ? _remoteFrameWidth : _remoteVirtualWidth,
+      sourceHeight: _remoteFrameHeight > 0 ? _remoteFrameHeight : _remoteVirtualHeight,
       fillViewport: _fillRemoteViewport,
     );
   }
@@ -4901,8 +4909,8 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     return normalizeCoordinates(
       local: local,
       viewportSize: viewportSize,
-      sourceWidth: _remoteVirtualWidth > 0 ? _remoteVirtualWidth : _remoteFrameWidth,
-      sourceHeight: _remoteVirtualHeight > 0 ? _remoteVirtualHeight : _remoteFrameHeight,
+      sourceWidth: _remoteFrameWidth > 0 ? _remoteFrameWidth : _remoteVirtualWidth,
+      sourceHeight: _remoteFrameHeight > 0 ? _remoteFrameHeight : _remoteVirtualHeight,
       // Rendering is always BoxFit.contain; keep input mapping identical.
       fillViewport: false,
     );
