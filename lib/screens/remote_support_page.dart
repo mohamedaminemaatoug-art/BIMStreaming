@@ -301,9 +301,13 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     _initializeUserPaths();
     _syncFullScreenState();
     _startSessionTimer();
-    // START OVERLAY: When host starts session, show visual indicator
+    HostSessionOverlay.bindDisconnectHandler(_handleOverlayDisconnectRequested);
     if (widget.sendLocalScreen) {
-      HostSessionOverlay.startOverlay();
+      unawaited(
+        HostSessionOverlay.startOverlay(
+          label: 'Connected with: ${widget.deviceName}',
+        ),
+      );
     }
     _connectSessionSignalIfAvailable();
     _startAutomaticScreenShareIfPossible();
@@ -338,6 +342,10 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
         _sendResolutionUpdate();
       }
     });
+  }
+
+  void _handleOverlayDisconnectRequested() {
+    unawaited(_closeSession());
   }
 
   void _initializeUserPaths() {
@@ -2840,9 +2848,9 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
 
   @override
   void dispose() {
-    // STOP OVERLAY: Clean up host session indicator on disconnect
+    HostSessionOverlay.bindDisconnectHandler(null);
     if (widget.sendLocalScreen) {
-      HostSessionOverlay.stopOverlay();
+      unawaited(HostSessionOverlay.stopOverlay());
     }
 
     // Cleanup cursor update timer and stopwatch
