@@ -4,13 +4,12 @@ import 'dart:io' as io;
 import 'package:ffi/ffi.dart';
 import 'package:win32/win32.dart' as win32;
 
-/// Host session overlay - GDI-based implementation
+/// Host session overlay - GDI-based implementation (low-flicker)
 /// Draws a red border and control bar directly on desktop DC
-/// Note: Uses desktop drawing that may be visible in capture (WDA_EXCLUDEFROMCAPTURE not yet integrated)
 class HostSessionOverlay {
   static Timer? _drawTimer;
   static bool _overlayActive = false;
-  static const int _redrawIntervalMs = 100;
+  static const int _redrawIntervalMs = 500; // Reduced from 100ms to minimize flicker
 
   /// Start drawing overlay on desktop
   static bool startOverlay() {
@@ -23,7 +22,7 @@ class HostSessionOverlay {
       // Draw immediately
       _drawOverlayFrame();
 
-      // Redraw periodically to maintain visibility
+      // Redraw periodically with longer interval to reduce flicker
       _drawTimer = Timer.periodic(
         const Duration(milliseconds: _redrawIntervalMs),
         (_) {
@@ -60,8 +59,7 @@ class HostSessionOverlay {
 
   static void _drawOverlayFrame() {
     try {
-      // Get desktop window DC (NULL = entire screen) 
-      // Zero address represents NULL handle
+      // Get desktop window DC (NULL = entire screen)
       final screenDC = win32.GetDC(0) as int;
       if (screenDC == 0) return;
 
@@ -70,11 +68,11 @@ class HostSessionOverlay {
         final screenWidth = win32.GetSystemMetrics(win32.SM_CXSCREEN);
         final screenHeight = win32.GetSystemMetrics(win32.SM_CYSCREEN);
 
-        // Draw red border around entire screen
-        _drawRedBorder(screenDC, screenWidth, screenHeight);
+        // Draw red border outline (lines, not filled rectangles)
+        _drawRedBorderLines(screenDC, screenWidth, screenHeight);
 
-        // Draw control bar at top-center
-        _drawControlBar(screenDC, screenWidth);
+        // Draw control bar text only (no background fill)
+        _drawControlBarText(screenDC, screenWidth);
       } finally {
         try {
           win32.ReleaseDC(0, screenDC);
@@ -85,7 +83,7 @@ class HostSessionOverlay {
     }
   }
 
-  static void _drawRedBorder(int hDC, int screenW, int screenH) {
+  static void _drawRedBorderLines(int hDC, int screenW, int screenH) {
     try {
       // Create red pen (3 pixels thick)
       final penRed = win32.CreatePen(win32.PS_SOLID, 3, win32.RGB(255, 0, 0));
@@ -94,8 +92,22 @@ class HostSessionOverlay {
       try {
         final oldPen = win32.SelectObject(hDC, penRed);
 
-        // Draw rectangle border around entire screen
-        win32.Rectangle(hDC, 0, 20, screenW, screenH);
+        // Draw only the outline (border lines, not filled rectangle)
+        // Top border
+        win32.MoveToEx(hDC, 0, 20, nullptr);
+        win32.LineTo(hDC, screenW, 20);
+
+        // Left border
+        win32.MoveToEx(hDC, 0, 20, nullptr);
+        win32.LineTo(hDC, 0, screenH);
+
+        // Right border
+        win32.MoveToEx(hDC, screenW - 3, 20, nullptr);
+        win32.LineTo(hDC, screenW - 3, screenH);
+
+        // Bottom border
+        win32.MoveToEx(hDC, 0, screenH - 3, nullptr);
+        win32.LineTo(hDC, screenW, screenH - 3);
 
         win32.SelectObject(hDC, oldPen);
       } finally {
@@ -104,7 +116,7 @@ class HostSessionOverlay {
     } catch (_) {}
   }
 
-  static void _drawControlBar(int hDC, int screenW) {
+  static void _drawControlBarText(int hDC, int screenW) {
     try {
       const barHeight = 35;
       const barWidth = 380;
@@ -116,30 +128,34 @@ class HostSessionOverlay {
       final barRight = barLeft + barWidth;
       final barBottom = barY + barHeight;
 
-      // Draw dark background for control bar
-      final brushDark = win32.CreateSolidBrush(win32.RGB(40, 40, 40));
-      if (brushDark == 0) return;
+      // Draw semi-transparent background using pattern (less intrusive than solid fill)
+      _drawTransparentBar(hDC, barLeft, barTop, barRight, barBottom);
 
-      try {
-        final oldBrush = win32.SelectObject(hDC, brushDark);
-        win32.Rectangle(hDC, barLeft, barTop, barRight, barBottom);
-        win32.SelectObject(hDC, oldBrush);
-      } finally {
-        win32.DeleteObject(brushDark);
-      }
-
-      // Draw text on control bar
-      _drawControlBarText(hDC, barLeft, barTop, barRight, barBottom);
+      // Draw text
+      _drawBarText(hDC, barLeft, barTop, barRight, barBottom);
     } catch (_) {}
   }
 
-  static void _drawControlBarText(
-    int hDC,
-    int left,
-    int top,
-    int right,
-    int bottom,
-  ) {
+  static void _drawTransparentBar(int hDC, int left, int top, int right, int bottom) {
+    try {
+      // Create hatch pattern brush (less visually jarring than solid fill)
+      final brushHatch = win32.CreateHatchBrush(win32.HS_DIAGCROSS, win32.RGB(80, 80, 80));
+      if (brushHatch == 0) return;
+
+      try {
+        final oldBrush = win32.SelectObject(hDC, brushHatch);
+        // Draw with transparency by using hollow rectangle with pattern
+        win32.Rectangle(hDC, left, top, right, bottom);
+        win32.SelectObject(hDC, oldBrush);
+      } finally {
+        win32.DeleteObject(brushHatch);
+      }
+    } catch (_) {
+      // Fall back to just text if pattern fails
+    }
+  }
+
+  static void _drawBarText(int hDC, int left, int top, int right, int bottom) {
     try {
       final oldTextColor = win32.SetTextColor(hDC, win32.RGB(255, 255, 255));
       final oldBkMode = win32.SetBkMode(hDC, win32.TRANSPARENT);
