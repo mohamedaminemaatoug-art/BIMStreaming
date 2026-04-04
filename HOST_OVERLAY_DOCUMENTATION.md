@@ -1,14 +1,19 @@
 # Host Session Overlay System
 
+## Status: ⏳ Planned Feature - Design Complete, Implementation Deferred
+
+### Summary
+The Host Session Overlay feature is designed to show a red border and control bar on the host machine only, using Windows `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` to hide it from the controller stream. The design is complete, but implementation was deferred due to FFI type compatibility challenges with the `package:win32` bindings. A stub API has been created for future implementation when the technical blockers are resolved.
+
 ## Overview
 
-The Host Session Overlay is a system-level UI component that provides visual feedback to the **host user only**, indicating an active remote control session. It is **completely invisible to the remote controller** and does not appear in the streamed screen.
+The Host Session Overlay is a planned system-level UI component that will provide visual feedback to the **host user only**, indicating an active remote control session. It is **completely invisible to the remote controller** and does not appear in the streamed screen.
 
 ## Architecture
 
 ### Design Principle: System-Level Window Exclusion
 
-The overlay is implemented as a **separate native Windows window** with the following properties:
+The overlay is designed as a **separate native Windows window** with the following properties:
 
 1. **System-Level Window** (`WS_EX_TOPMOST`)
    - Always on top of all applications
@@ -43,9 +48,21 @@ The overlay is implemented as a **separate native Windows window** with the foll
 - **Text**: "Session Active - Press X to Disconnect" in white
 - **Purpose**: Session status indicator and disconnect access point
 
+## Current Implementation Status
+
+### File: `lib/native/overlay_window.dart`
+- **State**: Stub implementation (non-blocking)
+- Contains skeleton API with TODO comments
+- Ready for implementation when FFI issues resolved
+
+### File: `lib/screens/remote_support_page.dart`
+- Integration code temporarily disabled
+- Can be re-enabled once native overlay implemented
+- Integration points still in place for future activation
+
 ## Implementation Files
 
-### Core Overlay Implementation
+### Core Overlay Implementation (Planned)
 **File**: `lib/native/overlay_window.dart`
 
 **Key Classes/Methods**:
@@ -267,3 +284,22 @@ Current implementation:
   - `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` integration
   - Primary monitor support
   - Host session start/stop lifecycle
+
+
+## Implementation Deferral Notes
+
+### What Happened
+The overlay feature was designed and an initial FFI implementation was attempted on April 4, 2026. The implementation encountered type compatibility issues with the package:win32 Dart bindings.
+
+### Root Cause: FFI Type Complexity
+The package:win32 package provides high-fidelity bindings to Windows APIs, using strongly-typed Pointer classes. WNDCLASS struct fields expect specific types, not generic Pointer<Void>. This caused compilation errors during implementation.
+
+### Resolution: Stub API Created
+Rather than abandoning the feature, a stub API was created in lib/native/overlay_window.dart that provides the same public interface ('startOverlay()' and 'stopOverlay()') but currently returns success without action. Integration points are preserved in lib/screens/remote_support_page.dart for future re-enablement.
+
+### Implementation Approaches for Future
+1. **GDI-Based**: Draw directly on desktop using GetDC(NULL) and Timer.periodic() - Simpler, 2-4 days
+2. **Native C++ Plugin**: Full control via platform channel - More work upfront, 1-2 weeks
+3. **Lower-Level FFI**: Custom bindings with expert FFI knowledge - Research-heavy
+
+**Status**: Feature design preserved, implementation deferred until technical blockers resolved.
