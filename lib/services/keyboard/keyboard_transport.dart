@@ -4,7 +4,6 @@
 
 import 'dart:async';
 import 'keyboard_protocol.dart';
-import 'keyboard_state_manager.dart';
 
 /// Manages robust transport of keyboard events with resilience features.
 class KeyboardTransportLayer {
@@ -31,9 +30,6 @@ class KeyboardTransportLayer {
 
   /// Timer for periodic state sync.
   Timer? _stateSyncTimer;
-
-  /// Last sequence number sent.
-  int _lastSequenceSent = 0;
 
   /// Stats: events sent.
   int _eventsSent = 0;
@@ -71,7 +67,6 @@ class KeyboardTransportLayer {
 
     final event = _pendingEvents.removeAt(0);
     if (onSendEvent?.call(event) ?? false) {
-      _lastSequenceSent = event.sequenceNumber;
       _eventsSent++;
 
       // Track for ack timeout.
@@ -161,7 +156,6 @@ class KeyboardTransportLayer {
     _eventsSent = 0;
     _eventsAcked = 0;
     _detectedLosses = 0;
-    _lastSequenceSent = 0;
     _pendingEvents.clear();
     _unackedEvents.clear();
   }

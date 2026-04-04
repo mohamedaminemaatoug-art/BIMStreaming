@@ -5,7 +5,7 @@
 
 import 'dart:async';
 import 'dart:io' as io;
-import 'package:flutter/services.dart';
+
 import 'keyboard_protocol.dart';
 
 /// Responsible for layout detection and translation.
@@ -66,7 +66,6 @@ if ([string]::IsNullOrWhiteSpace($layout)) { $layout = '00000409' }
 Write-Output $layout
 """
         ],
-        timeout: const Duration(seconds: 5),
       );
 
       if (result.exitCode == 0) {

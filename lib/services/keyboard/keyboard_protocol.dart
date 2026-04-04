@@ -3,8 +3,6 @@
 /// This module defines the shared protocol layer for keyboard events, layout detection,
 /// and synchronization across client and host machines.
 
-import 'package:flutter/services.dart';
-
 /// Represents a physical or logical keyboard key.
 ///
 /// This abstraction ensures layout-independent, scan-code based key identification.

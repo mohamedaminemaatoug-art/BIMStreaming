@@ -8,6 +8,7 @@ import 'dart:io' as io;
 import 'keyboard_protocol.dart';
 import 'keyboard_layout_translator.dart';
 import 'keyboard_state_manager.dart';
+import 'keyboard_input_abstraction.dart';
 
 /// Responsible for injecting keyboard input into the host system.
 class KeyboardHostInjectionEngine {
@@ -511,6 +512,3 @@ enum InjectionStrategy {
   sendKeys,
   modifierOnly,
 }
-
-// Provide convenience helper to access the input abstraction.
-import 'keyboard_input_abstraction.dart';

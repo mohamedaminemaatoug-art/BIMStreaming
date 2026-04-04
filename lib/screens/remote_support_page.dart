@@ -13,6 +13,7 @@ import 'package:image/image.dart' as img;
 import 'package:win32/win32.dart' as win32;
 import '../services/signaling_client_service.dart';
 import '../services/remote_audio_service.dart';
+import '../services/keyboard/keyboard_services.dart';
 import '../native/overlay_window.dart';
 
 final class _CursorInfoNative extends Struct {
@@ -224,6 +225,15 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   Offset? _pendingMove;
   Timer? _pendingMoveTimer;
   double _wheelAccumulator = 0.0;
+
+  // ===== NEW KEYBOARD SYSTEM v2 =====
+  late KeyboardLayoutTranslator _keyboardLayoutTranslator;
+  late KeyboardStateManager _keyboardStateManager;
+  late KeyboardRepeatController _keyboardRepeatController;
+  late KeyboardTransportLayer _keyboardTransportLayer;
+  late KeyboardHostInjectionEngine _keyboardInjectionEngine;
+  // ===== END KEYBOARD SYSTEM v2 =====
+
   Timer? _keyboardLayoutTimer;
   Timer? _keyStateSyncTimer;
   final Set<int> _pressedLogicalKeys = <int>{};
@@ -299,6 +309,8 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
       pingProvider: () => _pingMs,
     );
     _initializeUserPaths();
+    _initializeKeyboardSystemV2();
+    _onKeyboardSessionConnected();
     _syncFullScreenState();
     _startSessionTimer();
     HostSessionOverlay.bindDisconnectHandler(_handleOverlayDisconnectRequested);
@@ -391,13 +403,86 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
       _revealOverlayTemporarily();
     });
   }
-
   Future<void> _pinRemoteAgentWindowIfNeeded() async {
-    if (!widget.sendLocalScreen) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted) return;
-      await _minimizeHostWindowForConnectedState();
-    });
+  }
+
+  void _initializeKeyboardSystemV2() {
+    try {
+      // === Layout Translator ===
+      _keyboardLayoutTranslator = KeyboardLayoutTranslator(
+        onClientLayoutChanged: (old, newLayout) {
+          if (old?.layoutId != newLayout?.layoutId) {
+            print('[Keyboard] Client layout changed to ${newLayout?.displayName}');
+            _sendInputEvent('layout_sync', extra: {
+              'layout': newLayout?.layoutId ?? 'unknown',
+              'layoutFamily': newLayout?.family ?? 'unknown',
+            });
+          }
+        },
+        onHostLayoutChanged: (old, newLayout) {
+          print('[Keyboard] Host layout updated to ${newLayout?.displayName}');
+        },
+      );
+
+      // === State Manager ===
+      _keyboardStateManager = KeyboardStateManager(
+        onKeyStateChanged: (key) {
+          // Optional: log state changes
+        },
+        onStuckKeyForceReleased: (code, reason) {
+          print('[Keyboard] WARNING: Stuck key 0x${code.toRadixString(16)} released: $reason');
+        },
+      );
+
+      // === Repeat Controller ===
+      _keyboardRepeatController = KeyboardRepeatController(
+        initialDelayMs: 320,
+        repeatIntervalMs: 42,
+        onRepeat: (physicalCode, payload) {
+          _keyboardTransportLayer.enqueueEvent(KeyboardKeyEvent.fromJson(payload));
+        },
+      );
+
+      // === Transport Layer ===
+      _keyboardTransportLayer = KeyboardTransportLayer(
+        onSendEvent: (event) {
+          _sendInputEvent('key_event', extra: event.toJson());
+          return true;
+        },
+        onPacketLost: (lostSequence) {
+          print('[Keyboard] Packet loss detected at sequence: $lostSequence');
+        },
+        onRequestStateSync: () {
+          _syncKeyboardState();
+        },
+      );
+
+      // === Injection Engine ===
+      _keyboardInjectionEngine = KeyboardHostInjectionEngine(
+        layoutTranslator: _keyboardLayoutTranslator,
+        stateManager: _keyboardStateManager,
+        executePowerShell: (args, {timeout}) async {
+          final result = await _runPowerShell(
+            args,
+            timeout: timeout ?? const Duration(seconds: 10),
+          );
+          return '${result.stdout}';
+        },
+        onInjectionOccurred: (code, strategy) {
+          // Optional: log injections
+        },
+        onInjectionFailed: (code, reason) {
+          print('[Keyboard] Injection FAILED: $reason');
+        },
+      );
+
+      // Startup
+      unawaited(_keyboardLayoutTranslator.detectClientLayout());
+      _startKeyboardLayoutSyncV2();
+      print('[Keyboard] System V2 initialized successfully');
+    } catch (e) {
+      print('[Keyboard] Initialization error: $e');
+    }
   }
 
   Future<void> _minimizeHostWindowForConnectedState() async {
@@ -1387,6 +1472,7 @@ Write-Output "$count,$width,$height"
     _isClosingSession = true;
 
     _stopAllManagedRepeats();
+    _onKeyboardSessionDisconnected();
     _pressedLogicalKeys.clear();
     _sendResetAllKeys();
     _audioUdpOfferTimer?.cancel();
@@ -1531,6 +1617,54 @@ Write-Output "$count,$width,$height"
     _sendInputEvent('reset_all_keys');
   }
 
+  void _startKeyboardLayoutSyncV2() {
+    _keyboardLayoutTimer?.cancel();
+    _keyboardLayoutTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+      try {
+        await _keyboardLayoutTranslator.detectClientLayout();
+      } catch (e) {
+        print('[Keyboard] Layout sync error: $e');
+      }
+    });
+  }
+
+  Future<void> _syncKeyboardState() async {
+    try {
+      _keyboardStateManager.forceReleaseAll(reason: 'state_sync');
+      _keyboardRepeatController.stopAllRepeats();
+      final hw = HardwareKeyboard.instance;
+      _sendInputEvent('key_state_full_sync', extra: {
+        'shift': hw.isShiftPressed,
+        'ctrl': hw.isControlPressed,
+        'alt': hw.isAltPressed,
+        'meta': hw.isMetaPressed,
+      });
+    } catch (e) {
+      print('[Keyboard] State sync error: $e');
+    }
+  }
+
+  void _onKeyboardSessionConnected() {
+    try {
+      _keyboardTransportLayer.onConnected();
+      unawaited(_syncKeyboardState());
+      print('[Keyboard] Session connected - system ready');
+    } catch (e) {
+      print('[Keyboard] Connection handler error: $e');
+    }
+  }
+
+  void _onKeyboardSessionDisconnected() {
+    try {
+      _keyboardTransportLayer.onDisconnected();
+      _keyboardStateManager.forceReleaseAll(reason: 'session_disconnected');
+      _keyboardRepeatController.stopAllRepeats();
+      print('[Keyboard] Session disconnected - system reset');
+    } catch (e) {
+      print('[Keyboard] Disconnection handler error: $e');
+    }
+  }
+
   void _enqueueRemoteInput(Future<void> Function() task) {
     _remoteInputQueue = _remoteInputQueue.then((_) => task()).catchError((_) {
       // Keep later input events flowing if one injection fails.
@@ -1582,6 +1716,15 @@ Write-Output "$count,$width,$height"
   }
 
   bool _isManagedRepeatKey(LogicalKeyboardKey key) {
+    return key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.arrowRight ||
+        key == LogicalKeyboardKey.arrowUp ||
+        key == LogicalKeyboardKey.arrowDown ||
+        key == LogicalKeyboardKey.backspace ||
+        key == LogicalKeyboardKey.delete;
+  }
+
+  bool _isManagedRepeatKeyV2(LogicalKeyboardKey key) {
     return key == LogicalKeyboardKey.arrowLeft ||
         key == LogicalKeyboardKey.arrowRight ||
         key == LogicalKeyboardKey.arrowUp ||
@@ -2235,7 +2378,7 @@ switch ($action) {
     // Native cursor move is lower latency and avoids PowerShell DPI/runtime drift.
     _applyRemoteInputNative('move', x, y, 0);
   }
-  Future<void> _applyRemoteKeyboardEvent(Map<String, dynamic> payload) async {
+  Future<void> _applyRemoteKeyboardEventLegacy(Map<String, dynamic> payload) async {
     final phase = (payload['phase'] ?? 'down').toString();
     if (phase != 'down' && phase != 'up') return;
     final isModifier = _isModifierKey(payload);
@@ -2594,7 +2737,6 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     if (sourceFamily == targetFamily || sourceFamily == 'unknown' || targetFamily == 'unknown') {
       return character;
     }
-    // Keep literal characters as the source of truth for text fidelity across layouts.
     return character;
   }
 
@@ -2737,6 +2879,32 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
       }
     }
     throw lastError ?? Exception('PowerShell executable not found');
+  }
+
+  Future<void> _applyRemoteKeyboardEvent(Map<String, dynamic> payload) async {
+    // Keyboard System V2 - Remote Handler
+    try {
+      final keyboardEvent = KeyboardKeyEvent.fromJson(payload);
+      final syncLayout = _keyboardLayoutTranslator.clientLayout?.layoutId ?? 'unknown';
+
+      // Sync layout if needed
+      if (keyboardEvent.clientLayout != syncLayout) {
+        await _keyboardLayoutTranslator.detectClientLayout();
+      }
+
+      // Inject the key using the best strategy for this layout
+      final result = await _keyboardInjectionEngine.injectKeyboardEvent(
+        keyboardEvent,
+        hostLayout: _keyboardLayoutTranslator.hostLayout?.layoutId ?? 'unknown',
+        hostLayoutFamily: _keyboardLayoutTranslator.hostLayoutFamily,
+      );
+
+      if (!result) {
+        print('[Keyboard] Key injection failed for ${keyboardEvent.keyName}');
+      }
+    } catch (e) {
+      print('[Keyboard] Remote handler error: $e');
+    }
   }
 
   void _sendMoveIfNeeded(Offset p) {
@@ -2916,6 +3084,7 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
   @override
   void dispose() {
     HostSessionOverlay.bindDisconnectHandler(null);
+    _onKeyboardSessionDisconnected();
     if (widget.sendLocalScreen) {
       unawaited(HostSessionOverlay.stopOverlay());
     }
@@ -2961,6 +3130,11 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
     _composerController.dispose();
     _chatScrollController.dispose();
     _remoteControlFocusNode.dispose();
+        _keyboardLayoutTimer?.cancel();
+        _keyboardLayoutTimer = null;
+        _keyboardRepeatController.stopAllRepeats();
+        _keyboardStateManager.forceReleaseAll(reason: 'dispose');
+        _keyboardTransportLayer.dispose();
     super.dispose();
   }
 
@@ -3350,24 +3524,55 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
             focusNode: _remoteControlFocusNode,
             autofocus: !widget.sendLocalScreen,
             onKeyEvent: (event) {
+              // Keyboard System V2
               if (!_canSendRemoteInput || _isDeviceLocked || _isSessionPaused || !_keyboardInputEnabledForUser2) {
                 return;
               }
+
               if (event is KeyDownEvent) {
-                final logical = event.logicalKey.keyId;
-                final managed = _isManagedRepeatKey(event.logicalKey);
-                final modifier = _isModifierLogical(event.logicalKey);
-                if ((managed || modifier) && _pressedLogicalKeys.contains(logical)) return;
-                _pressedLogicalKeys.add(logical);
-                _sendKeyboardEvent(event, phase: 'down');
-                if (managed) {
-                  _startManagedRepeat(event);
+                try {
+                  final abstractedEvent = KeyboardInputAbstraction().abstractKeyEvent(
+                    event,
+                    clientLayout: _keyboardLayoutTranslator.clientLayout?.layoutId ?? 'unknown',
+                    clientLayoutFamily: _keyboardLayoutTranslator.clientLayoutFamily,
+                  );
+
+                  final activeKey = _keyboardStateManager.registerKeyDown(
+                    abstractedEvent.physicalCode,
+                    abstractedEvent.toJson(),
+                    sequenceNumber: abstractedEvent.sequenceNumber,
+                  );
+
+                  if (activeKey != null) {
+                    final isManaged = _isManagedRepeatKeyV2(event.logicalKey);
+                    if (!abstractedEvent.isModifier && isManaged) {
+                      _keyboardRepeatController.startRepeat(
+                        abstractedEvent.physicalCode,
+                        abstractedEvent.toJson(),
+                        isModifier: false,
+                      );
+                    }
+                    _keyboardTransportLayer.enqueueEvent(abstractedEvent);
+                  }
+                } catch (e) {
+                  print('[Keyboard] KeyDown error: $e');
                 }
               }
+
               if (event is KeyUpEvent) {
-                _stopManagedRepeat(event.logicalKey.keyId);
-                _pressedLogicalKeys.remove(event.logicalKey.keyId);
-                _sendKeyboardEvent(event, phase: 'up');
+                try {
+                  final abstractedEvent = KeyboardInputAbstraction().abstractKeyEvent(
+                    event,
+                    clientLayout: _keyboardLayoutTranslator.clientLayout?.layoutId ?? 'unknown',
+                    clientLayoutFamily: _keyboardLayoutTranslator.clientLayoutFamily,
+                  );
+                  final physicalCode = abstractedEvent.physicalCode;
+                  _keyboardRepeatController.stopRepeat(physicalCode);
+                  _keyboardStateManager.registerKeyUp(physicalCode);
+                  _keyboardTransportLayer.enqueueEvent(abstractedEvent);
+                } catch (e) {
+                  print('[Keyboard] KeyUp error: $e');
+                }
               }
             },
             child: Builder(
