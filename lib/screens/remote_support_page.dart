@@ -13,6 +13,7 @@ import 'package:image/image.dart' as img;
 import 'package:win32/win32.dart' as win32;
 import '../services/signaling_client_service.dart';
 import '../services/remote_audio_service.dart';
+import '../native/overlay_window.dart';
 
 final class _CursorInfoNative extends Struct {
   @Uint32()
@@ -300,6 +301,11 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     _initializeUserPaths();
     _syncFullScreenState();
     _startSessionTimer();
+    // START OVERLAY: When host starts session, show system-level indicator
+    // (invisible to controller, excluded from screen capture)
+    if (widget.sendLocalScreen) {
+      HostSessionOverlay.startOverlay();
+    }
     _connectSessionSignalIfAvailable();
     _startAutomaticScreenShareIfPossible();
     _startDiagnosticsTimer();
@@ -2835,6 +2841,11 @@ if ($phase -eq 'down' -and -not [string]::IsNullOrWhiteSpace($stroke)) {
 
   @override
   void dispose() {
+    // STOP OVERLAY: Clean up host session indicator on disconnect
+    if (widget.sendLocalScreen) {
+      HostSessionOverlay.stopOverlay();
+    }
+    
     // Cleanup cursor update timer and stopwatch
     _cursorUpdateTimer?.cancel();
     _cursorMovementStopwatch.stop();
