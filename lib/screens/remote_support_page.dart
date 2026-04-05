@@ -16,72 +16,6 @@ import '../services/remote_audio_service.dart';
 import '../services/keyboard/keyboard_services.dart';
 import '../native/overlay_window.dart';
 
-bool _globalHostKeyboardBlocked = false;
-bool _globalHostMouseBlocked = false;
-
-bool _isKeyboardInputMessage(int message) {
-  switch (message) {
-    case win32.WM_KEYDOWN:
-    case win32.WM_KEYUP:
-    case win32.WM_SYSKEYDOWN:
-    case win32.WM_SYSKEYUP:
-      return true;
-    default:
-      return false;
-  }
-}
-
-int _globalKeyboardHookProc(int nCode, int wParam, int lParam) {
-  if (nCode >= 0 && _globalHostKeyboardBlocked && _isKeyboardInputMessage(wParam)) {
-    final keyboard = Pointer<_KbdLlHookStruct>.fromAddress(lParam).ref;
-    final injected = (keyboard.flags & win32.LLKHF_INJECTED) != 0;
-    if (!injected) {
-      return 1;
-    }
-  }
-  return win32.CallNextHookEx(0, nCode, wParam, lParam);
-}
-
-bool _isMouseInputMessage(int message) {
-  switch (message) {
-    case win32.WM_MOUSEMOVE:
-    case win32.WM_LBUTTONDOWN:
-    case win32.WM_LBUTTONUP:
-    case win32.WM_LBUTTONDBLCLK:
-    case win32.WM_RBUTTONDOWN:
-    case win32.WM_RBUTTONUP:
-    case win32.WM_RBUTTONDBLCLK:
-    case win32.WM_MBUTTONDOWN:
-    case win32.WM_MBUTTONUP:
-    case win32.WM_MBUTTONDBLCLK:
-    case win32.WM_MOUSEWHEEL:
-    case win32.WM_XBUTTONDOWN:
-    case win32.WM_XBUTTONUP:
-    case win32.WM_XBUTTONDBLCLK:
-    case win32.WM_MOUSEHWHEEL:
-      return true;
-    default:
-      return false;
-  }
-}
-
-int _globalMouseHookProc(int nCode, int wParam, int lParam) {
-  if (nCode >= 0 && _globalHostMouseBlocked && _isMouseInputMessage(wParam)) {
-    final mouse = Pointer<_MsLlHookStruct>.fromAddress(lParam).ref;
-    const llmhfInjected = 0x00000001;
-    final injected = (mouse.flags & llmhfInjected) != 0;
-    if (!injected) {
-      return 1;
-    }
-  }
-  return win32.CallNextHookEx(0, nCode, wParam, lParam);
-}
-
-final Pointer<NativeFunction<win32.HOOKPROC>> _globalKeyboardHookProcPointer =
-    Pointer.fromFunction<win32.HOOKPROC>(_globalKeyboardHookProc, 0);
-final Pointer<NativeFunction<win32.HOOKPROC>> _globalMouseHookProcPointer =
-    Pointer.fromFunction<win32.HOOKPROC>(_globalMouseHookProc, 0);
-
 final class _CursorInfoNative extends Struct {
   @Uint32()
   external int cbSize;
@@ -116,48 +50,10 @@ final class _IconInfoNative extends Struct {
   external int hbmColor;
 }
 
-final class _KbdLlHookStruct extends Struct {
-  @Uint32()
-  external int vkCode;
-
-  @Uint32()
-  external int scanCode;
-
-  @Uint32()
-  external int flags;
-
-  @Uint32()
-  external int time;
-
-  @IntPtr()
-  external int dwExtraInfo;
-}
-
-final class _MsLlHookStruct extends Struct {
-  @Int32()
-  external int x;
-
-  @Int32()
-  external int y;
-
-  @Uint32()
-  external int mouseData;
-
-  @Uint32()
-  external int flags;
-
-  @Uint32()
-  external int time;
-
-  @IntPtr()
-  external int dwExtraInfo;
-}
-
 class RemoteSupportPage extends StatefulWidget {
   final String deviceName;
   final String deviceId;
   final bool sendLocalScreen;
-  final int hostInputLockMinutes;
   final VoidCallback? onExitToRemoteControl;
   final String? sessionId;
   final String? currentUserId;
@@ -170,7 +66,6 @@ class RemoteSupportPage extends StatefulWidget {
     required this.deviceName,
     required this.deviceId,
     required this.sendLocalScreen,
-    this.hostInputLockMinutes = 10,
     this.onExitToRemoteControl,
     this.sessionId,
     this.currentUserId,
@@ -253,13 +148,6 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   bool _isSessionPausedRemote = false;
   bool _keyboardInputEnabledForUser2 = true;
   bool _mouseInputEnabledForUser2 = true;
-  Timer? _keyboardAutoRestoreTimer;
-  Timer? _mouseAutoRestoreTimer;
-  Timer? _hostInputLockTimer;
-  DateTime? _hostKeyboardLockedUntil;
-  DateTime? _hostMouseLockedUntil;
-  int _keyboardHookHandle = 0;
-  int _mouseHookHandle = 0;
   int _framesSent = 0;
   int _framesReceived = 0;
   String _captureError = '';
@@ -1176,209 +1064,8 @@ Write-Output "$count,$width,$height"
       payload: {
         'keyboardEnabled': _keyboardInputEnabledForUser2,
         'mouseEnabled': _mouseInputEnabledForUser2,
-        'lockDurationSeconds': _hostInputLockDurationSeconds,
       },
     );
-  }
-
-  int get _hostInputLockDurationSeconds {
-    final safeMinutes = widget.hostInputLockMinutes <= 0 ? 10 : widget.hostInputLockMinutes;
-    return safeMinutes * 60;
-  }
-
-  void _toggleUser2KeyboardPolicy() {
-    final next = !_keyboardInputEnabledForUser2;
-    setState(() {
-      _keyboardInputEnabledForUser2 = next;
-    });
-    if (next) {
-      _keyboardAutoRestoreTimer?.cancel();
-      _keyboardAutoRestoreTimer = null;
-    } else {
-      _scheduleKeyboardAutoRestore();
-      _showMessage(
-        context,
-        'Keyboard OFF for ${widget.hostInputLockMinutes} minutes (host local time)',
-        _getColors(context),
-      );
-    }
-    _sendInputPolicy();
-  }
-
-  void _toggleUser2MousePolicy() {
-    final next = !_mouseInputEnabledForUser2;
-    setState(() {
-      _mouseInputEnabledForUser2 = next;
-    });
-    if (next) {
-      _mouseAutoRestoreTimer?.cancel();
-      _mouseAutoRestoreTimer = null;
-    } else {
-      _scheduleMouseAutoRestore();
-      _showMessage(
-        context,
-        'Mouse OFF for ${widget.hostInputLockMinutes} minutes (host local time)',
-        _getColors(context),
-      );
-    }
-    _sendInputPolicy();
-  }
-
-  void _scheduleKeyboardAutoRestore() {
-    _keyboardAutoRestoreTimer?.cancel();
-    final duration = Duration(seconds: _hostInputLockDurationSeconds);
-    _keyboardAutoRestoreTimer = Timer(duration, () {
-      if (!mounted || _keyboardInputEnabledForUser2) return;
-      setState(() {
-        _keyboardInputEnabledForUser2 = true;
-      });
-      _sendInputPolicy();
-      _showMessage(context, 'Keyboard control automatically restored', _getColors(context));
-    });
-  }
-
-  void _scheduleMouseAutoRestore() {
-    _mouseAutoRestoreTimer?.cancel();
-    final duration = Duration(seconds: _hostInputLockDurationSeconds);
-    _mouseAutoRestoreTimer = Timer(duration, () {
-      if (!mounted || _mouseInputEnabledForUser2) return;
-      setState(() {
-        _mouseInputEnabledForUser2 = true;
-      });
-      _sendInputPolicy();
-      _showMessage(context, 'Mouse control automatically restored', _getColors(context));
-    });
-  }
-
-  void _applyHostTimedInputLock({
-    required bool keyboardEnabled,
-    required bool mouseEnabled,
-    required int lockDurationSeconds,
-  }) {
-    if (!widget.sendLocalScreen) return;
-    final seconds = lockDurationSeconds > 0 ? lockDurationSeconds : _hostInputLockDurationSeconds;
-    final now = DateTime.now();
-
-    _hostKeyboardLockedUntil = keyboardEnabled ? null : now.add(Duration(seconds: seconds));
-    _hostMouseLockedUntil = mouseEnabled ? null : now.add(Duration(seconds: seconds));
-
-    _refreshHostInputLockState();
-    if (_hostKeyboardLockedUntil != null || _hostMouseLockedUntil != null) {
-      _hostInputLockTimer?.cancel();
-      _hostInputLockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-        _refreshHostInputLockState();
-      });
-    } else {
-      _hostInputLockTimer?.cancel();
-      _hostInputLockTimer = null;
-    }
-  }
-
-  void _refreshHostInputLockState() {
-    final now = DateTime.now();
-    if (_hostKeyboardLockedUntil != null && !now.isBefore(_hostKeyboardLockedUntil!)) {
-      _hostKeyboardLockedUntil = null;
-    }
-    if (_hostMouseLockedUntil != null && !now.isBefore(_hostMouseLockedUntil!)) {
-      _hostMouseLockedUntil = null;
-    }
-
-    final keyboardBlocked = _hostKeyboardLockedUntil != null;
-    final mouseBlocked = _hostMouseLockedUntil != null;
-    _setHostInputBlockModes(keyboardBlocked: keyboardBlocked, mouseBlocked: mouseBlocked);
-
-    final shouldBlock = keyboardBlocked || mouseBlocked;
-
-    if (!shouldBlock) {
-      _hostInputLockTimer?.cancel();
-      _hostInputLockTimer = null;
-    }
-  }
-
-  bool _ensureHostInputHooksInstalled() {
-    if (!io.Platform.isWindows) return false;
-    if (_keyboardHookHandle != 0 && _mouseHookHandle != 0) return true;
-
-    final moduleHandle = win32.GetModuleHandle(nullptr);
-    if (_keyboardHookHandle == 0) {
-      _keyboardHookHandle = win32.SetWindowsHookEx(
-        win32.WH_KEYBOARD_LL,
-        _globalKeyboardHookProcPointer,
-        moduleHandle,
-        0,
-      );
-      if (_keyboardHookHandle == 0) {
-        final error = win32.GetLastError();
-        print('[InputPolicy] Failed to install keyboard hook: $error');
-      }
-    }
-
-    if (_mouseHookHandle == 0) {
-      _mouseHookHandle = win32.SetWindowsHookEx(
-        win32.WH_MOUSE_LL,
-        _globalMouseHookProcPointer,
-        moduleHandle,
-        0,
-      );
-      if (_mouseHookHandle == 0) {
-        final error = win32.GetLastError();
-        print('[InputPolicy] Failed to install mouse hook: $error');
-      }
-    }
-
-    return _keyboardHookHandle != 0 && _mouseHookHandle != 0;
-  }
-
-  void _uninstallHostInputHooks() {
-    if (!io.Platform.isWindows) return;
-
-    if (_keyboardHookHandle != 0) {
-      final ok = win32.UnhookWindowsHookEx(_keyboardHookHandle) != 0;
-      if (!ok) {
-        final error = win32.GetLastError();
-        print('[InputPolicy] Failed to uninstall keyboard hook: $error');
-      }
-      _keyboardHookHandle = 0;
-    }
-
-    if (_mouseHookHandle != 0) {
-      final ok = win32.UnhookWindowsHookEx(_mouseHookHandle) != 0;
-      if (!ok) {
-        final error = win32.GetLastError();
-        print('[InputPolicy] Failed to uninstall mouse hook: $error');
-      }
-      _mouseHookHandle = 0;
-    }
-  }
-
-  void _setHostInputBlockModes({required bool keyboardBlocked, required bool mouseBlocked}) {
-    if (!io.Platform.isWindows) return;
-
-    final shouldBlockAny = keyboardBlocked || mouseBlocked;
-    if (shouldBlockAny) {
-      final installed = _ensureHostInputHooksInstalled();
-      if (!installed) {
-        _globalHostKeyboardBlocked = false;
-        _globalHostMouseBlocked = false;
-        return;
-      }
-
-      _globalHostKeyboardBlocked = keyboardBlocked;
-      _globalHostMouseBlocked = mouseBlocked;
-      return;
-    }
-
-    _globalHostKeyboardBlocked = false;
-    _globalHostMouseBlocked = false;
-    _uninstallHostInputHooks();
-  }
-
-  void _releaseHostInputLock() {
-    _hostInputLockTimer?.cancel();
-    _hostInputLockTimer = null;
-    _hostKeyboardLockedUntil = null;
-    _hostMouseLockedUntil = null;
-    _setHostInputBlockModes(keyboardBlocked: false, mouseBlocked: false);
   }
 
   void _togglePauseSession() {
@@ -1398,10 +1085,6 @@ Write-Output "$count,$width,$height"
   }
 
   void _restartInputControl() {
-    _keyboardAutoRestoreTimer?.cancel();
-    _keyboardAutoRestoreTimer = null;
-    _mouseAutoRestoreTimer?.cancel();
-    _mouseAutoRestoreTimer = null;
     setState(() {
       _keyboardInputEnabledForUser2 = true;
       _mouseInputEnabledForUser2 = true;
@@ -1567,18 +1250,10 @@ Write-Output "$count,$width,$height"
     if (messageType == 'input_policy') {
       final keyboard = payload['keyboardEnabled'] != false;
       final mouse = payload['mouseEnabled'] != false;
-      final lockDurationSeconds = payload['lockDurationSeconds'] is num
-          ? (payload['lockDurationSeconds'] as num).toInt()
-          : _hostInputLockDurationSeconds;
       setState(() {
         _keyboardInputEnabledForUser2 = keyboard;
         _mouseInputEnabledForUser2 = mouse;
       });
-      _applyHostTimedInputLock(
-        keyboardEnabled: keyboard,
-        mouseEnabled: mouse,
-        lockDurationSeconds: lockDurationSeconds,
-      );
       return;
     }
 
@@ -1833,11 +1508,6 @@ Write-Output "$count,$width,$height"
     _pendingMoveTimer?.cancel();
     _pendingMoveTimer = null;
     _pendingMove = null;
-    _keyboardAutoRestoreTimer?.cancel();
-    _keyboardAutoRestoreTimer = null;
-    _mouseAutoRestoreTimer?.cancel();
-    _mouseAutoRestoreTimer = null;
-    _releaseHostInputLock();
 
     await _restoreWindowStateForSessionExit();
 
@@ -3326,11 +2996,6 @@ switch ($action) {
     _pendingRemoteMoveTimer = null;
     _pendingRemoteMoveX = null;
     _pendingRemoteMoveY = null;
-    _keyboardAutoRestoreTimer?.cancel();
-    _keyboardAutoRestoreTimer = null;
-    _mouseAutoRestoreTimer?.cancel();
-    _mouseAutoRestoreTimer = null;
-    _releaseHostInputLock();
     _hostMouseButtonSafetyTimer?.cancel();
     _hostMouseButtonSafetyTimer = null;
     _hostMouseButtonDownType = null;
@@ -3449,7 +3114,26 @@ switch ($action) {
                 ),
               ),
             if (_isSessionPaused)
-              const SizedBox.shrink(),
+              Positioned.fill(
+                child: IgnorePointer(
+                  ignoring: true,
+                  child: Container(
+                    color: Colors.black.withValues(alpha: 0.45),
+                    alignment: Alignment.center,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.black87,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Text(
+                        'Session paused. Remote screen is frozen.',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
           ],
         ),
       ),
@@ -4164,7 +3848,10 @@ switch ($action) {
               child: _buildActionButton(
                 _keyboardInputEnabledForUser2 ? Icons.keyboard : Icons.keyboard_hide,
                 _keyboardInputEnabledForUser2 ? 'Keyboard ON' : 'Keyboard OFF',
-                _toggleUser2KeyboardPolicy,
+                () {
+                  setState(() => _keyboardInputEnabledForUser2 = !_keyboardInputEnabledForUser2);
+                  _sendInputPolicy();
+                },
                 colors,
                 isActive: _keyboardInputEnabledForUser2,
               ),
@@ -4174,7 +3861,10 @@ switch ($action) {
               child: _buildActionButton(
                 _mouseInputEnabledForUser2 ? Icons.mouse : Icons.mouse_outlined,
                 _mouseInputEnabledForUser2 ? 'Mouse ON' : 'Mouse OFF',
-                _toggleUser2MousePolicy,
+                () {
+                  setState(() => _mouseInputEnabledForUser2 = !_mouseInputEnabledForUser2);
+                  _sendInputPolicy();
+                },
                 colors,
                 isActive: _mouseInputEnabledForUser2,
               ),

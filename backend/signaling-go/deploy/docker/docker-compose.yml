@@ -70,7 +70,7 @@ services:
     ports:
       - "3478:3478"
       - "3478:3478/udp"
-      - "55000-55050:55000-55050/udp"
+      - "49160-49210:49160-49210/udp"
 
   prometheus:
     image: prom/prometheus:latest
