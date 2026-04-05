@@ -213,12 +213,17 @@ void ApplyOverlayTransparencyMode(HWND hwnd) {
     return;
   }
 
+  LONG_PTR ex_style = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+
   if (g_privacy_mode) {
     // In privacy mode the overlay must be fully opaque, otherwise desktop is visible.
     SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+    // Keep blackout visible but let input reach underlying windows.
+    SetWindowLongPtr(hwnd, GWL_EXSTYLE, ex_style | WS_EX_TRANSPARENT);
   } else {
     // In normal mode we keep color-key transparency and only paint the session bar.
     SetLayeredWindowAttributes(hwnd, kTransparentKey, 0, LWA_COLORKEY);
+    SetWindowLongPtr(hwnd, GWL_EXSTYLE, ex_style & ~WS_EX_TRANSPARENT);
   }
 }
 
@@ -238,9 +243,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) 
       InvalidateRect(hwnd, nullptr, TRUE);
       return 0;
     case WM_NCHITTEST: {
-      if (g_privacy_mode) {
-        return HTCLIENT;
-      }
+      if (g_privacy_mode) return HTTRANSPARENT;
       POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
       ScreenToClient(hwnd, &pt);
       RECT buttonRect = GetButtonRect(hwnd);
