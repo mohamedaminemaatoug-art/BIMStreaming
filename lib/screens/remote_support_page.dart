@@ -5815,19 +5815,22 @@ $g.Dispose();$bmp.Dispose()
           await io.Process.start('shutdown', ['/r', '/t', '3']);
           break;
         case 'privacy_mode_on':
-          // Turn off display - black out the system screen on machine B
-          await io.Process.run('powershell', [
-            '-NoProfile',
-            '-ExecutionPolicy',
-            'Bypass',
-            '-Command',
-            r'''
+          // Prefer native overlay blackout to ensure reliable privacy mode on host.
+          final nativeBlackoutEnabled = await HostSessionOverlay.startPrivacyOverlay();
+          if (!nativeBlackoutEnabled) {
+            await io.Process.run('powershell', [
+              '-NoProfile',
+              '-ExecutionPolicy',
+              'Bypass',
+              '-Command',
+              r'''
 [DllImport("user32.dll")]
 public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 $null = Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);' -Name NativeMethods -PassThru
 [NativeMethods]::PostMessage([IntPtr](-1), 0x0112, [IntPtr](0xF170), [IntPtr](2))
 ''',
-          ]);
+            ]);
+          }
           _privacySystemRestoreTimer?.cancel();
           final durationMs = payload['durationMs'] is num
               ? (payload['durationMs'] as num).toInt()
@@ -5840,14 +5843,7 @@ $null = Add-Type -MemberDefinition '[DllImport("user32.dll")] public static exte
           break;
         case 'privacy_mode_off':
           _privacySystemRestoreTimer?.cancel();
-          // Turn on display - restore the system screen on machine B
-          await io.Process.run('powershell', [
-            '-NoProfile',
-            '-ExecutionPolicy',
-            'Bypass',
-            '-Command',
-            r'''Move-Mouse'''
-          ]);
+          await HostSessionOverlay.stopPrivacyOverlay();
           break;
       }
     } catch (_) {

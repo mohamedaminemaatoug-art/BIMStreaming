@@ -27,6 +27,7 @@ HWND g_window = nullptr;
 bool g_class_registered = false;
 HHOOK g_mouse_hook = nullptr;
 std::wstring g_label = L"Session Active";
+bool g_privacy_mode = false;
 
 RECT GetVirtualScreenRect() {
   RECT rect;
@@ -69,6 +70,31 @@ void PaintOverlay(HWND hwnd, HDC hdc) {
   HBRUSH background = CreateSolidBrush(kTransparentKey);
   FillRect(hdc, &client, background);
   DeleteObject(background);
+
+  if (g_privacy_mode) {
+    HBRUSH blackout_brush = CreateSolidBrush(RGB(0, 0, 0));
+    FillRect(hdc, &client, blackout_brush);
+    DeleteObject(blackout_brush);
+
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, kTextColor);
+
+    HFONT privacy_font = CreateFontW(34, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE,
+                                     FALSE, DEFAULT_CHARSET,
+                                     OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                     CLEARTYPE_QUALITY,
+                                     DEFAULT_PITCH | FF_DONTCARE,
+                                     L"Segoe UI");
+    HFONT old_font = static_cast<HFONT>(SelectObject(hdc, privacy_font));
+
+    RECT text_rect = client;
+    DrawTextW(hdc, L"Privacy Mode Active", -1, &text_rect,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    SelectObject(hdc, old_font);
+    DeleteObject(privacy_font);
+    return;
+  }
 
   SetBkMode(hdc, TRANSPARENT);
 
@@ -156,6 +182,10 @@ bool IsInjectedMouseEvent(const MSLLHOOKSTRUCT& info) {
 }
 
 LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wparam, LPARAM lparam) {
+  if (g_privacy_mode) {
+    return CallNextHookEx(g_mouse_hook, nCode, wparam, lparam);
+  }
+
   if (nCode == HC_ACTION && g_window != nullptr) {
     const auto* info = reinterpret_cast<MSLLHOOKSTRUCT*>(lparam);
     if (info != nullptr && !IsInjectedMouseEvent(*info)) {
@@ -194,6 +224,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) 
       InvalidateRect(hwnd, nullptr, TRUE);
       return 0;
     case WM_NCHITTEST: {
+      if (g_privacy_mode) {
+        return HTCLIENT;
+      }
       POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
       ScreenToClient(hwnd, &pt);
       RECT buttonRect = GetButtonRect(hwnd);
@@ -289,6 +322,16 @@ void HandleMethodCall(
     return;
   }
 
+  if (method == "startPrivacy") {
+    result->Success(flutter::EncodableValue(StartPrivacyMode()));
+    return;
+  }
+
+  if (method == "stopPrivacy") {
+    result->Success(flutter::EncodableValue(StopPrivacyMode()));
+    return;
+  }
+
   result->NotImplemented();
 }
 
@@ -308,6 +351,7 @@ void Initialize(flutter::BinaryMessenger* messenger) {
 bool Start(const std::wstring& label) {
   RegisterOverlayClass();
   g_label = label.empty() ? L"Session Active" : label;
+  g_privacy_mode = false;
 
   if (!g_window) {
     const RECT rect = GetVirtualScreenRect();
@@ -331,12 +375,38 @@ bool Start(const std::wstring& label) {
   return true;
 }
 
+bool StartPrivacyMode() {
+  if (!Start(g_label)) {
+    return false;
+  }
+
+  g_privacy_mode = true;
+  UpdateOverlayBounds(g_window);
+  ShowWindow(g_window, SW_SHOWNOACTIVATE);
+  UpdateWindow(g_window);
+  InvalidateRect(g_window, nullptr, TRUE);
+  return true;
+}
+
+bool StopPrivacyMode() {
+  if (!g_window) {
+    g_privacy_mode = false;
+    return true;
+  }
+
+  g_privacy_mode = false;
+  InvalidateRect(g_window, nullptr, TRUE);
+  return true;
+}
+
 bool Stop() {
   if (!g_window) {
+    g_privacy_mode = false;
     RemoveMouseHook();
     return true;
   }
 
+  g_privacy_mode = false;
   DestroyWindow(g_window);
   g_window = nullptr;
   RemoveMouseHook();

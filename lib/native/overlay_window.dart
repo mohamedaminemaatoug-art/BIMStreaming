@@ -39,6 +39,28 @@ class HostSessionOverlay {
     }
   }
 
+  static Future<bool> startPrivacyOverlay() async {
+    try {
+      final result = await _channel.invokeMethod<bool>('startPrivacy');
+      return result ?? false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    }
+  }
+
+  static Future<bool> stopPrivacyOverlay() async {
+    try {
+      final result = await _channel.invokeMethod<bool>('stopPrivacy');
+      return result ?? false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    }
+  }
+
   static Future<void> _handleMethodCall(MethodCall call) async {
     if (call.method == 'disconnectRequested') {
       _disconnectRequested?.call();

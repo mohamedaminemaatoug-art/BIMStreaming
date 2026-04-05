@@ -11,6 +11,8 @@ namespace host_session_overlay {
 
 void Initialize(flutter::BinaryMessenger* messenger);
 bool Start(const std::wstring& label);
+bool StartPrivacyMode();
+bool StopPrivacyMode();
 bool Stop();
 void Shutdown();
 
