@@ -208,10 +208,24 @@ void UpdateOverlayBounds(HWND hwnd) {
                SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
 
+void ApplyOverlayTransparencyMode(HWND hwnd) {
+  if (!hwnd) {
+    return;
+  }
+
+  if (g_privacy_mode) {
+    // In privacy mode the overlay must be fully opaque, otherwise desktop is visible.
+    SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+  } else {
+    // In normal mode we keep color-key transparency and only paint the session bar.
+    SetLayeredWindowAttributes(hwnd, kTransparentKey, 0, LWA_COLORKEY);
+  }
+}
+
 LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
   switch (message) {
     case WM_CREATE: {
-      SetLayeredWindowAttributes(hwnd, kTransparentKey, 0, LWA_COLORKEY);
+      ApplyOverlayTransparencyMode(hwnd);
       SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
       UpdateOverlayBounds(hwnd);
       return 0;
@@ -367,6 +381,7 @@ bool Start(const std::wstring& label) {
   }
 
   UpdateOverlayBounds(g_window);
+  ApplyOverlayTransparencyMode(g_window);
   SetWindowDisplayAffinity(g_window, WDA_EXCLUDEFROMCAPTURE);
   EnsureMouseHook();
   ShowWindow(g_window, SW_SHOWNOACTIVATE);
@@ -382,6 +397,7 @@ bool StartPrivacyMode() {
 
   g_privacy_mode = true;
   UpdateOverlayBounds(g_window);
+  ApplyOverlayTransparencyMode(g_window);
   ShowWindow(g_window, SW_SHOWNOACTIVATE);
   UpdateWindow(g_window);
   InvalidateRect(g_window, nullptr, TRUE);
@@ -395,6 +411,7 @@ bool StopPrivacyMode() {
   }
 
   g_privacy_mode = false;
+  ApplyOverlayTransparencyMode(g_window);
   InvalidateRect(g_window, nullptr, TRUE);
   return true;
 }
