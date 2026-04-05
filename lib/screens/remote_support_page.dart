@@ -402,8 +402,11 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   }
 
   String _buildTransferBaseDirectory() {
-    final userProfile = io.Platform.environment['USERPROFILE'] ?? io.Directory.current.path;
-    return '$userProfile\\BimStreaming\\Shared';
+    final systemDrive = io.Platform.environment['SystemDrive'];
+    if (systemDrive != null && systemDrive.trim().isNotEmpty) {
+      return '${systemDrive.trim()}\\';
+    }
+    return 'C:\\';
   }
 
   void _initializeFileTransferService() {
@@ -3798,38 +3801,14 @@ switch ($action) {
   }
 
   Future<bool> _confirmIncomingFileTransfer(IncomingTransferRequest request) async {
-    if (!mounted) {
-      return false;
+    if (mounted) {
+      _showMessage(
+        context,
+        'Incoming transfer accepted: ${request.fileName}',
+        _getColors(context),
+      );
     }
-
-    final sizeLabel = _formatTransferBytes(request.fileSize);
-    final shouldAccept = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('Incoming File Transfer'),
-          content: Text(
-            'File: ${request.fileName}\n'
-            'Size: $sizeLabel\n'
-            'Source: ${request.sourceRelativePath.isEmpty ? '/' : request.sourceRelativePath}\n'
-            'Destination: ${request.destinationRelativePath.isEmpty ? '/' : request.destinationRelativePath}\n\n'
-            'Accept transfer?',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Reject'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Accept'),
-            ),
-          ],
-        );
-      },
-    );
-    return shouldAccept == true;
+    return true;
   }
 
   String _formatTransferBytes(num bytes) {
