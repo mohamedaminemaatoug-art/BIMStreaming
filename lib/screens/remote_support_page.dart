@@ -146,6 +146,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   bool _isCapturing = false;
   bool _isSessionPaused = false;
   bool _isSessionPausedRemote = false;
+  int _privacyDurationMinutes = 1;
   bool _keyboardInputEnabledForUser2 = true;
   bool _mouseInputEnabledForUser2 = true;
   int _framesSent = 0;
@@ -170,6 +171,9 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   Timer? _diagnosticsTimer;
   Timer? _recordingTimer;
   Timer? _reconnectTimer;
+  Timer? _privacyModeAutoOffTimer;
+  Timer? _privacyModeRemoteAutoOffTimer;
+  Timer? _privacySystemRestoreTimer;
   StreamSubscription<SignalEvent>? _signalSubscription;
   int _sessionSeconds = 0;
   final FocusNode _remoteControlFocusNode = FocusNode();
@@ -1189,9 +1193,29 @@ Write-Output "$count,$width,$height"
 
     if (messageType == 'privacy_mode') {
       if (widget.sendLocalScreen) {
+        final enabled = payload['enabled'] == true;
+        final durationMs = payload['durationMs'] is num
+            ? (payload['durationMs'] as num).toInt()
+            : 0;
         setState(() {
-          _isPrivacyModeForRemote = payload['enabled'] == true;
+          _isPrivacyModeForRemote = enabled;
         });
+
+        _privacyModeRemoteAutoOffTimer?.cancel();
+        if (enabled) {
+          unawaited(_applySystemAction({'action': 'privacy_mode_on', 'durationMs': durationMs}));
+          if (durationMs > 0) {
+            _privacyModeRemoteAutoOffTimer = Timer(Duration(milliseconds: durationMs), () {
+              if (!mounted || !_isPrivacyModeForRemote) return;
+              setState(() {
+                _isPrivacyModeForRemote = false;
+              });
+              unawaited(_applySystemAction({'action': 'privacy_mode_off'}));
+            });
+          }
+        } else {
+          unawaited(_applySystemAction({'action': 'privacy_mode_off'}));
+        }
       }
       return;
     }
@@ -2986,6 +3010,9 @@ switch ($action) {
     _diagnosticsTimer?.cancel();
     _recordingTimer?.cancel();
     _reconnectTimer?.cancel();
+    _privacyModeAutoOffTimer?.cancel();
+    _privacyModeRemoteAutoOffTimer?.cancel();
+    _privacySystemRestoreTimer?.cancel();
     _pendingMoveTimer?.cancel();
     _pendingMoveTimer = null;
     _pendingMove = null;
@@ -5644,24 +5671,108 @@ $g.Dispose();$bmp.Dispose()
     );
   }
 
-  void _toggleBlackout() {
+  Future<int?> _pickPrivacyDurationMinutes() async {
+    final options = <int>[1, 2, 3, 5, 10, 15];
+    int selected = _privacyDurationMinutes;
+
+    final result = await showDialog<int>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Privacy duration'),
+          content: StatefulBuilder(
+            builder: (context, setDialogState) {
+              return DropdownButtonFormField<int>(
+                value: selected,
+                decoration: const InputDecoration(
+                  labelText: 'Hide host screen for',
+                ),
+                items: options
+                    .map(
+                      (value) => DropdownMenuItem<int>(
+                        value: value,
+                        child: Text(value == 1 ? '1 minute (default)' : '$value minutes'),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  if (value == null) return;
+                  setDialogState(() {
+                    selected = value;
+                  });
+                },
+              );
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text(tr('btn_cancel')),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(selected),
+              child: const Text('Apply'),
+            ),
+          ],
+        );
+      },
+    );
+
+    return result;
+  }
+
+  void _toggleBlackout() async {
     if (!_isConnected) return;
-    setState(() => _isBlackoutMode = !_isBlackoutMode);
+
+    if (_isBlackoutMode) {
+      _privacyModeAutoOffTimer?.cancel();
+      setState(() => _isBlackoutMode = false);
+      _sendSessionPayload(
+        messageType: 'privacy_mode',
+        payload: {'enabled': false},
+      );
+      _showMessage(context, tr('privacy_mode_disabled'), _getColors(context));
+      return;
+    }
+
+    final selectedDuration = await _pickPrivacyDurationMinutes();
+    if (!mounted || selectedDuration == null) return;
+
+    final durationMinutes = selectedDuration < 1 ? 1 : selectedDuration;
+    final durationMs = durationMinutes * 60 * 1000;
+
+    _privacyModeAutoOffTimer?.cancel();
+    setState(() {
+      _privacyDurationMinutes = durationMinutes;
+      _isBlackoutMode = true;
+    });
+
     _sendSessionPayload(
       messageType: 'privacy_mode',
-      payload: {'enabled': _isBlackoutMode},
+      payload: {
+        'enabled': true,
+        'durationMs': durationMs,
+      },
     );
-    
-    // Also send system action to machine B to hide/show display
-    if (_isBlackoutMode) {
-      // Hide display - black out the system screen
-      _applySystemAction({'action': 'privacy_mode_on'});
-    } else {
-      // Show display - restore the system screen
-      _applySystemAction({'action': 'privacy_mode_off'});
-    }
-    
-    _showMessage(context, _isBlackoutMode ? tr('privacy_mode_enabled') : tr('privacy_mode_disabled'), _getColors(context));
+
+    _privacyModeAutoOffTimer = Timer(Duration(milliseconds: durationMs), () {
+      if (!mounted || !_isBlackoutMode) return;
+      setState(() => _isBlackoutMode = false);
+      _sendSessionPayload(
+        messageType: 'privacy_mode',
+        payload: {'enabled': false},
+      );
+      _showMessage(context, tr('privacy_mode_disabled'), _getColors(context));
+    });
+
+    final durationLabel = durationMinutes == 1
+        ? '1 minute'
+        : '$durationMinutes minutes';
+    _showMessage(
+      context,
+      'Privacy mode enabled for $durationLabel',
+      _getColors(context),
+    );
   }
 
   void _sendSystemAction(String action) {
@@ -5717,8 +5828,18 @@ $null = Add-Type -MemberDefinition '[DllImport("user32.dll")] public static exte
 [NativeMethods]::PostMessage([IntPtr](-1), 0x0112, [IntPtr](0xF170), [IntPtr](2))
 ''',
           ]);
+          _privacySystemRestoreTimer?.cancel();
+          final durationMs = payload['durationMs'] is num
+              ? (payload['durationMs'] as num).toInt()
+              : 0;
+          if (durationMs > 0) {
+            _privacySystemRestoreTimer = Timer(Duration(milliseconds: durationMs), () {
+              unawaited(_applySystemAction({'action': 'privacy_mode_off'}));
+            });
+          }
           break;
         case 'privacy_mode_off':
+          _privacySystemRestoreTimer?.cancel();
           // Turn on display - restore the system screen on machine B
           await io.Process.run('powershell', [
             '-NoProfile',
