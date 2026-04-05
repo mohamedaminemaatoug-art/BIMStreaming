@@ -10,10 +10,12 @@ import 'package:file_picker/file_picker.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:ffi/ffi.dart';
 import 'package:image/image.dart' as img;
+import 'package:path/path.dart' as p;
 import 'package:win32/win32.dart' as win32;
 import '../services/signaling_client_service.dart';
 import '../services/remote_audio_service.dart';
 import '../services/keyboard/keyboard_services.dart';
+import '../services/file_transfer_service.dart';
 import '../native/overlay_window.dart';
 
 final class _CursorInfoNative extends Struct {
@@ -157,6 +159,11 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   final List<String> _chatMessages = [];
   final ScrollController _chatScrollController = ScrollController();
   final List<Map<String, String>> _transfers = [];
+  FileTransferService? _fileTransferService;
+  final Set<String> _selectedRemoteFilePaths = <String>{};
+  final List<String> _selectedLocalAbsolutePaths = <String>[];
+  String _transferRemoteDestinationPath = '';
+  String _transferLocalDestinationPath = '';
   final List<Map<String, String>> _recordedFrames = [];
   Uint8List? _remoteScreenFrame;
   String? _pendingRemoteFrameData;
@@ -313,6 +320,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
       pingProvider: () => _pingMs,
     );
     _initializeUserPaths();
+    _initializeFileTransferService();
     _initializeKeyboardSystemV2();
     _onKeyboardSessionConnected();
     _syncFullScreenState();
@@ -391,6 +399,26 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
         _recordingsPath = io.Directory.systemTemp.path;
       }
     }
+  }
+
+  String _buildTransferBaseDirectory() {
+    final userProfile = io.Platform.environment['USERPROFILE'] ?? io.Directory.current.path;
+    return '$userProfile\\BimStreaming\\Shared';
+  }
+
+  void _initializeFileTransferService() {
+    final baseDir = _buildTransferBaseDirectory();
+    _fileTransferService = FileTransferService(
+      isHost: widget.sendLocalScreen,
+      sendSignal: (messageType, payload) => _sendSessionPayload(
+        messageType: messageType,
+        payload: payload,
+      ),
+      baseDirectory: baseDir,
+    );
+    _transferRemoteDestinationPath = '';
+    _transferLocalDestinationPath = '';
+    unawaited(_fileTransferService!.initialize());
   }
 
   Future<void> _autoEnterFullscreenForController() async {
@@ -1132,6 +1160,32 @@ Write-Output "$count,$width,$height"
     final payload = data['payload'] is Map
         ? Map<String, dynamic>.from(data['payload'] as Map)
         : <String, dynamic>{};
+
+    const fileTransferTypes = <String>{
+      fileTransferInit,
+      fileTransferInitAck,
+      fileTransferChunk,
+      fileTransferChunkAck,
+      fileTransferComplete,
+      fileTransferCompleteAck,
+      fileTransferError,
+      fileTransferCancel,
+      fileTransferBrowseRequest,
+      fileTransferBrowseResponse,
+    };
+    if (fileTransferTypes.contains(messageType)) {
+      final transferService = _fileTransferService;
+      if (transferService != null) {
+        unawaited(
+          transferService.handleSignal(
+            messageType: messageType,
+            payload: payload,
+            onIncomingRequest: _confirmIncomingFileTransfer,
+          ),
+        );
+      }
+      return;
+    }
 
     if (messageType == 'screen_frame' && _remoteAudioFeatureEnabled && _audioEnabled && !_remoteAudioActive) {
       unawaited(_syncRemoteAudioPipeline());
@@ -3032,6 +3086,8 @@ switch ($action) {
     _composerController.dispose();
     _chatScrollController.dispose();
     _remoteControlFocusNode.dispose();
+    _fileTransferService?.dispose();
+    _fileTransferService = null;
         _keyboardLayoutTimer?.cancel();
         _keyboardLayoutTimer = null;
         _keyboardRepeatController.stopAllRepeats();
@@ -3293,7 +3349,7 @@ switch ($action) {
       ),
       child: Column(
         children: [
-          _buildRoundToolButton(Icons.swap_horiz, 'Transfer', () => _togglePanel('transfer'), colors),
+          _buildRoundToolButton(Icons.swap_horiz, 'Transfer Files', _openFileTransferModal, colors),
           const SizedBox(height: 8),
           _buildRoundToolButton(Icons.settings_remote, 'System', () => _togglePanel('system'), colors),
           const SizedBox(height: 8),
@@ -3738,6 +3794,582 @@ switch ($action) {
           ),
         ),
       ],
+    );
+  }
+
+  Future<bool> _confirmIncomingFileTransfer(IncomingTransferRequest request) async {
+    if (!mounted) {
+      return false;
+    }
+
+    final sizeLabel = _formatTransferBytes(request.fileSize);
+    final shouldAccept = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Incoming File Transfer'),
+          content: Text(
+            'File: ${request.fileName}\n'
+            'Size: $sizeLabel\n'
+            'Source: ${request.sourceRelativePath.isEmpty ? '/' : request.sourceRelativePath}\n'
+            'Destination: ${request.destinationRelativePath.isEmpty ? '/' : request.destinationRelativePath}\n\n'
+            'Accept transfer?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Reject'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Accept'),
+            ),
+          ],
+        );
+      },
+    );
+    return shouldAccept == true;
+  }
+
+  String _formatTransferBytes(num bytes) {
+    const units = ['B', 'KB', 'MB', 'GB'];
+    var value = bytes.toDouble();
+    var unitIndex = 0;
+    while (value >= 1024 && unitIndex < units.length - 1) {
+      value /= 1024;
+      unitIndex += 1;
+    }
+    final precision = unitIndex == 0 ? 0 : 1;
+    return '${value.toStringAsFixed(precision)} ${units[unitIndex]}';
+  }
+
+  String _formatTransferSpeed(double bytesPerSecond) {
+    if (bytesPerSecond <= 0) {
+      return '-';
+    }
+    return '${_formatTransferBytes(bytesPerSecond)}/s';
+  }
+
+  Future<void> _pickLocalFilesForTransfer(StateSetter setModalState) async {
+    final result = await FilePicker.platform.pickFiles(
+      allowMultiple: true,
+      withData: false,
+    );
+    if (!mounted || result == null || result.files.isEmpty) {
+      return;
+    }
+
+    final selected = <String>[];
+    for (final item in result.files) {
+      final path = item.path;
+      if (path != null && path.isNotEmpty) {
+        selected.add(path);
+      }
+    }
+    if (selected.isEmpty) {
+      return;
+    }
+    setModalState(() {
+      _selectedLocalAbsolutePaths
+        ..clear()
+        ..addAll(selected);
+    });
+  }
+
+  Future<void> _sendSelectedFilesToRemote() async {
+    final service = _fileTransferService;
+    if (service == null) {
+      return;
+    }
+    if (_selectedLocalAbsolutePaths.isEmpty) {
+      _showMessage(context, 'Select local file(s) first.', _getColors(context));
+      return;
+    }
+
+    await service.sendFilesToRemote(
+      absolutePaths: List<String>.from(_selectedLocalAbsolutePaths),
+      remoteDestinationPath: _transferRemoteDestinationPath,
+    );
+    if (!mounted) {
+      return;
+    }
+    _showMessage(context, 'Transfer queued to remote.', _getColors(context));
+  }
+
+  void _requestReceiveSelectedRemoteFiles() {
+    final service = _fileTransferService;
+    if (service == null) {
+      return;
+    }
+    if (_selectedRemoteFilePaths.isEmpty) {
+      _showMessage(context, 'Select remote file(s) first.', _getColors(context));
+      return;
+    }
+
+    service.requestReceiveFromRemote(
+      remoteFilePaths: _selectedRemoteFilePaths.toList(growable: false),
+      localDestinationPath: _transferLocalDestinationPath,
+    );
+    _showMessage(context, 'Receive request queued.', _getColors(context));
+  }
+
+  Future<void> _openFileTransferModal() async {
+    final service = _fileTransferService;
+    if (service == null) {
+      _showMessage(context, 'File transfer service unavailable.', _getColors(context));
+      return;
+    }
+
+    _selectedRemoteFilePaths.clear();
+    _selectedLocalAbsolutePaths.clear();
+    _transferRemoteDestinationPath = service.remotePath.value;
+    _transferLocalDestinationPath = service.localPath.value;
+    service.requestRemoteBrowse(path: service.remotePath.value);
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        final colors = _getColors(context);
+        return StatefulBuilder(
+          builder: (modalContext, setModalState) {
+            return Dialog(
+              insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+              backgroundColor: colors['bg'],
+              child: SizedBox(
+                width: 1120,
+                height: 700,
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            'File Transfer',
+                            style: TextStyle(
+                              color: colors['text'],
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            'Base directory: ${service.baseDirectory}',
+                            style: TextStyle(color: colors['textSecondary'], fontSize: 11),
+                          ),
+                          const Spacer(),
+                          IconButton(
+                            onPressed: () => Navigator.of(dialogContext).pop(),
+                            icon: Icon(Icons.close, color: colors['text']),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Expanded(
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: _buildLocalFilePanel(colors, service, setModalState),
+                            ),
+                            const SizedBox(width: 12),
+                            SizedBox(
+                              width: 160,
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  FilledButton.icon(
+                                    onPressed: _selectedLocalAbsolutePaths.isEmpty ? null : _sendSelectedFilesToRemote,
+                                    icon: const Icon(Icons.arrow_right_alt),
+                                    label: const Text('Send ->'),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  FilledButton.icon(
+                                    onPressed: _selectedRemoteFilePaths.isEmpty ? null : _requestReceiveSelectedRemoteFiles,
+                                    icon: const Icon(Icons.arrow_left),
+                                    label: const Text('<- Receive'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: _buildRemoteFilePanel(colors, service, setModalState),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      _buildTransferPathSelectors(colors, service, setModalState),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: _buildTransferQueueList(colors, service),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildTransferPathSelectors(
+    Map<String, Color> colors,
+    FileTransferService service,
+    StateSetter setModalState,
+  ) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: colors['cardBg'],
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: colors['border']!),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              'Send destination (remote): ${_transferRemoteDestinationPath.isEmpty ? '/' : _transferRemoteDestinationPath}',
+              style: TextStyle(color: colors['textSecondary'], fontSize: 12),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: 10),
+          OutlinedButton(
+            onPressed: () {
+              setModalState(() {
+                _transferRemoteDestinationPath = service.remotePath.value;
+              });
+            },
+            child: const Text('Use current remote path'),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Text(
+              'Receive destination (local): ${_transferLocalDestinationPath.isEmpty ? '/' : _transferLocalDestinationPath}',
+              style: TextStyle(color: colors['textSecondary'], fontSize: 12),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: 10),
+          OutlinedButton(
+            onPressed: () {
+              setModalState(() {
+                _transferLocalDestinationPath = service.localPath.value;
+              });
+            },
+            child: const Text('Use current local path'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLocalFilePanel(
+    Map<String, Color> colors,
+    FileTransferService service,
+    StateSetter setModalState,
+  ) {
+    return Container(
+      decoration: BoxDecoration(
+        color: colors['bg'],
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: colors['border']!),
+      ),
+      padding: const EdgeInsets.all(10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Controller Files', style: TextStyle(color: colors['text'], fontWeight: FontWeight.w700)),
+          const SizedBox(height: 6),
+          ValueListenableBuilder<String>(
+            valueListenable: service.localPath,
+            builder: (context, value, child) => Text(
+              'Path: ${value.isEmpty ? '/' : value}',
+              style: TextStyle(color: colors['textSecondary'], fontSize: 11),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              OutlinedButton(
+                onPressed: () {
+                  final current = service.localPath.value;
+                  final parent = p.dirname(current);
+                  final next = (current.isEmpty || parent == '.') ? '' : parent;
+                  unawaited(service.refreshLocal(path: next));
+                },
+                child: const Text('Up'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton(
+                onPressed: () => unawaited(service.refreshLocal(path: service.localPath.value)),
+                child: const Text('Refresh'),
+              ),
+              const Spacer(),
+              OutlinedButton.icon(
+                onPressed: () => _pickLocalFilesForTransfer(setModalState),
+                icon: const Icon(Icons.add),
+                label: const Text('Add Files'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: ValueListenableBuilder<List<FileTransferBrowserEntry>>(
+              valueListenable: service.localEntries,
+              builder: (context, entries, child) {
+                return ListView.builder(
+                  itemCount: entries.length,
+                  itemBuilder: (context, index) {
+                    final entry = entries[index];
+                    final selected = _selectedLocalAbsolutePaths.contains(p.join(service.baseDirectory, entry.relativePath));
+                    return ListTile(
+                      dense: true,
+                      leading: Icon(entry.isDirectory ? Icons.folder : Icons.insert_drive_file, color: colors['accent']),
+                      title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: colors['text'])),
+                      subtitle: entry.isDirectory
+                          ? null
+                          : Text(_formatTransferBytes(entry.size), style: TextStyle(color: colors['textSecondary'], fontSize: 11)),
+                      trailing: entry.isDirectory
+                          ? const Icon(Icons.chevron_right)
+                          : Checkbox(
+                              value: selected,
+                              onChanged: (checked) {
+                                final abs = p.join(service.baseDirectory, entry.relativePath);
+                                setModalState(() {
+                                  if (checked == true) {
+                                    if (!_selectedLocalAbsolutePaths.contains(abs)) {
+                                      _selectedLocalAbsolutePaths.add(abs);
+                                    }
+                                  } else {
+                                    _selectedLocalAbsolutePaths.remove(abs);
+                                  }
+                                });
+                              },
+                            ),
+                      onTap: () {
+                        if (entry.isDirectory) {
+                          unawaited(service.refreshLocal(path: entry.relativePath));
+                          return;
+                        }
+                        final abs = p.join(service.baseDirectory, entry.relativePath);
+                        setModalState(() {
+                          if (_selectedLocalAbsolutePaths.contains(abs)) {
+                            _selectedLocalAbsolutePaths.remove(abs);
+                          } else {
+                            _selectedLocalAbsolutePaths.add(abs);
+                          }
+                        });
+                      },
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Selected local files: ${_selectedLocalAbsolutePaths.length}',
+            style: TextStyle(color: colors['textSecondary'], fontSize: 11),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRemoteFilePanel(
+    Map<String, Color> colors,
+    FileTransferService service,
+    StateSetter setModalState,
+  ) {
+    return Container(
+      decoration: BoxDecoration(
+        color: colors['bg'],
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: colors['border']!),
+      ),
+      padding: const EdgeInsets.all(10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Host Files', style: TextStyle(color: colors['text'], fontWeight: FontWeight.w700)),
+          const SizedBox(height: 6),
+          ValueListenableBuilder<String>(
+            valueListenable: service.remotePath,
+            builder: (context, value, child) => Text(
+              'Path: ${value.isEmpty ? '/' : value}',
+              style: TextStyle(color: colors['textSecondary'], fontSize: 11),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              OutlinedButton(
+                onPressed: () {
+                  final current = service.remotePath.value;
+                  final parent = p.dirname(current);
+                  final next = (current.isEmpty || parent == '.') ? '' : parent;
+                  service.requestRemoteBrowse(path: next);
+                },
+                child: const Text('Up'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton(
+                onPressed: () => service.requestRemoteBrowse(path: service.remotePath.value),
+                child: const Text('Refresh'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: ValueListenableBuilder<List<FileTransferBrowserEntry>>(
+              valueListenable: service.remoteEntries,
+              builder: (context, entries, child) {
+                return ListView.builder(
+                  itemCount: entries.length,
+                  itemBuilder: (context, index) {
+                    final entry = entries[index];
+                    final selected = _selectedRemoteFilePaths.contains(entry.relativePath);
+                    return ListTile(
+                      dense: true,
+                      leading: Icon(entry.isDirectory ? Icons.folder : Icons.insert_drive_file, color: colors['accent']),
+                      title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: colors['text'])),
+                      subtitle: entry.isDirectory
+                          ? null
+                          : Text(_formatTransferBytes(entry.size), style: TextStyle(color: colors['textSecondary'], fontSize: 11)),
+                      trailing: entry.isDirectory
+                          ? const Icon(Icons.chevron_right)
+                          : Checkbox(
+                              value: selected,
+                              onChanged: (checked) {
+                                setModalState(() {
+                                  if (checked == true) {
+                                    _selectedRemoteFilePaths.add(entry.relativePath);
+                                  } else {
+                                    _selectedRemoteFilePaths.remove(entry.relativePath);
+                                  }
+                                });
+                              },
+                            ),
+                      onTap: () {
+                        if (entry.isDirectory) {
+                          service.requestRemoteBrowse(path: entry.relativePath);
+                          return;
+                        }
+                        setModalState(() {
+                          if (_selectedRemoteFilePaths.contains(entry.relativePath)) {
+                            _selectedRemoteFilePaths.remove(entry.relativePath);
+                          } else {
+                            _selectedRemoteFilePaths.add(entry.relativePath);
+                          }
+                        });
+                      },
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Selected remote files: ${_selectedRemoteFilePaths.length}',
+            style: TextStyle(color: colors['textSecondary'], fontSize: 11),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTransferQueueList(Map<String, Color> colors, FileTransferService service) {
+    return Container(
+      decoration: BoxDecoration(
+        color: colors['cardBg'],
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: colors['border']!),
+      ),
+      padding: const EdgeInsets.all(10),
+      child: ValueListenableBuilder<List<FileTransferQueueItem>>(
+        valueListenable: service.queue,
+        builder: (context, items, child) {
+          if (items.isEmpty) {
+            return Center(
+              child: Text(
+                'Transfer queue is empty.',
+                style: TextStyle(color: colors['textSecondary']),
+              ),
+            );
+          }
+          return ListView.separated(
+            itemCount: items.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 8),
+            itemBuilder: (context, index) {
+              final item = items[index];
+              final progress = item.progress;
+              final progressLabel = '${(progress * 100).toStringAsFixed(0)}%';
+              return Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: colors['bg'],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: colors['border']!),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            item.name,
+                            style: TextStyle(color: colors['text'], fontWeight: FontWeight.w600),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          item.status,
+                          style: TextStyle(color: colors['textSecondary'], fontSize: 12),
+                        ),
+                        const SizedBox(width: 8),
+                        if (item.canCancel)
+                          IconButton(
+                            tooltip: 'Cancel transfer',
+                            icon: const Icon(Icons.cancel_outlined),
+                            onPressed: () => service.cancelTransfer(item.id),
+                          ),
+                      ],
+                    ),
+                    Text(
+                      '${item.direction} | ${_formatTransferBytes(item.bytesDone)} / ${_formatTransferBytes(item.bytesTotal)} | ${_formatTransferSpeed(item.speedBytesPerSecond)}',
+                      style: TextStyle(color: colors['textSecondary'], fontSize: 11),
+                    ),
+                    const SizedBox(height: 6),
+                    LinearProgressIndicator(value: progress),
+                    const SizedBox(height: 4),
+                    Text(
+                      progressLabel,
+                      style: TextStyle(color: colors['textSecondary'], fontSize: 11),
+                    ),
+                    if (item.error != null && item.error!.isNotEmpty)
+                      Text(
+                        item.error!,
+                        style: const TextStyle(color: Colors.redAccent, fontSize: 11),
+                      ),
+                  ],
+                ),
+              );
+            },
+          );
+        },
+      ),
     );
   }
 
