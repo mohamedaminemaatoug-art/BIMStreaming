@@ -57,6 +57,7 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
   bool _showAddDeptDialog = false;
   String _deptDialogCountry = '';
   final String _sessionPassword = _generateSecurePassword();
+  int _hostInputLockMinutes = 10;
 
   // User Management
   static const String _roleAdminPrincipal = 'Admin Principal';
@@ -193,6 +194,7 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
     final prefs = await SharedPreferences.getInstance();
     final savedLang = prefs.getString('app_lang');
     final savedTheme = prefs.getString('app_theme');
+    final savedHostInputLockMinutes = prefs.getInt('host_input_lock_minutes');
 
     if (!mounted) return;
 
@@ -208,6 +210,10 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
       } else if (savedTheme == ThemeModeType.dark.name) {
         _themeMode = ThemeModeType.dark;
       }
+
+      if (savedHostInputLockMinutes != null && savedHostInputLockMinutes > 0) {
+        _hostInputLockMinutes = savedHostInputLockMinutes;
+      }
     });
   }
 
@@ -221,6 +227,13 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
     setState(() => _themeMode = value);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('app_theme', value.name);
+  }
+
+  Future<void> _setHostInputLockMinutes(int value) async {
+    final clamped = value.clamp(1, 120);
+    setState(() => _hostInputLockMinutes = clamped);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('host_input_lock_minutes', clamped);
   }
 
   List<String> _countryFilterItems() {
@@ -1354,6 +1367,7 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
           deviceName: peerName,
           deviceId: peerId,
           sendLocalScreen: sendLocalScreen,
+          hostInputLockMinutes: _hostInputLockMinutes,
           onExitToRemoteControl: () {
             if (!mounted) return;
             setState(() => _pageIndex = 0);
@@ -2729,6 +2743,20 @@ class _BimStreamingAppState extends State<BimStreamingApp> {
                         onChanged: (v) {
                           if (v != null) {
                             _setLanguage(v);
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    _settingsRow(
+                      'Host input lock duration:',
+                      _styledDropdown<int>(
+                        value: _hostInputLockMinutes,
+                        items: const [1, 2, 5, 10, 15, 20, 30, 45, 60, 90, 120],
+                        labelBuilder: (v) => '$v min',
+                        onChanged: (v) {
+                          if (v != null) {
+                            _setHostInputLockMinutes(v);
                           }
                         },
                       ),
