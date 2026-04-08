@@ -1,12 +1,14 @@
 param(
   [string]$SignalUrl = 'ws://127.0.0.1:8080/api/v1/ws',
+  [string]$ServerAddr = ':8080',
   [switch]$SkipBackend
 )
 
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$backendDockerDir = Join-Path $repoRoot 'backend\signaling-go\deploy\docker'
+$serverDir = Join-Path $repoRoot 'server'
+$clientDir = Join-Path $repoRoot 'client'
 $healthUrl = 'http://127.0.0.1:8080/healthz'
 
 function Test-BackendReady {
@@ -19,18 +21,13 @@ function Test-BackendReady {
 }
 
 if (-not $SkipBackend) {
-  if (Get-Command docker -ErrorAction SilentlyContinue) {
-    Write-Host 'Starting backend stack with Docker Compose...'
-    Push-Location $backendDockerDir
-    try {
-      docker compose up -d --build | Out-Host
-    } finally {
-      Pop-Location
-    }
-  } else {
-    Write-Warning 'Docker is not installed or not on PATH. Skipping backend stack startup.'
-    Write-Warning 'If you already have Postgres/Redis running locally, start the Go server manually from backend/signaling-go.'
+  if (-not (Test-Path $serverDir)) {
+    throw "Server directory not found: $serverDir"
   }
+
+  Write-Host "Starting relay server from $serverDir"
+  $backendCommand = "`$env:SERVER_ADDR='$ServerAddr'; Set-Location '$serverDir'; go run ."
+  Start-Process -FilePath 'powershell' -ArgumentList @('-NoExit', '-Command', $backendCommand) | Out-Null
 
   Write-Host 'Waiting for signaling backend to become ready...'
   $deadline = (Get-Date).AddSeconds(90)
@@ -48,5 +45,9 @@ if (-not $SkipBackend) {
 }
 
 Write-Host "Launching Flutter with BIM_SIGNAL_URL=$SignalUrl"
-Set-Location $repoRoot
+if (-not (Test-Path $clientDir)) {
+  throw "Client directory not found: $clientDir"
+}
+
+Set-Location $clientDir
 flutter run -d windows --dart-define=BIM_SIGNAL_URL=$SignalUrl
