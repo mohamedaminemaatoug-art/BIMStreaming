@@ -1,6 +1,6 @@
-^C:\USERS\PC\ONEDRIVE\BUREAU\BIMSTEAMING\BIMSTREAMING\CLIENT\BUILD\WINDOWS\X64\CMAKEFILES\5D8A0194C70C9364D68EE9BE25F17B16\FLUTTER_WINDOWS.DLL.RULE
+^C:\USERS\MAATO\DESKTOP\BIMSTEAMING\BIMSTREAMING\CLIENT\BUILD\WINDOWS\X64\CMAKEFILES\587B09FAB81B32FBF50B1736910C6663\FLUTTER_WINDOWS.DLL.RULE
 setlocal
-"C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -E env FLUTTER_ROOT=C:\Users\PC\flutter PROJECT_DIR=C:\Users\PC\OneDrive\Bureau\BimSteaming\BimStreaming\client FLUTTER_ROOT=C:\Users\PC\flutter FLUTTER_EPHEMERAL_DIR=C:\Users\PC\OneDrive\Bureau\BimSteaming\BimStreaming\client\windows\flutter\ephemeral PROJECT_DIR=C:\Users\PC\OneDrive\Bureau\BimSteaming\BimStreaming\client FLUTTER_TARGET=lib\main.dart DART_DEFINES=RkxVVFRFUl9WRVJTSU9OPTMuNDEuMg==,RkxVVFRFUl9DSEFOTkVMPXN0YWJsZQ==,RkxVVFRFUl9HSVRfVVJMPWh0dHBzOi8vZ2l0aHViLmNvbS9mbHV0dGVyL2ZsdXR0ZXIuZ2l0,RkxVVFRFUl9GUkFNRVdPUktfUkVWSVNJT049OTA2NzNhNGVlZg==,RkxVVFRFUl9FTkdJTkVfUkVWSVNJT049NmMwYmFhZWJmNw==,RkxVVFRFUl9EQVJUX1ZFUlNJT049My4xMS4w DART_OBFUSCATION=false TRACK_WIDGET_CREATION=true TREE_SHAKE_ICONS=true PACKAGE_CONFIG=C:\Users\PC\OneDrive\Bureau\BimSteaming\BimStreaming\client\.dart_tool\package_config.json C:/Users/PC/flutter/packages/flutter_tools/bin/tool_backend.bat windows-x64 Release
+"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -E env FLUTTER_ROOT=C:\Users\maato\.puro\envs\stable\flutter PROJECT_DIR=C:\Users\maato\Desktop\BimSteaming\BimStreaming\client FLUTTER_ROOT=C:\Users\maato\.puro\envs\stable\flutter FLUTTER_EPHEMERAL_DIR=C:\Users\maato\Desktop\BimSteaming\BimStreaming\client\windows\flutter\ephemeral PROJECT_DIR=C:\Users\maato\Desktop\BimSteaming\BimStreaming\client FLUTTER_TARGET=lib\main.dart DART_DEFINES=RkxVVFRFUl9WRVJTSU9OPTMuNDEuNA==,RkxVVFRFUl9DSEFOTkVMPXN0YWJsZQ==,RkxVVFRFUl9HSVRfVVJMPWh0dHBzOi8vZ2l0aHViLmNvbS9mbHV0dGVyL2ZsdXR0ZXIuZ2l0,RkxVVFRFUl9GUkFNRVdPUktfUkVWSVNJT049ZmYzN2JlZjYwMw==,RkxVVFRFUl9FTkdJTkVfUkVWSVNJT049ZTRiOGRjYTNmMQ==,RkxVVFRFUl9EQVJUX1ZFUlNJT049My4xMS4x DART_OBFUSCATION=false TRACK_WIDGET_CREATION=true TREE_SHAKE_ICONS=true PACKAGE_CONFIG=C:\Users\maato\Desktop\BimSteaming\BimStreaming\client\.dart_tool\package_config.json C:/Users/maato/.puro/envs/stable/flutter/packages/flutter_tools/bin/tool_backend.bat windows-x64 Release
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
@@ -8,7 +8,7 @@ endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
-^C:\USERS\PC\ONEDRIVE\BUREAU\BIMSTEAMING\BIMSTREAMING\CLIENT\BUILD\WINDOWS\X64\CMAKEFILES\D1889A2CBB51B17C72EDE1693DC221FE\FLUTTER_ASSEMBLE.RULE
+^C:\USERS\MAATO\DESKTOP\BIMSTEAMING\BIMSTREAMING\CLIENT\BUILD\WINDOWS\X64\CMAKEFILES\1ED600C76FC1EE64564FC56C2CA79564\FLUTTER_ASSEMBLE.RULE
 setlocal
 :cmEnd
 endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
@@ -16,9 +16,9 @@ endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd
-^C:\USERS\PC\ONEDRIVE\BUREAU\BIMSTEAMING\BIMSTREAMING\CLIENT\WINDOWS\FLUTTER\CMAKELISTS.TXT
+^C:\USERS\MAATO\DESKTOP\BIMSTEAMING\BIMSTREAMING\CLIENT\WINDOWS\FLUTTER\CMAKELISTS.TXT
 setlocal
-"C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -SC:/Users/PC/OneDrive/Bureau/BimSteaming/BimStreaming/client/windows -BC:/Users/PC/OneDrive/Bureau/BimSteaming/BimStreaming/client/build/windows/x64 --check-stamp-file C:/Users/PC/OneDrive/Bureau/BimSteaming/BimStreaming/client/build/windows/x64/flutter/CMakeFiles/generate.stamp
+"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -SC:/Users/maato/Desktop/BimSteaming/BimStreaming/client/windows -BC:/Users/maato/Desktop/BimSteaming/BimStreaming/client/build/windows/x64 --check-stamp-file C:/Users/maato/Desktop/BimSteaming/BimStreaming/client/build/windows/x64/flutter/CMakeFiles/generate.stamp
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone

@@ -1,13 +1,13 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="16.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <CustomBuild Include="C:\Users\PC\OneDrive\Bureau\BimSteaming\BimStreaming\client\build\windows\x64\CMakeFiles\130faf6717e9e78b9f606cf393205567\INSTALL_force.rule">
+    <CustomBuild Include="C:\Users\maato\Desktop\BimSteaming\BimStreaming\client\build\windows\x64\CMakeFiles\832e531f5027d7623b1d34174a7501f0\INSTALL_force.rule">
       <Filter>CMake Rules</Filter>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="CMake Rules">
-      <UniqueIdentifier>{2A0B959F-70F4-39A7-BD96-3D7F5F64D393}</UniqueIdentifier>
+      <UniqueIdentifier>{C0DD1383-D3C8-3354-AE72-3B95D8D7C5D1}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>

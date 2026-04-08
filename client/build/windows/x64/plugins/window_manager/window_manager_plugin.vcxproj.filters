@@ -1,19 +1,19 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="16.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <ClCompile Include="C:\Users\PC\OneDrive\Bureau\BimSteaming\BimStreaming\client\windows\flutter\ephemeral\.plugin_symlinks\window_manager\windows\window_manager.cpp">
+    <ClCompile Include="C:\Users\maato\Desktop\BimSteaming\BimStreaming\client\windows\flutter\ephemeral\.plugin_symlinks\window_manager\windows\window_manager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="C:\Users\PC\OneDrive\Bureau\BimSteaming\BimStreaming\client\windows\flutter\ephemeral\.plugin_symlinks\window_manager\windows\window_manager_plugin.cpp">
+    <ClCompile Include="C:\Users\maato\Desktop\BimSteaming\BimStreaming\client\windows\flutter\ephemeral\.plugin_symlinks\window_manager\windows\window_manager_plugin.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <CustomBuild Include="C:\Users\PC\OneDrive\Bureau\BimSteaming\BimStreaming\client\windows\flutter\ephemeral\.plugin_symlinks\window_manager\windows\CMakeLists.txt" />
+    <CustomBuild Include="C:\Users\maato\Desktop\BimSteaming\BimStreaming\client\windows\flutter\ephemeral\.plugin_symlinks\window_manager\windows\CMakeLists.txt" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Source Files">
-      <UniqueIdentifier>{6F8913A2-73F5-3DEB-90CD-E01D05B1253D}</UniqueIdentifier>
+      <UniqueIdentifier>{541D09B6-5DF9-3EC2-B0A2-D42FF1E8278F}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>

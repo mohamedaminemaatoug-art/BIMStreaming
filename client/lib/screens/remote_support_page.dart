@@ -84,6 +84,8 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   static const int _defaultCaptureMaxWidth = 1280;
   static const int _defaultJpegQuality = 45;
   static const int _defaultCaptureIntervalMs = 33;
+  static const int _minCaptureIntervalMs = 16;
+  static const int _maxCaptureIntervalMs = 33;
   static const bool _remoteAudioFeatureEnabled = false;
 
   // ===== NEW: Performance Tracking & Diagnostics =====
@@ -993,18 +995,18 @@ Write-Output "$count,$width,$height"
           break;
         case 'Medium':
           _captureJpegQuality = _defaultJpegQuality;
-          _captureFrameIntervalMs = 33;
+          _captureFrameIntervalMs = 25;
           _autoQualityMode = 'Manual';
           break;
         case 'High':
           _captureJpegQuality = 70;
-          _captureFrameIntervalMs = 25;
+          _captureFrameIntervalMs = 20;
           _captureMaxWidth = 1600;
           _autoQualityMode = 'Manual';
           break;
         case 'Ultra':
           _captureJpegQuality = 80;
-          _captureFrameIntervalMs = 25;
+          _captureFrameIntervalMs = 16;
           _captureMaxWidth = 1920;
           _autoQualityMode = 'Manual';
           break;
@@ -1032,15 +1034,15 @@ Write-Output "$count,$width,$height"
                 ? 40
                 : 36));
     final newIntervalMs = _pingMs <= 40
-      ? 25
+      ? 16
         : (_pingMs <= 80
-        ? 33
+        ? 20
             : (_pingMs <= 140
-          ? 45
-          : 65));
+          ? 25
+          : 33));
     final tunedIntervalMs = inputBurst
-      ? (newIntervalMs + 12).clamp(25, 120)
-      : newIntervalMs.clamp(25, 120);
+      ? (newIntervalMs + 4).clamp(_minCaptureIntervalMs, _maxCaptureIntervalMs)
+      : newIntervalMs.clamp(_minCaptureIntervalMs, _maxCaptureIntervalMs);
     setState(() {
       _captureJpegQuality = newQuality;
       _captureFrameIntervalMs = tunedIntervalMs;
@@ -1468,10 +1470,10 @@ Write-Output "$count,$width,$height"
           if (quality == 'Medium') _captureJpegQuality = _defaultJpegQuality;
           if (quality == 'High') _captureJpegQuality = 92;
           if (quality == 'Ultra') _captureJpegQuality = 96;
-          if (quality == 'Low') _captureFrameIntervalMs = 65;
-          if (quality == 'Medium') _captureFrameIntervalMs = 45;
-          if (quality == 'High') _captureFrameIntervalMs = 33;
-          if (quality == 'Ultra') _captureFrameIntervalMs = 25;
+          if (quality == 'Low') _captureFrameIntervalMs = 33;
+          if (quality == 'Medium') _captureFrameIntervalMs = 25;
+          if (quality == 'High') _captureFrameIntervalMs = 20;
+          if (quality == 'Ultra') _captureFrameIntervalMs = 16;
           _restartScreenShareTimerIfNeeded();
         }
       }
