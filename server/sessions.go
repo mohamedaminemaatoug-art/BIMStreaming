@@ -35,3 +35,17 @@ func (r *SessionRegistry) Get(sessionID string) (*Session, bool) {
 	s, ok := r.sessions[sessionID]
 	return s, ok
 }
+
+func (r *SessionRegistry) FindPeer(clientID string) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, s := range r.sessions {
+		if s.ControllerID == clientID {
+			return s.AgentID, true
+		}
+		if s.AgentID == clientID {
+			return s.ControllerID, true
+		}
+	}
+	return "", false
+}

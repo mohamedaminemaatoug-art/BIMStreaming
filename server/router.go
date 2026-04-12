@@ -63,9 +63,14 @@ func (r *Router) readLoop(c *Client) {
 	}()
 
 	for {
-		_, msg, err := c.Conn.ReadMessage()
+		messageType, msg, err := c.Conn.ReadMessage()
 		if err != nil {
 			return
+		}
+
+		if messageType == websocket.BinaryMessage {
+			r.handleBinaryVideoFrame(c.ID, msg) // PHASE 2: relay binary video frames separately from JSON control signals
+			continue
 		}
 
 		var env Envelope
@@ -74,6 +79,8 @@ func (r *Router) readLoop(c *Client) {
 		}
 
 		switch env.Type {
+		case "register":
+			r.handleRegister(c.ID, env)
 		case "connection_request":
 			r.handleConnectionRequest(msg, env)
 		case "connection_accept", "connection_reject":
@@ -86,9 +93,83 @@ func (r *Router) readLoop(c *Client) {
 	}
 }
 
+func (r *Router) handleBinaryVideoFrame(fromClientID string, msg []byte) {
+	if len(msg) < 8 {
+		return
+	}
+	if msg[0] != 0xFE || msg[1] != 0xFF {
+		return
+	}
+	toClientID, ok := r.sessions.FindPeer(fromClientID)
+	if !ok || toClientID == "" {
+		log.Printf("relay: peer not found, skipping binary frame from %s", fromClientID)
+		return
+	}
+	target, ok := r.clients.Get(toClientID)
+	if !ok {
+		return
+	}
+	copyMsg := append([]byte(nil), msg...)
+	select {
+	case target.Send <- copyMsg:
+	default:
+		log.Printf("dropping binary frame for %s: outbound queue full", toClientID)
+	}
+}
+
+func (r *Router) handleRegister(clientID string, env Envelope) {
+	payload := env.Payload
+	if payload == nil && env.Data != nil {
+		payload = env.Data
+	}
+	if payload == nil {
+		return
+	}
+	sessionID, _ := payload["sessionId"].(string)
+	if sessionID == "" {
+		sessionID, _ = payload["session_id"].(string)
+	}
+	if sessionID == "" {
+		return
+	}
+	role, _ := payload["role"].(string)
+	peerID, _ := payload["peerId"].(string)
+
+	if existing, ok := r.sessions.Get(sessionID); ok {
+		s := *existing
+		if role == "host" {
+			s.ControllerID = clientID
+			if peerID != "" {
+				s.AgentID = peerID
+			}
+		} else if role == "viewer" {
+			s.AgentID = clientID
+			if peerID != "" {
+				s.ControllerID = peerID
+			}
+		}
+		r.sessions.Upsert(&s)
+		return
+	}
+
+	s := &Session{ID: sessionID}
+	if role == "host" {
+		s.ControllerID = clientID
+		s.AgentID = peerID
+	} else if role == "viewer" {
+		s.AgentID = clientID
+		s.ControllerID = peerID
+	}
+	r.sessions.Upsert(s)
+}
+
 func (r *Router) writeLoop(c *Client) {
 	for msg := range c.Send {
-		if err := c.Conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+		messageType := websocket.TextMessage
+		if len(msg) >= 2 && msg[0] == 0xFE && msg[1] == 0xFF {
+			messageType = websocket.BinaryMessage // PHASE 2: preserve binary frames over relay
+		}
+		if err := c.Conn.WriteMessage(messageType, msg); err != nil {
 			return
 		}
 	}

@@ -33,6 +33,7 @@ migrate_working_dir/
 /build/
 /client/build/
 /coverage/
+/server/*.exe
 
 # Symbolication related
 app.*.symbols

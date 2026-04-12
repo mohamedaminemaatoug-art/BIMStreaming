@@ -3290,16 +3290,16 @@ switch ($action) {
 
   Widget _buildTopOverlayBar(Map<String, Color> colors) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
       decoration: BoxDecoration(
         color: colors['bg']!.withValues(alpha: 0.94),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: colors['border']!),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.18),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
           ),
         ],
       ),
@@ -3310,64 +3310,41 @@ switch ($action) {
           Row(
             children: [
               Container(
-                width: 10,
-                height: 10,
+                width: 8,
+                height: 8,
                 decoration: BoxDecoration(
                   color: _isConnected ? Colors.greenAccent : Colors.redAccent,
                   shape: BoxShape.circle,
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               Text(
-                'AnyDesk-style control',
+                _isConnected ? 'Connected' : _connectionStatus,
                 style: TextStyle(
                   color: colors['text']!,
-                  fontSize: 13,
+                  fontSize: 12,
                   fontWeight: FontWeight.w700,
                 ),
               ),
-              const SizedBox(width: 12),
-              Text(_connectionStatus, style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
-              const SizedBox(width: 10),
-              Text('Session $_sessionTime', style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
+              const SizedBox(width: 8),
+              Text('Session $_sessionTime', style: TextStyle(color: colors['textSecondary']!, fontSize: 11)),
               const Spacer(),
-              Text('Ping $_pingMs ms', style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
-              const SizedBox(width: 10),
-              Text(_bandwidthText, style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
-              const SizedBox(width: 10),
-              Text('FPS $_fpsText', style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
-              const SizedBox(width: 10),
-              Text('Loss $_packetLossText', style: TextStyle(color: colors['textSecondary']!, fontSize: 12)),
+              Text('Ping $_pingMs ms', style: TextStyle(color: colors['textSecondary']!, fontSize: 11)),
+              const SizedBox(width: 8),
+              Text(_bandwidthText, style: TextStyle(color: colors['textSecondary']!, fontSize: 11)),
+              const SizedBox(width: 8),
+              Text('FPS $_fpsText', style: TextStyle(color: colors['textSecondary']!, fontSize: 11)),
+              const SizedBox(width: 8),
+              Text('Loss $_packetLossText', style: TextStyle(color: colors['textSecondary']!, fontSize: 11)),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 7),
           Wrap(
-            spacing: 8,
-            runSpacing: 8,
+            spacing: 7,
+            runSpacing: 7,
             alignment: WrapAlignment.end,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              _buildControlPillButton(
-                icon: _keyboardInputEnabledForUser2 ? Icons.keyboard : Icons.keyboard_hide,
-                label: _keyboardInputEnabledForUser2 ? 'Keyboard on' : 'Keyboard off',
-                colors: colors,
-                isActive: _keyboardInputEnabledForUser2,
-                onTap: () => _setInputControl(keyboardEnabled: !_keyboardInputEnabledForUser2),
-              ),
-              _buildControlPillButton(
-                icon: _mouseInputEnabledForUser2 ? Icons.mouse : Icons.mouse_outlined,
-                label: _mouseInputEnabledForUser2 ? 'Mouse on' : 'Mouse off',
-                colors: colors,
-                isActive: _mouseInputEnabledForUser2,
-                onTap: () => _setInputControl(mouseEnabled: !_mouseInputEnabledForUser2),
-              ),
-              _buildControlPillButton(
-                icon: _isSessionPaused ? Icons.play_circle : Icons.pause_circle,
-                label: _isSessionPaused ? 'Resume' : 'Pause',
-                colors: colors,
-                isActive: _isSessionPaused,
-                onTap: _togglePauseSession,
-              ),
               _buildControlPillButton(
                 icon: _isBlackoutMode ? Icons.visibility_off : Icons.visibility,
                 label: _isBlackoutMode ? 'Privacy on' : 'Privacy',
@@ -3459,7 +3436,7 @@ switch ($action) {
       onTap: onTap,
       borderRadius: BorderRadius.circular(999),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
         decoration: BoxDecoration(
           color: background,
           borderRadius: BorderRadius.circular(999),
@@ -3470,13 +3447,13 @@ switch ($action) {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 16, color: Colors.white),
-            const SizedBox(width: 8),
+            Icon(icon, size: 14, color: Colors.white),
+            const SizedBox(width: 6),
             Text(
               label,
               style: const TextStyle(
                 color: Colors.white,
-                fontSize: 12,
+                fontSize: 11,
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -5257,6 +5234,7 @@ switch ($action) {
   }
 
   Future<void> _sendScreenFrame() async {
+    debugPrint('LOOP_START: _isScreenSharing=$_isScreenSharing');
     if (!_canSignal || !_isScreenSharing || _isCapturing) return;
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     
@@ -5270,6 +5248,7 @@ switch ($action) {
     
     try {
       final bytes = await _captureLocalScreenToJpegBytes();
+      debugPrint('CAPTURE_RESULT: bytes=${bytes?.length ?? "null"}');
       if (!mounted) return;
       if (bytes == null || bytes.isEmpty) {
         print('[ScreenShare] Capture returned null/empty');
@@ -5307,6 +5286,8 @@ switch ($action) {
         quality = (quality * 0.8).toInt().clamp(30, 90);
       }
       
+      final channel = widget.signalingService?.channel;
+      debugPrint('PRE_SEND: channel=${channel != null ? "ok" : "NULL"}');
       final b64 = base64Encode(bytes);
       final encodeTimeMs = DateTime.now().millisecondsSinceEpoch - captureStartMs - captureTimeMs;
       final sent = _sendSessionPayload(
@@ -5339,6 +5320,7 @@ switch ($action) {
         _sendCaptureStatus('error', 'Session send failed');
         return;
       }
+      debugPrint('POST_SEND: _framesTX=$_framesSent');
       
       _lastFrameHash = hash;
       _lastFrameSentHash = hash;
@@ -5357,7 +5339,8 @@ switch ($action) {
       if (_framesSent % 30 == 0) {
         print('[ScreenShare] Sent frame #$_framesSent (${bytes.length} bytes) ${_localFrameWidth}x$_localFrameHeight quality=$quality');
       }
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('LOOP_EXCEPTION: $e\n$st');
       if (mounted) setState(() => _captureError = 'capture/send exception: $e');
       _sendCaptureStatus('error', 'Capture/send exception: $e');
     } finally {
