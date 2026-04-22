@@ -1,371 +1,339 @@
-import 'package:bim_streaming/models/user_model.dart';
-import 'package:bim_streaming/services/cloud_backend_service.dart';
+import 'package:bim_streaming/models/user_model.dart' hide AuthSession;
 
-// Service d'authentification
+import 'api_client.dart';
+import 'ws_client.dart';
+
 class AuthService {
   static final AuthService _instance = AuthService._internal();
-  
+
+  final ApiClient _apiClient = ApiClient();
   AuthSession? _currentSession;
-  final CloudBackendService _cloudBackend = CloudBackendService();
-  
-  // Base de données d'utilisateurs (à remplacer par une vraie BD)
-  late final Map<String, User> _users;
 
-  factory AuthService() {
-    return _instance;
+  factory AuthService() => _instance;
+
+  AuthService._internal();
+
+  Future<void> init() async {
+    await _apiClient.init();
   }
 
-  AuthService._internal() {
-    _initializeUsers();
-  }
-
-  // Initialiser les utilisateurs de test
-  void _initializeUsers() {
-    _users = {
-      'PADM001': User(
-        id: 'PADM001',
-        name: 'Admin Principal Demo',
-        password: '32d18f26',
-        role: UserRole.adminGlobal,
-      ),
-      'CADM001': User(
-        id: 'CADM001',
-        name: 'Country Admin France',
-        password: 'countryadmin',
-        role: UserRole.adminPays,
-        countryCode: 'FR',
-      ),
-      'ADM001': User(
-        id: 'ADM001',
-        name: 'Department Admin IT France',
-        password: 'admin123',
-        role: UserRole.adminDepartement,
-        countryCode: 'FR',
-        departmentCode: 'IT',
-      ),
-      'USR001': User(
-        id: 'USR001',
-        name: 'Marie Dupont',
-        password: 'pass123',
-        role: UserRole.client,
-      ),
-      'USR002': User(
-        id: 'USR002',
-        name: 'Jean Petit',
-        password: 'pass123',
-        role: UserRole.client,
-      ),
-      'USR003': User(
-        id: 'USR003',
-        name: 'Sophie Martin',
-        password: 'pass123',
-        role: UserRole.client,
-      ),
-      'admin1': User(
-        id: 'PADM001',
-        name: 'Admin Principal',
-        password: 'admin123',
-        role: UserRole.adminGlobal,
-      ),
-      'admin_fr': User(
-        id: 'CADM001',
-        name: 'Admin France',
-        password: 'france123',
-        role: UserRole.adminPays,
-        countryCode: 'FR',
-      ),
-      'admin_de_fr': User(
-        id: 'ADM001',
-        name: 'Admin IT France',
-        password: 'it_france123',
-        role: UserRole.adminDepartement,
-        countryCode: 'FR',
-        departmentCode: 'IT',
-      ),
-      'client1': User(
-        id: 'USR001',
-        name: 'Client Standard',
-        password: 'client123',
-        role: UserRole.client,
-      ),
-      'admin_us': User(
-        id: 'admin_us',
-        name: 'Admin USA',
-        password: 'usa123',
-        role: UserRole.adminPays,
-        countryCode: 'US',
-      ),
-      'admin_de_us': User(
-        id: 'admin_de_us',
-        name: 'Admin HR USA',
-        password: 'hr_usa123',
-        role: UserRole.adminDepartement,
-        countryCode: 'US',
-        departmentCode: 'HR',
-      ),
-    };
-  }
-
-  // Authentifier un utilisateur
-  Future<AuthResult> login(String userId, String password) async {
+  Future<AuthResult> restoreSession() async {
     try {
-      if (CloudBackendConfig.isConfigured) {
-        final cloudResult = await _cloudBackend.login(userId, password);
-        if (cloudResult.success && cloudResult.user != null) {
-          _currentSession = AuthSession(
-            user: cloudResult.user!,
-            token: cloudResult.token ?? _generateToken(cloudResult.user!.id),
-            loginTime: DateTime.now(),
-          );
-
-          return AuthResult(
-            success: true,
-            message: cloudResult.message,
-            user: _currentSession!.user,
-          );
-        }
+      await _apiClient.init();
+      if (!_apiClient.isAuthenticated) {
+        return const AuthResult(success: false, message: 'Not authenticated');
       }
+      final me = await _apiClient.get('/users/me');
+      final userData = Map<String, dynamic>.from(
+        (me['user'] as Map?) ?? const {},
+      );
+      final user = _parseUser(userData);
 
-      // Simuler un délai réseau
-      await Future.delayed(const Duration(milliseconds: 500));
-
-      final user = _users[userId];
-      
-      if (user == null) {
-        return AuthResult(
-          success: false,
-          message: 'Utilisateur non trouvé',
-          errorCode: 'USER_NOT_FOUND',
-        );
-      }
-
-      if (user.password != password) {
-        return AuthResult(
-          success: false,
-          message: 'Mot de passe incorrect',
-          errorCode: 'INVALID_PASSWORD',
-        );
-      }
-
-      // Créer une session
-      final token = _generateToken(user.id);
       _currentSession = AuthSession(
-        user: user.copyWith(lastLogin: DateTime.now()),
-        token: token,
+        user: user,
+        token: _apiClient.accessToken ?? '',
+        refreshToken: _apiClient.refreshToken ?? '',
         loginTime: DateTime.now(),
       );
+      return AuthResult(success: true, message: 'Session restored', user: user);
+    } catch (_) {
+      return const AuthResult(
+        success: false,
+        message: 'Session restore failed',
+      );
+    }
+  }
 
+  Future<AuthResult> login(String userIdOrEmail, String password) async {
+    try {
+      final response = await _apiClient.post(
+        '/auth/login',
+        body: {'identifier': userIdOrEmail, 'password': password},
+      );
+
+      final requires2FA = response['requires_2fa'] as bool? ?? false;
+      if (requires2FA) {
+        final tempToken = (response['temp_token'] ?? '').toString();
+        return AuthResult(
+          success: true,
+          message: '2FA required',
+          requiresTwoFactor: true,
+          tempToken: tempToken,
+        );
+      }
+
+      return _consumeAuthTokensResponse(response);
+    } on ApiException catch (e) {
       return AuthResult(
-        success: true,
-        message: 'Connexion réussie',
-        user: _currentSession!.user,
+        success: false,
+        message: e.message,
+        errorCode: e.statusCode?.toString(),
       );
     } catch (e) {
       return AuthResult(
         success: false,
-        message: 'Erreur lors de la connexion: $e',
-        errorCode: 'LOGIN_ERROR',
+        message: 'Login failed: $e',
+        errorCode: 'LOGIN_FAILED',
       );
     }
   }
 
-  // Logout
-  void logout() {
-    _cloudBackend.logout();
-    _currentSession = null;
+  Future<AuthResult> register({
+    required String username,
+    required String fullName,
+    required String email,
+    required String password,
+  }) async {
+    try {
+      final response = await _apiClient.post(
+        '/auth/register',
+        body: {
+          'username': username,
+          'full_name': fullName,
+          'email': email,
+          'password': password,
+          'confirm_password': password,
+        },
+      );
+      if (response.containsKey('access_token') &&
+          response.containsKey('refresh_token') &&
+          response.containsKey('user')) {
+        return _consumeAuthTokensResponse(response);
+      }
+      return AuthResult(
+        success: true,
+        message: (response['message'] ?? 'Registration successful').toString(),
+        pendingUserId: (response['user_id'] ?? '').toString(),
+      );
+    } on ApiException catch (e) {
+      return AuthResult(
+        success: false,
+        message: e.message,
+        errorCode: e.statusCode?.toString(),
+      );
+    } catch (e) {
+      return AuthResult(
+        success: false,
+        message: 'Registration failed: $e',
+        errorCode: 'REGISTER_FAILED',
+      );
+    }
   }
 
-  // Obtenir la session actuelle
+  Future<AuthResult> verifyEmail({
+    required String userId,
+    required String code,
+  }) async {
+    try {
+      final response = await _apiClient.post(
+        '/auth/verify-email',
+        body: {'user_id': userId, 'code': code},
+      );
+      return _consumeAuthTokensResponse(response);
+    } on ApiException catch (e) {
+      return AuthResult(
+        success: false,
+        message: e.message,
+        errorCode: e.statusCode?.toString(),
+      );
+    } catch (e) {
+      return AuthResult(
+        success: false,
+        message: 'Verification failed: $e',
+        errorCode: 'VERIFY_FAILED',
+      );
+    }
+  }
+
+  Future<AuthResult> completeTwoFactor({
+    required String tempToken,
+    required String code,
+  }) async {
+    try {
+      final response = await _apiClient.post(
+        '/auth/2fa/challenge',
+        body: {'temp_token': tempToken, 'code': code},
+      );
+      return _consumeAuthTokensResponse(response);
+    } on ApiException catch (e) {
+      return AuthResult(
+        success: false,
+        message: e.message,
+        errorCode: e.statusCode?.toString(),
+      );
+    } catch (e) {
+      return AuthResult(
+        success: false,
+        message: '2FA verification failed: $e',
+        errorCode: 'TWO_FACTOR_FAILED',
+      );
+    }
+  }
+
+  Future<AuthResult> _consumeAuthTokensResponse(
+    Map<String, dynamic> response,
+  ) async {
+    final accessToken = response['access_token'] as String?;
+    final refreshToken = response['refresh_token'] as String?;
+    final userData = response['user'] as Map<String, dynamic>?;
+
+    if (accessToken == null || refreshToken == null || userData == null) {
+      return const AuthResult(
+        success: false,
+        message: 'Invalid authentication response from server.',
+        errorCode: 'INVALID_AUTH_RESPONSE',
+      );
+    }
+
+    await _apiClient.setTokens(
+      accessToken: accessToken,
+      refreshToken: refreshToken,
+    );
+    try {
+      await WsClient().connect(accessToken);
+    } catch (_) {
+      // WebSocket is best-effort; auth still succeeds.
+    }
+    final user = _parseUser(userData);
+
+    _currentSession = AuthSession(
+      user: user,
+      token: accessToken,
+      refreshToken: refreshToken,
+      loginTime: DateTime.now(),
+    );
+
+    return AuthResult(
+      success: true,
+      message: 'Authentication successful',
+      user: user,
+    );
+  }
+
+  User _parseUser(Map<String, dynamic> userData) {
+    String readNullableString(dynamic value) {
+      if (value == null) {
+        return '';
+      }
+      if (value is Map) {
+        final isValid = value['Valid'];
+        if (isValid == false) {
+          return '';
+        }
+        final nested = value['String'];
+        if (nested != null) {
+          return nested.toString().trim();
+        }
+      }
+      return value.toString().trim();
+    }
+
+    final avatarUrl = readNullableString(userData['avatar_url']);
+    final displayName = readNullableString(userData['display_name']);
+    final username = readNullableString(userData['username']);
+    final email = readNullableString(userData['email']);
+    final resolvedName = displayName.isNotEmpty
+        ? displayName
+        : (username.isNotEmpty ? username : email);
+
+    return User(
+      id: (userData['id'] ?? '').toString(),
+      name: resolvedName,
+      password: '',
+      role: UserRole.client,
+      avatarUrl: avatarUrl.isEmpty ? null : avatarUrl,
+    );
+  }
+
+  Future<void> logout() async {
+    final refreshToken = _apiClient.refreshToken;
+    try {
+      if (refreshToken != null && refreshToken.isNotEmpty) {
+        await _apiClient.postWithoutRetry(
+          '/auth/logout',
+          body: {'refresh_token': refreshToken},
+        );
+      }
+    } catch (_) {
+      // Best effort logout.
+    } finally {
+      try {
+        await WsClient().disconnect();
+      } catch (_) {}
+      _currentSession = null;
+      await _apiClient.clearTokens();
+    }
+  }
+
+  Future<void> refreshToken() async {
+    final newToken = await _apiClient.refreshAccessToken();
+    final session = _currentSession;
+    if (session != null) {
+      _currentSession = session.copyWith(token: newToken);
+    }
+  }
+
   AuthSession? getCurrentSession() => _currentSession;
 
-  // Vérifier si l'utilisateur est authentifié
-  bool get isAuthenticated => _currentSession != null && _currentSession!.isValid;
+  bool get isAuthenticated => _apiClient.isAuthenticated;
 
-  // Obtenir l'utilisateur actuel
   User? get currentUser => _currentSession?.user;
-
-  bool get isCloudModeEnabled => CloudBackendConfig.isConfigured;
-
-  bool get isCloudAuthenticated => _cloudBackend.isAuthenticated;
-
-  Future<RemoteSessionResult> createRemoteSessionByAccount({
-    required String targetAccountId,
-    required String sessionPassword,
-  }) async {
-    if (!CloudBackendConfig.hasApi) {
-      return const RemoteSessionResult(
-        success: false,
-        message: 'Cloud mode is not configured. Set BIM_API_BASE_URL.',
-      );
-    }
-
-    final result = await _cloudBackend.createSession(
-      targetAccountId: targetAccountId,
-      sessionPassword: sessionPassword,
-    );
-
-    return RemoteSessionResult(
-      success: result.success,
-      message: result.message,
-      sessionId: result.sessionId,
-      sessionCode: result.sessionCode,
-    );
-  }
-
-  CloudSignalChannel? openCloudSignalChannel(String sessionId) {
-    return _cloudBackend.openSignalChannel(sessionId);
-  }
-
-  // Générer un token (simplifié pour la démo)
-  String _generateToken(String userId) {
-    return 'token_${userId}_${DateTime.now().millisecondsSinceEpoch}';
-  }
-
-  // Vérifier les permissions de l'utilisateur
-  bool canModifyDevice(String deviceCountry, String deviceDepartment) {
-    return currentUser?.canModifyDevice(deviceCountry, deviceDepartment) ?? false;
-  }
-
-  bool canAddDevice(String deviceCountry, String deviceDepartment) {
-    return currentUser?.canAddDevice(deviceCountry, deviceDepartment) ?? false;
-  }
-
-  bool canDeleteDevice(String deviceCountry, String deviceDepartment) {
-    return currentUser?.canDeleteDevice(deviceCountry, deviceDepartment) ?? false;
-  }
-
-  // Obtenir tous les utilisateurs (pour admins)
-  List<User> getAllUsers() {
-    if (currentUser?.role == UserRole.adminGlobal) {
-      return _users.values.toList();
-    }
-    return [];
-  }
-
-  // Ajouter un nouvel utilisateur (Admin Global uniquement)
-  Future<AuthResult> addUser(User newUser) async {
-    if (currentUser?.role != UserRole.adminGlobal) {
-      return AuthResult(
-        success: false,
-        message: 'Seul un Admin Principal peut ajouter des utilisateurs',
-        errorCode: 'PERMISSION_DENIED',
-      );
-    }
-
-    if (_users.containsKey(newUser.id)) {
-      return AuthResult(
-        success: false,
-        message: 'Cet ID utilisateur existe déjà',
-        errorCode: 'USER_ALREADY_EXISTS',
-      );
-    }
-
-    _users[newUser.id] = newUser;
-    return AuthResult(
-      success: true,
-      message: 'Utilisateur ajouté avec succès',
-      user: newUser,
-    );
-  }
-
-  // Supprimer un utilisateur (Admin Global uniquement)
-  Future<AuthResult> deleteUser(String userId) async {
-    if (currentUser?.role != UserRole.adminGlobal) {
-      return AuthResult(
-        success: false,
-        message: 'Seul un Admin Principal peut supprimer des utilisateurs',
-        errorCode: 'PERMISSION_DENIED',
-      );
-    }
-
-    if (!_users.containsKey(userId)) {
-      return AuthResult(
-        success: false,
-        message: 'Utilisateur non trouvé',
-        errorCode: 'USER_NOT_FOUND',
-      );
-    }
-
-    _users.remove(userId);
-    return AuthResult(
-      success: true,
-      message: 'Utilisateur supprimé avec succès',
-    );
-  }
-
-  // Mettre à jour le mot de passe (l'utilisateur courant)
-  Future<AuthResult> updatePassword(String oldPassword, String newPassword) async {
-    if (currentUser == null) {
-      return AuthResult(
-        success: false,
-        message: 'Aucun utilisateur connecté',
-        errorCode: 'NO_USER',
-      );
-    }
-
-    if (currentUser!.password != oldPassword) {
-      return AuthResult(
-        success: false,
-        message: 'Ancien mot de passe incorrect',
-        errorCode: 'INVALID_OLD_PASSWORD',
-      );
-    }
-
-    final updatedUser = currentUser!.copyWith(password: newPassword);
-    _users[currentUser!.id] = updatedUser;
-    _currentSession = _currentSession!.copyWith(user: updatedUser);
-
-    return AuthResult(
-      success: true,
-      message: 'Mot de passe mis à jour avec succès',
-      user: updatedUser,
-    );
-  }
 }
 
-// Résultat d'authentification
 class AuthResult {
   final bool success;
   final String message;
   final User? user;
   final String? errorCode;
+  final bool requiresTwoFactor;
+  final String? tempToken;
+  final String? pendingUserId;
 
-  AuthResult({
+  const AuthResult({
     required this.success,
     required this.message,
     this.user,
     this.errorCode,
+    this.requiresTwoFactor = false,
+    this.tempToken,
+    this.pendingUserId,
   });
 }
 
-class RemoteSessionResult {
-  final bool success;
-  final String message;
-  final String? sessionId;
-  final String? sessionCode;
+class AuthSession {
+  final User user;
+  final String token;
+  final String refreshToken;
+  final DateTime loginTime;
+  final DateTime expiryTime;
 
-  const RemoteSessionResult({
-    required this.success,
-    required this.message,
-    this.sessionId,
-    this.sessionCode,
-  });
-}
+  AuthSession({
+    required this.user,
+    required this.token,
+    required this.refreshToken,
+    required this.loginTime,
+    Duration sessionDuration = const Duration(minutes: 15),
+  }) : expiryTime = loginTime.add(sessionDuration);
 
-// Extension pour AuthSession
-extension AuthSessionExtension on AuthSession {
+  bool get isExpired => DateTime.now().isAfter(expiryTime);
+
+  bool get isValid => !isExpired;
+
   AuthSession copyWith({
     User? user,
     String? token,
+    String? refreshToken,
     DateTime? loginTime,
     DateTime? expiryTime,
   }) {
+    final updatedLoginTime = loginTime ?? this.loginTime;
+    final updatedExpiry = expiryTime ?? this.expiryTime;
     return AuthSession(
       user: user ?? this.user,
       token: token ?? this.token,
-      loginTime: loginTime ?? this.loginTime,
-      sessionDuration: expiryTime?.difference(loginTime ?? this.loginTime) ?? 
-                       this.expiryTime.difference(this.loginTime),
+      refreshToken: refreshToken ?? this.refreshToken,
+      loginTime: updatedLoginTime,
+      sessionDuration: updatedExpiry.difference(updatedLoginTime),
     );
   }
 }

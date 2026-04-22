@@ -1,4 +1,6 @@
-﻿import 'dart:async';
+// ignore_for_file: unnecessary_import, unused_field, unused_element, unused_local_variable, unnecessary_null_comparison, deprecated_member_use
+
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi' hide Size;
 import 'dart:io' as io;
@@ -104,32 +106,40 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   // ===== NEW: Cursor Optimization =====
   double _cursorPredictX = 0.5;
   double _cursorPredictY = 0.5;
-  int _cursorUpdateFreqMs = 6; // Low-latency but more stable under rapid clicking
+  int _cursorUpdateFreqMs =
+      6; // Low-latency but more stable under rapid clicking
   final List<Offset> _cursorPositionHistory = [];
   // ===== END: Cursor Optimization =====
 
   // ===== NEW: Screen Dimension Tracking (Cursor Coordinate Fix) =====
-  int _screenWidthActual = 1920;      // Receiver's actual screen width (for proper cursor positioning)
-  int _screenHeightActual = 1080;     // Receiver's actual screen height (for proper cursor positioning)
+  int _screenWidthActual =
+      1920; // Receiver's actual screen width (for proper cursor positioning)
+  int _screenHeightActual =
+      1080; // Receiver's actual screen height (for proper cursor positioning)
   // ===== END: Screen Dimension Tracking =====
 
   // ===== NEW: TeamViewer-Style Cursor Channel (Independent of Video) =====
-  Timer? _cursorUpdateTimer;                    // High-frequency cursor update timer (60-120Hz)
-  double _localCursorX = 0.5;                   // Local cursor position (normalized)
-  double _localCursorY = 0.5;                   // Local cursor position (normalized)
-  double _lastSentCursorX = 0.5;                // Last sent cursor position
-  double _lastSentCursorY = 0.5;                // Last sent cursor position
-  double _remoteCursorDisplayX = 0.5;           // Remote cursor display position for rendering
-  double _remoteCursorDisplayY = 0.5;           // Remote cursor display position for rendering
-  double _remoteCursorPredictX = 0.5;           // Predicted cursor position (smoothing)
-  double _remoteCursorPredictY = 0.5;           // Predicted cursor position (smoothing)
-  double _remoteCursorVelocityX = 0.0;          // Cursor velocity for prediction
-  double _remoteCursorVelocityY = 0.0;          // Cursor velocity for prediction
-  int _lastRemoteCursorUpdateMs = 0;            // Last time we received cursor update
-  bool _showRemoteCursor = false;               // Show/hide remote cursor overlay
-  String _cursorShapeType = 'arrow';            // Current cursor shape (arrow, hand, text, etc)
-  int? _lastCursorShapeUpdateMs = 0;            // Last time we detected cursor shape (cache: every 200ms)
-  bool _cursorShapeDetectionInFlight = false;   // Prevent overlapping cursor-shape probes
+  Timer? _cursorUpdateTimer; // High-frequency cursor update timer (60-120Hz)
+  double _localCursorX = 0.5; // Local cursor position (normalized)
+  double _localCursorY = 0.5; // Local cursor position (normalized)
+  double _lastSentCursorX = 0.5; // Last sent cursor position
+  double _lastSentCursorY = 0.5; // Last sent cursor position
+  double _remoteCursorDisplayX =
+      0.5; // Remote cursor display position for rendering
+  double _remoteCursorDisplayY =
+      0.5; // Remote cursor display position for rendering
+  double _remoteCursorPredictX = 0.5; // Predicted cursor position (smoothing)
+  double _remoteCursorPredictY = 0.5; // Predicted cursor position (smoothing)
+  double _remoteCursorVelocityX = 0.0; // Cursor velocity for prediction
+  double _remoteCursorVelocityY = 0.0; // Cursor velocity for prediction
+  int _lastRemoteCursorUpdateMs = 0; // Last time we received cursor update
+  bool _showRemoteCursor = false; // Show/hide remote cursor overlay
+  String _cursorShapeType =
+      'arrow'; // Current cursor shape (arrow, hand, text, etc)
+  int? _lastCursorShapeUpdateMs =
+      0; // Last time we detected cursor shape (cache: every 200ms)
+  bool _cursorShapeDetectionInFlight =
+      false; // Prevent overlapping cursor-shape probes
   final Stopwatch _cursorMovementStopwatch = Stopwatch();
   // ===== END: TeamViewer-Style Cursor Channel =====
 
@@ -264,7 +274,8 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   String? _hostMouseButtonDownType;
   DynamicLibrary? _user32Lib;
   DynamicLibrary? _gdi32Lib;
-  void Function(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo)? _nativeMouseEvent;
+  void Function(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo)?
+  _nativeMouseEvent;
   bool _nativeMouseEventInitFailed = false;
   int Function(Pointer<_CursorInfoNative>)? _nativeGetCursorInfo;
   int Function(int, Pointer<Utf16>)? _nativeLoadCursorW;
@@ -339,7 +350,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     _startDiagnosticsTimer();
     _startKeyboardLayoutSync();
     _startKeyStateSync();
-    _startCursorUpdateTimer();  // CRITICAL: Separate high-frequency cursor channel (TeamViewer-style)
+    _startCursorUpdateTimer(); // CRITICAL: Separate high-frequency cursor channel (TeamViewer-style)
     _revealOverlayTemporarily();
     _refreshLocalScreenInfo();
     _autoEnterFullscreenForController();
@@ -387,7 +398,9 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
       }
     } catch (_) {
       // Fall back to BimStreaming defaults if path creation fails
-      final baseDir = io.Directory('${io.Platform.environment['USERPROFILE'] ?? '.'}\\BimStreaming');
+      final baseDir = io.Directory(
+        '${io.Platform.environment['USERPROFILE'] ?? '.'}\\BimStreaming',
+      );
       try {
         baseDir.createSync(recursive: true);
         _screenshotPath = '${baseDir.path}\\screenshot';
@@ -439,10 +452,8 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     final receiveDir = _buildReceivedFilesDirectory();
     _fileTransferService = FileTransferService(
       isHost: widget.sendLocalScreen,
-      sendSignal: (messageType, payload) => _sendSessionPayload(
-        messageType: messageType,
-        payload: payload,
-      ),
+      sendSignal: (messageType, payload) =>
+          _sendSessionPayload(messageType: messageType, payload: payload),
       baseDirectory: baseDir,
       receiveDirectory: receiveDir,
     );
@@ -466,8 +477,8 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
       _revealOverlayTemporarily();
     });
   }
-  Future<void> _pinRemoteAgentWindowIfNeeded() async {
-  }
+
+  Future<void> _pinRemoteAgentWindowIfNeeded() async {}
 
   void _initializeKeyboardSystemV2() {
     try {
@@ -475,11 +486,16 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
       _keyboardLayoutTranslator = KeyboardLayoutTranslator(
         onClientLayoutChanged: (old, newLayout) {
           if (old?.layoutId != newLayout?.layoutId) {
-            print('[Keyboard] Client layout changed to ${newLayout?.displayName}');
-            _sendInputEvent('layout_sync', extra: {
-              'layout': newLayout?.layoutId ?? 'unknown',
-              'layoutFamily': newLayout?.family ?? 'unknown',
-            });
+            print(
+              '[Keyboard] Client layout changed to ${newLayout?.displayName}',
+            );
+            _sendInputEvent(
+              'layout_sync',
+              extra: {
+                'layout': newLayout?.layoutId ?? 'unknown',
+                'layoutFamily': newLayout?.family ?? 'unknown',
+              },
+            );
           }
         },
         onHostLayoutChanged: (old, newLayout) {
@@ -493,7 +509,9 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
           // Optional: log state changes
         },
         onStuckKeyForceReleased: (code, reason) {
-          print('[Keyboard] WARNING: Stuck key 0x${code.toRadixString(16)} released: $reason');
+          print(
+            '[Keyboard] WARNING: Stuck key 0x${code.toRadixString(16)} released: $reason',
+          );
         },
       );
 
@@ -502,7 +520,9 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
         initialDelayMs: 320,
         repeatIntervalMs: 42,
         onRepeat: (physicalCode, payload) {
-          _keyboardTransportLayer.enqueueEvent(KeyboardKeyEvent.fromJson(payload));
+          _keyboardTransportLayer.enqueueEvent(
+            KeyboardKeyEvent.fromJson(payload),
+          );
         },
       );
 
@@ -578,7 +598,9 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   }
 
   String get _hostSessionBannerText {
-    final peerName = widget.deviceName.trim().isEmpty ? widget.deviceId : widget.deviceName;
+    final peerName = widget.deviceName.trim().isEmpty
+        ? widget.deviceId
+        : widget.deviceName;
 
     if (!_isConnected) {
       return 'Error: disconnected from $peerName';
@@ -636,7 +658,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
     // Prefer a local Flutter API baseline so resolution remains valid even if
     // external PowerShell scripts are blocked by antivirus.
     _refreshLocalScreenInfoFromFlutterView();
-    
+
     // OPTIMIZATION: Also capture screen dimensions for proper cursor coordinate transformation
     final script = r'''
 Add-Type -AssemblyName System.Windows.Forms
@@ -647,18 +669,21 @@ $height = $primary.Bounds.Height
 Write-Output "$count,$width,$height"
 ''';
     try {
-      final result = await _runPowerShell(
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
-        timeout: const Duration(seconds: 4),
-      );
+      final result = await _runPowerShell([
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        script,
+      ], timeout: const Duration(seconds: 4));
       if (result.exitCode != 0) {
         _refreshLocalScreenInfoFromFlutterView();
         return;
       }
-      
+
       final output = '${result.stdout}'.trim();
       final parts = output.split(',');
-      
+
       if (!mounted) return;
       setState(() {
         // Parse screen count
@@ -670,12 +695,14 @@ Write-Output "$count,$width,$height"
           _screenWidthActual = int.tryParse(parts[1]) ?? _screenWidthActual;
           _screenHeightActual = int.tryParse(parts[2]) ?? _screenHeightActual;
           if (_captureResolutionLabel == 'Full Screen') {
-            _setVirtualResolutionFromLongEdge(_recommendedFullScreenCaptureWidth());
+            _setVirtualResolutionFromLongEdge(
+              _recommendedFullScreenCaptureWidth(),
+            );
             _fillRemoteViewport = true;
           }
           _sendResolutionUpdate();
         }
-        
+
         if (_selectedLocalScreenIndex >= _localScreenCount) {
           _selectedLocalScreenIndex = 0;
         }
@@ -691,7 +718,9 @@ Write-Output "$count,$width,$height"
 
   void _connectSessionSignalIfAvailable() {
     if (!_canSignal) return;
-    _signalSubscription = widget.signalingService!.events.listen(_handleSignalEvent);
+    _signalSubscription = widget.signalingService!.events.listen(
+      _handleSignalEvent,
+    );
     _sendSessionPayload(
       messageType: 'transport_capabilities',
       payload: {
@@ -705,23 +734,31 @@ Write-Output "$count,$width,$height"
   }
 
   void _startAutomaticScreenShareIfPossible() {
-    if (!widget.sendLocalScreen || widget.signalingService == null || !_isConnected) {
+    if (!widget.sendLocalScreen ||
+        widget.signalingService == null ||
+        !_isConnected) {
       return;
     }
     _isScreenSharing = true;
     _screenShareTimer?.cancel();
-    _screenShareTimer = Timer.periodic(Duration(milliseconds: _captureFrameIntervalMs), (_) {
-      _sendScreenFrame();
-    });
+    _screenShareTimer = Timer.periodic(
+      Duration(milliseconds: _captureFrameIntervalMs),
+      (_) {
+        _sendScreenFrame();
+      },
+    );
     _sendScreenFrame();
   }
 
   void _restartScreenShareTimerIfNeeded() {
     if (!widget.sendLocalScreen || !_isScreenSharing) return;
     _screenShareTimer?.cancel();
-    _screenShareTimer = Timer.periodic(Duration(milliseconds: _captureFrameIntervalMs), (_) {
-      _sendScreenFrame();
-    });
+    _screenShareTimer = Timer.periodic(
+      Duration(milliseconds: _captureFrameIntervalMs),
+      (_) {
+        _sendScreenFrame();
+      },
+    );
   }
 
   void _revealOverlayTemporarily() {
@@ -765,8 +802,11 @@ Write-Output "$count,$width,$height"
       final prev = _lastNetSampleAt ?? now;
       final elapsed = now.difference(prev).inMilliseconds.clamp(1, 1000000);
       final frameDelta = _framesReceived - _lastNetFrameCounter;
-      final kbps = ((frameDelta * 140.0 * 8.0) / (elapsed / 1000.0)).toStringAsFixed(0);
-      final fps = ((frameDelta * 1000.0) / elapsed).clamp(0, 120).toStringAsFixed(1);
+      final kbps = ((frameDelta * 140.0 * 8.0) / (elapsed / 1000.0))
+          .toStringAsFixed(0);
+      final fps = ((frameDelta * 1000.0) / elapsed)
+          .clamp(0, 120)
+          .toStringAsFixed(1);
       final processedInputs = _inputPacketsReceived + _inputPacketsDropped;
       final packetLoss = processedInputs == 0
           ? 0.0
@@ -798,22 +838,20 @@ Write-Output "$count,$width,$height"
 
   Future<void> _refreshKeyboardLayout({required bool sendSync}) async {
     if (!io.Platform.isWindows) return;
-    final result = await _runPowerShell(
-      [
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-Command',
-        r"$v=(Get-ItemProperty -Path 'HKCU:\Keyboard Layout\Preload' -ErrorAction SilentlyContinue).'1'; if([string]::IsNullOrWhiteSpace($v)){$v='unknown'}; Write-Output $v",
-      ],
-      timeout: const Duration(seconds: 3),
-    );
+    final result = await _runPowerShell([
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      r"$v=(Get-ItemProperty -Path 'HKCU:\Keyboard Layout\Preload' -ErrorAction SilentlyContinue).'1'; if([string]::IsNullOrWhiteSpace($v)){$v='unknown'}; Write-Output $v",
+    ], timeout: const Duration(seconds: 3));
     var layout = '${result.stdout}'.trim();
     if (layout.isEmpty) {
       layout = 'unknown';
     }
     final family = _classifyLayoutFamily(layout);
-    final changed = layout != _localKeyboardLayout || family != _localKeyboardLayoutFamily;
+    final changed =
+        layout != _localKeyboardLayout || family != _localKeyboardLayoutFamily;
     if (!changed) return;
     if (mounted) {
       setState(() {
@@ -838,13 +876,19 @@ Write-Output "$count,$width,$height"
 
   String _classifyLayoutFamily(String layout) {
     final normalized = layout.toLowerCase();
-    if (normalized.contains('040c') || normalized.contains('080c') || normalized.contains('0c0c') || normalized.contains('100c')) {
+    if (normalized.contains('040c') ||
+        normalized.contains('080c') ||
+        normalized.contains('0c0c') ||
+        normalized.contains('100c')) {
       return 'azerty';
     }
     if (normalized.contains('0407') || normalized.contains('0807')) {
       return 'qwertz';
     }
-    if (normalized.contains('0409') || normalized.contains('0809') || normalized.contains('0c09') || normalized.contains('1009')) {
+    if (normalized.contains('0409') ||
+        normalized.contains('0809') ||
+        normalized.contains('0c09') ||
+        normalized.contains('1009')) {
       return 'qwerty';
     }
     return 'unknown';
@@ -855,7 +899,9 @@ Write-Output "$count,$width,$height"
     try {
       final client = io.HttpClient();
       client.connectionTimeout = const Duration(seconds: 2);
-      final req = await client.getUrl(Uri.parse('http://127.0.0.1:8080/healthz'));
+      final req = await client.getUrl(
+        Uri.parse('http://127.0.0.1:8080/healthz'),
+      );
       final res = await req.close();
       await res.drain<void>();
       sw.stop();
@@ -877,7 +923,9 @@ Write-Output "$count,$width,$height"
       switch (preset) {
         case 'Full Screen':
           _fillRemoteViewport = true;
-          _setVirtualResolutionFromLongEdge(_recommendedFullScreenCaptureWidth());
+          _setVirtualResolutionFromLongEdge(
+            _recommendedFullScreenCaptureWidth(),
+          );
           break;
         case 'Adapter':
           _fillRemoteViewport = false;
@@ -892,9 +940,15 @@ Write-Output "$count,$width,$height"
 
   void _setVirtualResolutionFromLongEdge(int longEdge) {
     final safeLongEdge = longEdge.clamp(960, 3840);
-    final sourceW = _localCaptureWidth > 0 ? _localCaptureWidth : _screenWidthActual;
-    final sourceH = _localCaptureHeight > 0 ? _localCaptureHeight : _screenHeightActual;
-    final aspect = sourceW <= 0 || sourceH <= 0 ? (16.0 / 9.0) : sourceW / sourceH;
+    final sourceW = _localCaptureWidth > 0
+        ? _localCaptureWidth
+        : _screenWidthActual;
+    final sourceH = _localCaptureHeight > 0
+        ? _localCaptureHeight
+        : _screenHeightActual;
+    final aspect = sourceW <= 0 || sourceH <= 0
+        ? (16.0 / 9.0)
+        : sourceW / sourceH;
     int vw;
     int vh;
     if (aspect >= 1.0) {
@@ -919,9 +973,15 @@ Write-Output "$count,$width,$height"
 
     final safeDpr = dpr <= 0 ? 1.0 : dpr;
     final targetPixelWidth = (viewportWidth * safeDpr).round().clamp(320, 7680);
-    final targetPixelHeight = (viewportHeight * safeDpr).round().clamp(320, 4320);
-    final targetLongEdge = (targetPixelWidth > targetPixelHeight ? targetPixelWidth : targetPixelHeight)
-        .clamp(960, 3840);
+    final targetPixelHeight = (viewportHeight * safeDpr).round().clamp(
+      320,
+      4320,
+    );
+    final targetLongEdge =
+        (targetPixelWidth > targetPixelHeight
+                ? targetPixelWidth
+                : targetPixelHeight)
+            .clamp(960, 3840);
 
     final previousMaxWidth = _captureMaxWidth;
     final previousVirtualWidth = _virtualWidth;
@@ -1023,16 +1083,13 @@ Write-Output "$count,$width,$height"
 
   void _applyAutoQuality() {
     if (_autoQualityMode != 'Auto') return;
-    final inputBurst = DateTime.now().millisecondsSinceEpoch - _lastInputSentAtMs < 80;
+    final inputBurst =
+        DateTime.now().millisecondsSinceEpoch - _lastInputSentAtMs < 80;
     // Auto-adjust quality based on bandwidth and ping.
     // Favor lower latency and lower encode cost for smoother motion/video playback.
     final newQuality = _pingMs <= 40
         ? 48
-        : (_pingMs <= 80
-            ? 45
-            : (_pingMs <= 140
-                ? 40
-                : 36));
+        : (_pingMs <= 80 ? 45 : (_pingMs <= 140 ? 40 : 36));
     final tunedIntervalMs = 33;
     setState(() {
       _captureJpegQuality = newQuality;
@@ -1167,20 +1224,26 @@ Write-Output "$count,$width,$height"
     if (rawData is! Map) return;
 
     final data = Map<String, dynamic>.from(rawData);
-    final messageSessionId = (data['sessionId'] ?? data['session_id'] ?? '').toString();
+    final messageSessionId = (data['sessionId'] ?? data['session_id'] ?? '')
+        .toString();
     final expectedSessionId = (widget.sessionId ?? '').toString();
-    if (expectedSessionId.isNotEmpty && messageSessionId.isNotEmpty && messageSessionId != expectedSessionId) {
+    if (expectedSessionId.isNotEmpty &&
+        messageSessionId.isNotEmpty &&
+        messageSessionId != expectedSessionId) {
       return;
     }
 
     final fromUserId = (data['fromUserId'] ?? data['from'] ?? '').toString();
-    final fromInstanceId = (data['fromInstanceId'] ?? data['from_instance'] ?? '').toString();
+    final fromInstanceId =
+        (data['fromInstanceId'] ?? data['from_instance'] ?? '').toString();
     if (fromUserId.isEmpty) {
       return;
     }
     if (fromUserId == widget.currentUserId) {
       final localInstanceId = widget.signalingService?.clientInstanceId ?? '';
-      if (localInstanceId.isEmpty || fromInstanceId.isEmpty || fromInstanceId == localInstanceId) {
+      if (localInstanceId.isEmpty ||
+          fromInstanceId.isEmpty ||
+          fromInstanceId == localInstanceId) {
         return;
       }
     }
@@ -1216,7 +1279,10 @@ Write-Output "$count,$width,$height"
       return;
     }
 
-    if (messageType == 'screen_frame' && _remoteAudioFeatureEnabled && _audioEnabled && !_remoteAudioActive) {
+    if (messageType == 'screen_frame' &&
+        _remoteAudioFeatureEnabled &&
+        _audioEnabled &&
+        !_remoteAudioActive) {
       unawaited(_syncRemoteAudioPipeline());
     }
 
@@ -1286,15 +1352,23 @@ Write-Output "$count,$width,$height"
 
         _privacyModeRemoteAutoOffTimer?.cancel();
         if (enabled) {
-          unawaited(_applySystemAction({'action': 'privacy_mode_on', 'durationMs': durationMs}));
+          unawaited(
+            _applySystemAction({
+              'action': 'privacy_mode_on',
+              'durationMs': durationMs,
+            }),
+          );
           if (durationMs > 0) {
-            _privacyModeRemoteAutoOffTimer = Timer(Duration(milliseconds: durationMs), () {
-              if (!mounted || !_isPrivacyModeForRemote) return;
-              setState(() {
-                _isPrivacyModeForRemote = false;
-              });
-              unawaited(_applySystemAction({'action': 'privacy_mode_off'}));
-            });
+            _privacyModeRemoteAutoOffTimer = Timer(
+              Duration(milliseconds: durationMs),
+              () {
+                if (!mounted || !_isPrivacyModeForRemote) return;
+                setState(() {
+                  _isPrivacyModeForRemote = false;
+                });
+                unawaited(_applySystemAction({'action': 'privacy_mode_off'}));
+              },
+            );
           }
         } else {
           unawaited(_applySystemAction({'action': 'privacy_mode_off'}));
@@ -1402,9 +1476,15 @@ Write-Output "$count,$width,$height"
 
     if (messageType == 'resolution_request') {
       if (!widget.sendLocalScreen) return;
-      final width = payload['width'] is num ? (payload['width'] as num).toDouble() : 0.0;
-      final height = payload['height'] is num ? (payload['height'] as num).toDouble() : 0.0;
-      final dpr = payload['dpr'] is num ? (payload['dpr'] as num).toDouble() : 1.0;
+      final width = payload['width'] is num
+          ? (payload['width'] as num).toDouble()
+          : 0.0;
+      final height = payload['height'] is num
+          ? (payload['height'] as num).toDouble()
+          : 0.0;
+      final dpr = payload['dpr'] is num
+          ? (payload['dpr'] as num).toDouble()
+          : 1.0;
       _applyAdaptiveResolutionFromController(
         viewportWidth: width,
         viewportHeight: height,
@@ -1414,10 +1494,18 @@ Write-Output "$count,$width,$height"
     }
 
     if (messageType == 'resolution_update') {
-      final width = payload['width'] is num ? (payload['width'] as num).toInt() : 0;
-      final height = payload['height'] is num ? (payload['height'] as num).toInt() : 0;
-      final virtualWidth = payload['virtualWidth'] is num ? (payload['virtualWidth'] as num).toInt() : 0;
-      final virtualHeight = payload['virtualHeight'] is num ? (payload['virtualHeight'] as num).toInt() : 0;
+      final width = payload['width'] is num
+          ? (payload['width'] as num).toInt()
+          : 0;
+      final height = payload['height'] is num
+          ? (payload['height'] as num).toInt()
+          : 0;
+      final virtualWidth = payload['virtualWidth'] is num
+          ? (payload['virtualWidth'] as num).toInt()
+          : 0;
+      final virtualHeight = payload['virtualHeight'] is num
+          ? (payload['virtualHeight'] as num).toInt()
+          : 0;
       if (width > 0 && height > 0) {
         setState(() {
           _remoteRealWidth = width;
@@ -1429,7 +1517,9 @@ Write-Output "$count,$width,$height"
             _remoteVirtualWidth = width;
             _remoteVirtualHeight = height;
           }
-          _remoteScaleRatio = _remoteVirtualWidth > 0 ? (_remoteRealWidth / _remoteVirtualWidth) : 1.0;
+          _remoteScaleRatio = _remoteVirtualWidth > 0
+              ? (_remoteRealWidth / _remoteVirtualWidth)
+              : 1.0;
         });
       }
       return;
@@ -1448,11 +1538,15 @@ Write-Output "$count,$width,$height"
         }
         if (resolution.isNotEmpty) {
           _captureResolutionLabel = resolution;
-          if (resolution == 'Full Screen') _setVirtualResolutionFromLongEdge(_recommendedFullScreenCaptureWidth());
+          if (resolution == 'Full Screen')
+            _setVirtualResolutionFromLongEdge(
+              _recommendedFullScreenCaptureWidth(),
+            );
           if (resolution == '720p') _captureMaxWidth = 1280;
           if (resolution == '1080p') _captureMaxWidth = 1920;
           if (resolution == '540p') _captureMaxWidth = 960;
-          if (resolution == 'Adapted Resolution') _captureMaxWidth = _defaultCaptureMaxWidth;
+          if (resolution == 'Adapted Resolution')
+            _captureMaxWidth = _defaultCaptureMaxWidth;
           _fillRemoteViewport = resolution == 'Full Screen';
         }
         if (quality.isNotEmpty) {
@@ -1487,7 +1581,9 @@ Write-Output "$count,$width,$height"
     }
 
     if (messageType != 'screen_frame' && messageType != 'input_event') {
-      print('[RemoteSupportPage] Received $messageType from $fromUserId: $payload');
+      print(
+        '[RemoteSupportPage] Received $messageType from $fromUserId: $payload',
+      );
     }
 
     var shouldRestoreHostWindow = false;
@@ -1504,7 +1600,9 @@ Write-Output "$count,$width,$height"
             _panelMode = 'chat';
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (_chatScrollController.hasClients) {
-                _chatScrollController.jumpTo(_chatScrollController.position.maxScrollExtent);
+                _chatScrollController.jumpTo(
+                  _chatScrollController.position.maxScrollExtent,
+                );
               }
             });
           }
@@ -1513,7 +1611,9 @@ Write-Output "$count,$width,$height"
           final fileName = (payload['fileName'] ?? '').toString();
           final fileData = (payload['fileData'] ?? '').toString();
           final rawSize = payload['fileSize'];
-          final fileSize = rawSize is int ? rawSize : (rawSize is double ? rawSize.toInt() : 0);
+          final fileSize = rawSize is int
+              ? rawSize
+              : (rawSize is double ? rawSize.toInt() : 0);
           if (fileName.isNotEmpty) {
             _isConnected = true;
             _connectionStatus = 'Connected';
@@ -1702,13 +1802,13 @@ Write-Output "$count,$width,$height"
   }
 
   bool get _canSendRemoteInput =>
-      _canSignal &&
-      _isConnected &&
-      !widget.sendLocalScreen;
+      _canSignal && _isConnected && !widget.sendLocalScreen;
 
   void _startKeyStateSync() {
     _keyStateSyncTimer?.cancel();
-    _keyStateSyncTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) {
+    _keyStateSyncTimer = Timer.periodic(const Duration(milliseconds: 1500), (
+      _,
+    ) {
       _sendKeyStateSync();
     });
   }
@@ -1735,7 +1835,9 @@ Write-Output "$count,$width,$height"
 
   void _startKeyboardLayoutSyncV2() {
     _keyboardLayoutTimer?.cancel();
-    _keyboardLayoutTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+    _keyboardLayoutTimer = Timer.periodic(const Duration(seconds: 3), (
+      _,
+    ) async {
       try {
         await _keyboardLayoutTranslator.detectClientLayout();
       } catch (e) {
@@ -1749,12 +1851,15 @@ Write-Output "$count,$width,$height"
       _keyboardStateManager.forceReleaseAll(reason: 'state_sync');
       _keyboardRepeatController.stopAllRepeats();
       final hw = HardwareKeyboard.instance;
-      _sendInputEvent('key_state_full_sync', extra: {
-        'shift': hw.isShiftPressed,
-        'ctrl': hw.isControlPressed,
-        'alt': hw.isAltPressed,
-        'meta': hw.isMetaPressed,
-      });
+      _sendInputEvent(
+        'key_state_full_sync',
+        extra: {
+          'shift': hw.isShiftPressed,
+          'ctrl': hw.isControlPressed,
+          'alt': hw.isAltPressed,
+          'meta': hw.isMetaPressed,
+        },
+      );
     } catch (e) {
       print('[Keyboard] State sync error: $e');
     }
@@ -1855,14 +1960,18 @@ Write-Output "$count,$width,$height"
     _stopManagedRepeat(logical);
     _repeatStartTimers[logical] = Timer(const Duration(milliseconds: 320), () {
       _repeatStartTimers.remove(logical);
-      if (!_pressedLogicalKeys.contains(logical) || !_canSendRemoteInput) return;
-      _repeatTickTimers[logical] = Timer.periodic(const Duration(milliseconds: 42), (_) {
-        if (!_pressedLogicalKeys.contains(logical) || !_canSendRemoteInput) {
-          _stopManagedRepeat(logical);
-          return;
-        }
-        _sendKeyboardEvent(event, phase: 'down');
-      });
+      if (!_pressedLogicalKeys.contains(logical) || !_canSendRemoteInput)
+        return;
+      _repeatTickTimers[logical] = Timer.periodic(
+        const Duration(milliseconds: 42),
+        (_) {
+          if (!_pressedLogicalKeys.contains(logical) || !_canSendRemoteInput) {
+            _stopManagedRepeat(logical);
+            return;
+          }
+          _sendKeyboardEvent(event, phase: 'down');
+        },
+      );
     });
   }
 
@@ -1884,7 +1993,11 @@ Write-Output "$count,$width,$height"
 
   bool _sendRemoteAudioPayload(Map<String, dynamic> payload) {
     if (!_remoteAudioFeatureEnabled) return false;
-    if (_audioUdpReady && payload['kind'] == 'packet' && _audioUdpSocket != null && _audioPeerAddress != null && _audioPeerPort != null) {
+    if (_audioUdpReady &&
+        payload['kind'] == 'packet' &&
+        _audioUdpSocket != null &&
+        _audioPeerAddress != null &&
+        _audioPeerPort != null) {
       final envelope = {
         'type': 'remote_audio_udp',
         'sessionId': (widget.sessionId ?? '').toString(),
@@ -1893,7 +2006,11 @@ Write-Output "$count,$width,$height"
       };
       try {
         final bytes = utf8.encode(jsonEncode(envelope));
-        final sent = _audioUdpSocket!.send(bytes, _audioPeerAddress!, _audioPeerPort!);
+        final sent = _audioUdpSocket!.send(
+          bytes,
+          _audioPeerAddress!,
+          _audioPeerPort!,
+        );
         if (sent > 0) {
           return true;
         }
@@ -1909,14 +2026,20 @@ Write-Output "$count,$width,$height"
     final a = (widget.currentUserId ?? '').toString();
     final b = widget.deviceId;
     final seed = '$sid|$a|$b|bim-audio-v1';
-    final hash = seed.codeUnits.fold<int>(0, (acc, v) => (acc * 131 + v) & 0x7fffffff);
+    final hash = seed.codeUnits.fold<int>(
+      0,
+      (acc, v) => (acc * 131 + v) & 0x7fffffff,
+    );
     return hash.toRadixString(16);
   }
 
   Future<void> _initAudioUdpSocket() async {
     if (_audioUdpSocket != null) return;
     try {
-      final socket = await io.RawDatagramSocket.bind(io.InternetAddress.anyIPv4, 0);
+      final socket = await io.RawDatagramSocket.bind(
+        io.InternetAddress.anyIPv4,
+        0,
+      );
       socket.readEventsEnabled = true;
       socket.listen((event) {
         if (event != io.RawSocketEvent.read) return;
@@ -1924,12 +2047,16 @@ Write-Output "$count,$width,$height"
         if (dg == null) return;
         Map<String, dynamic> decoded;
         try {
-          decoded = Map<String, dynamic>.from(jsonDecode(utf8.decode(dg.data)) as Map);
+          decoded = Map<String, dynamic>.from(
+            jsonDecode(utf8.decode(dg.data)) as Map,
+          );
         } catch (_) {
           return;
         }
         if ((decoded['type'] ?? '') != 'remote_audio_udp') return;
-        if ((decoded['sessionId'] ?? '').toString() != (widget.sessionId ?? '').toString()) return;
+        if ((decoded['sessionId'] ?? '').toString() !=
+            (widget.sessionId ?? '').toString())
+          return;
         if ((decoded['token'] ?? '').toString() != _audioUdpToken) return;
         final payloadRaw = decoded['payload'];
         if (payloadRaw is! Map) return;
@@ -2071,7 +2198,8 @@ Write-Output "$count,$width,$height"
     _sendRemoteAudioPayload({'kind': 'cap_probe', 'version': 1});
     _remoteAudioCompatTimer?.cancel();
     _remoteAudioCompatTimer = Timer(const Duration(seconds: 8), () {
-      if (!mounted || _remoteAudioPeerCompatible || _remoteAudioCompatWarned) return;
+      if (!mounted || _remoteAudioPeerCompatible || _remoteAudioCompatWarned)
+        return;
       _remoteAudioCompatWarned = true;
       _showMessage(
         context,
@@ -2085,7 +2213,10 @@ Write-Output "$count,$width,$height"
     } else {
       await _remoteAudioService.startClient(volume: _remoteAudioVolume);
       // Request host config as soon as client enables audio.
-      _sendRemoteAudioPayload({'kind': 'config', 'bitrateKbps': _remoteAudioBitrateKbps});
+      _sendRemoteAudioPayload({
+        'kind': 'config',
+        'bitrateKbps': _remoteAudioBitrateKbps,
+      });
     }
     _remoteAudioActive = true;
   }
@@ -2124,14 +2255,30 @@ Write-Output "$count,$width,$height"
   /// Replaces slow PowerShell execution with direct Win32 API calls
   /// IMPORTANT: Always denormalizes against host capture bounds (virtual pipeline).
   void _ensureNativeMouseEvent() {
-    if (_nativeMouseEvent != null || _nativeMouseEventInitFailed || !io.Platform.isWindows) {
+    if (_nativeMouseEvent != null ||
+        _nativeMouseEventInitFailed ||
+        !io.Platform.isWindows) {
       return;
     }
     try {
       _user32Lib ??= DynamicLibrary.open('user32.dll');
-      _nativeMouseEvent = _user32Lib!.lookupFunction<
-          Void Function(Uint32 dwFlags, Uint32 dx, Uint32 dy, Int32 dwData, IntPtr dwExtraInfo),
-          void Function(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo)>('mouse_event');
+      _nativeMouseEvent = _user32Lib!
+          .lookupFunction<
+            Void Function(
+              Uint32 dwFlags,
+              Uint32 dx,
+              Uint32 dy,
+              Int32 dwData,
+              IntPtr dwExtraInfo,
+            ),
+            void Function(
+              int dwFlags,
+              int dx,
+              int dy,
+              int dwData,
+              int dwExtraInfo,
+            )
+          >('mouse_event');
     } catch (e) {
       _nativeMouseEventInitFailed = true;
       debugPrint('[Input] mouse_event init failed: $e');
@@ -2170,14 +2317,23 @@ Write-Output "$count,$width,$height"
     _hostMouseButtonDownType = null;
   }
 
-  void _applyRemoteInputNative(String action, double? normX, double? normY, int wheelDelta) {
+  void _applyRemoteInputNative(
+    String action,
+    double? normX,
+    double? normY,
+    int wheelDelta,
+  ) {
     if (!io.Platform.isWindows) return;
     try {
       if (normX != null && normY != null) {
         final capLeft = _localCaptureLeft;
         final capTop = _localCaptureTop;
-        final capWidth = _localCaptureWidth > 0 ? _localCaptureWidth : _screenWidthActual;
-        final capHeight = _localCaptureHeight > 0 ? _localCaptureHeight : _screenHeightActual;
+        final capWidth = _localCaptureWidth > 0
+            ? _localCaptureWidth
+            : _screenWidthActual;
+        final capHeight = _localCaptureHeight > 0
+            ? _localCaptureHeight
+            : _screenHeightActual;
         final pos = denormalizeCoordinates(
           normX: normX,
           normY: normY,
@@ -2213,7 +2369,6 @@ Write-Output "$count,$width,$height"
           _emitNativeMouseEvent(win32.MOUSEEVENTF_WHEEL, data: wheelDelta);
           break;
       }
-
     } catch (e) {
       print('[Input] Native handler exception: $e');
     }
@@ -2230,10 +2385,14 @@ Write-Output "$count,$width,$height"
     final character = event.character ?? '';
     final isSpace = character == ' ' || keyName.toLowerCase() == 'space';
     final hw = HardwareKeyboard.instance;
-    final altGraphPressed = hw.logicalKeysPressed.contains(LogicalKeyboardKey.altGraph);
-    final isNumpad = keyName.toLowerCase().contains('numpad') || (physicalId >= 0x00070059 && physicalId <= 0x00070063);
+    final altGraphPressed = hw.logicalKeysPressed.contains(
+      LogicalKeyboardKey.altGraph,
+    );
+    final isNumpad =
+        keyName.toLowerCase().contains('numpad') ||
+        (physicalId >= 0x00070059 && physicalId <= 0x00070063);
     final legacyKey = character.isNotEmpty
-      ? (isSpace ? 'Space' : character)
+        ? (isSpace ? 'Space' : character)
         : (keyName.isNotEmpty ? keyName : event.logicalKey.keyLabel);
     final modernPayload = <String, dynamic>{
       'phase': phase,
@@ -2259,13 +2418,13 @@ Write-Output "$count,$width,$height"
 
     // Backward compatibility for older peers that only understand key_press.
     // Send only on key-down to avoid duplicate characters on old receivers.
-    if (phase == 'down' && legacyKey.isNotEmpty && !_isModifierKey({'keyName': keyName})) {
+    if (phase == 'down' &&
+        legacyKey.isNotEmpty &&
+        !_isModifierKey({'keyName': keyName})) {
       _sendInputEvent(
         'key_press',
         key: legacyKey,
-        extra: {
-          'legacyCompat': true,
-        },
+        extra: {'legacyCompat': true},
       );
     }
   }
@@ -2286,7 +2445,8 @@ Write-Output "$count,$width,$height"
     if (!_mouseInputEnabledForUser2 && mouseActions.contains(action)) {
       return;
     }
-    if (!_keyboardInputEnabledForUser2 && (action == 'key_press' || action == 'key_event')) {
+    if (!_keyboardInputEnabledForUser2 &&
+        (action == 'key_press' || action == 'key_event')) {
       return;
     }
     if (action == 'key_press' && payload['legacyCompat'] == true) {
@@ -2302,11 +2462,13 @@ Write-Output "$count,$width,$height"
     }
     if (action == 'layout_sync') {
       _remoteKeyboardLayout = (payload['layout'] ?? 'unknown').toString();
-      _remoteKeyboardLayoutFamily = (payload['layoutFamily'] ?? 'unknown').toString();
+      _remoteKeyboardLayoutFamily = (payload['layoutFamily'] ?? 'unknown')
+          .toString();
       _sendKeysStrokeCache.clear();
       return;
     }
-    if (action == 'key_event' || (action == 'key_press' && payload.containsKey('phase'))) {
+    if (action == 'key_event' ||
+        (action == 'key_press' && payload.containsKey('phase'))) {
       await _applyRemoteKeyboardEvent(payload);
       return;
     }
@@ -2329,7 +2491,8 @@ Write-Output "$count,$width,$height"
     }
 
     // Keyboard input still uses PowerShell (acceptable latency for keyboard)
-    final script = r'''
+    final script =
+        r'''
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
@@ -2404,21 +2567,24 @@ switch ($action) {
   }
 }
 '''
-        .replaceAll('__ACTION__', action.replaceAll("'", "''"))
-        .replaceAll('__X__', x == null ? '-1' : x.toStringAsFixed(6))
-        .replaceAll('__Y__', y == null ? '-1' : y.toStringAsFixed(6))
-        .replaceAll('__WHEEL__', wheelDelta.toString())
-        .replaceAll('__CAP_LEFT__', _localCaptureLeft.toString())
-        .replaceAll('__CAP_TOP__', _localCaptureTop.toString())
-        .replaceAll('__CAP_WIDTH__', _localCaptureWidth.toString())
-        .replaceAll('__CAP_HEIGHT__', _localCaptureHeight.toString())
-        .replaceAll('__KEY__', key.replaceAll("'", "''"));
+            .replaceAll('__ACTION__', action.replaceAll("'", "''"))
+            .replaceAll('__X__', x == null ? '-1' : x.toStringAsFixed(6))
+            .replaceAll('__Y__', y == null ? '-1' : y.toStringAsFixed(6))
+            .replaceAll('__WHEEL__', wheelDelta.toString())
+            .replaceAll('__CAP_LEFT__', _localCaptureLeft.toString())
+            .replaceAll('__CAP_TOP__', _localCaptureTop.toString())
+            .replaceAll('__CAP_WIDTH__', _localCaptureWidth.toString())
+            .replaceAll('__CAP_HEIGHT__', _localCaptureHeight.toString())
+            .replaceAll('__KEY__', key.replaceAll("'", "''"));
 
     try {
-      await _runPowerShell(
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
-        timeout: const Duration(seconds: 2),
-      );
+      await _runPowerShell([
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        script,
+      ], timeout: const Duration(seconds: 2));
     } catch (_) {
       // Ignore remote input injection failures silently to keep session alive.
     }
@@ -2494,7 +2660,10 @@ switch ($action) {
     // Native cursor move is lower latency and avoids PowerShell DPI/runtime drift.
     _applyRemoteInputNative('move', x, y, 0);
   }
-  Future<void> _applyRemoteKeyboardEventLegacy(Map<String, dynamic> payload) async {
+
+  Future<void> _applyRemoteKeyboardEventLegacy(
+    Map<String, dynamic> payload,
+  ) async {
     try {
       final keyboardEvent = KeyboardKeyEvent.fromJson(payload);
       final result = await _keyboardInjectionEngine.injectKeyboardEvent(
@@ -2503,7 +2672,9 @@ switch ($action) {
         hostLayoutFamily: _keyboardLayoutTranslator.hostLayoutFamily,
       );
       if (!result) {
-        print('[Keyboard] Legacy native fallback failed for ${keyboardEvent.keyName}');
+        print(
+          '[Keyboard] Legacy native fallback failed for ${keyboardEvent.keyName}',
+        );
       }
     } catch (e) {
       print('[Keyboard] Legacy fallback exception: $e');
@@ -2516,10 +2687,22 @@ switch ($action) {
     final desiredAlt = payload['alt'] == true;
     final desiredMeta = payload['meta'] == true;
 
-    await _applyRemoteKeyboardEvent({'phase': desiredShift ? 'down' : 'up', 'keyName': 'shift'});
-    await _applyRemoteKeyboardEvent({'phase': desiredCtrl ? 'down' : 'up', 'keyName': 'control'});
-    await _applyRemoteKeyboardEvent({'phase': desiredAlt ? 'down' : 'up', 'keyName': 'alt'});
-    await _applyRemoteKeyboardEvent({'phase': desiredMeta ? 'down' : 'up', 'keyName': 'meta'});
+    await _applyRemoteKeyboardEvent({
+      'phase': desiredShift ? 'down' : 'up',
+      'keyName': 'shift',
+    });
+    await _applyRemoteKeyboardEvent({
+      'phase': desiredCtrl ? 'down' : 'up',
+      'keyName': 'control',
+    });
+    await _applyRemoteKeyboardEvent({
+      'phase': desiredAlt ? 'down' : 'up',
+      'keyName': 'alt',
+    });
+    await _applyRemoteKeyboardEvent({
+      'phase': desiredMeta ? 'down' : 'up',
+      'keyName': 'meta',
+    });
   }
 
   Future<void> _resetRemoteInjectedKeys() async {
@@ -2530,7 +2713,9 @@ switch ($action) {
   }
 
   int _resolveVirtualKey(Map<String, dynamic> payload) {
-    final physical = payload['physicalKey'] is num ? (payload['physicalKey'] as num).toInt() : 0;
+    final physical = payload['physicalKey'] is num
+        ? (payload['physicalKey'] as num).toInt()
+        : 0;
     const physicalVkMap = {
       0x00070059: 0x61,
       0x0007005A: 0x62,
@@ -2632,7 +2817,9 @@ switch ($action) {
     final label = (payload['character'] ?? '').toString();
     if (label.length == 1) {
       final c = label.codeUnitAt(0);
-      if ((c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5A) || (c >= 0x61 && c <= 0x7A)) {
+      if ((c >= 0x30 && c <= 0x39) ||
+          (c >= 0x41 && c <= 0x5A) ||
+          (c >= 0x61 && c <= 0x7A)) {
         return c >= 0x61 && c <= 0x7A ? c - 32 : c;
       }
     }
@@ -2672,7 +2859,9 @@ switch ($action) {
 
     String token = '';
     final mappedChar = _mapCharacterForLayout(character, payload);
-    if (_isPrintableCharacter(mappedChar) && !(ctrl || meta) && (altGraph || !alt)) {
+    if (_isPrintableCharacter(mappedChar) &&
+        !(ctrl || meta) &&
+        (altGraph || !alt)) {
       token = _escapeSendKeysChar(mappedChar);
     } else {
       token = _specialKeyToSendKeysToken(keyName);
@@ -2712,11 +2901,18 @@ switch ($action) {
     return stroke;
   }
 
-  String _mapCharacterForLayout(String character, [Map<String, dynamic>? payload]) {
+  String _mapCharacterForLayout(
+    String character, [
+    Map<String, dynamic>? payload,
+  ]) {
     if (!_isPrintableCharacter(character)) return character;
-    final sourceFamily = (payload?['sourceLayoutFamily'] ?? _remoteKeyboardLayoutFamily).toString();
+    final sourceFamily =
+        (payload?['sourceLayoutFamily'] ?? _remoteKeyboardLayoutFamily)
+            .toString();
     final targetFamily = _localKeyboardLayoutFamily;
-    if (sourceFamily == targetFamily || sourceFamily == 'unknown' || targetFamily == 'unknown') {
+    if (sourceFamily == targetFamily ||
+        sourceFamily == 'unknown' ||
+        targetFamily == 'unknown') {
       return character;
     }
     return character;
@@ -2792,11 +2988,15 @@ switch ($action) {
     required Map<String, dynamic> payload,
   }) {
     if (!_canSignal) {
-      print('[RemoteSupportPage] Cannot signal: signalingService=${widget.signalingService}, userId=${widget.currentUserId}, sessionId=${widget.sessionId}');
+      print(
+        '[RemoteSupportPage] Cannot signal: signalingService=${widget.signalingService}, userId=${widget.currentUserId}, sessionId=${widget.sessionId}',
+      );
       return false;
     }
     if (messageType != 'screen_frame' && messageType != 'input_event') {
-      print('[RemoteSupportPage] Sending $messageType to ${widget.deviceId} via session ${widget.sessionId}');
+      print(
+        '[RemoteSupportPage] Sending $messageType to ${widget.deviceId} via session ${widget.sessionId}',
+      );
     }
     final payloadWithChannel = Map<String, dynamic>.from(payload);
     payloadWithChannel.putIfAbsent(
@@ -2821,10 +3021,7 @@ switch ($action) {
     _lastCaptureStatusSentMs = now;
     _sendSessionPayload(
       messageType: 'capture_status',
-      payload: {
-        'status': status,
-        'detail': detail,
-      },
+      payload: {'status': status, 'detail': detail},
     );
   }
 
@@ -2832,7 +3029,12 @@ switch ($action) {
     List<String> args, {
     Duration timeout = const Duration(seconds: 10),
   }) async {
-    final commands = <String>['powershell', 'powershell.exe', 'pwsh', 'pwsh.exe'];
+    final commands = <String>[
+      'powershell',
+      'powershell.exe',
+      'pwsh',
+      'pwsh.exe',
+    ];
     Object? lastError;
     for (final cmd in commands) {
       try {
@@ -2876,11 +3078,15 @@ switch ($action) {
       );
 
       if (!result) {
-        print('[Keyboard] V2 injection failed for ${keyboardEvent.keyName}, falling back to legacy injector');
+        print(
+          '[Keyboard] V2 injection failed for ${keyboardEvent.keyName}, falling back to legacy injector',
+        );
         await _applyRemoteKeyboardEventLegacy(payload);
       }
     } catch (e) {
-      print('[Keyboard] Remote handler error: $e. Falling back to legacy injector');
+      print(
+        '[Keyboard] Remote handler error: $e. Falling back to legacy injector',
+      );
       try {
         await _applyRemoteKeyboardEventLegacy(payload);
       } catch (legacyError) {
@@ -2909,7 +3115,8 @@ switch ($action) {
     if (pending == null) return;
 
     const epsilon = 0.0008;
-    final sameAsLast = _lastSentMoveX != null &&
+    final sameAsLast =
+        _lastSentMoveX != null &&
         _lastSentMoveY != null &&
         (pending.dx - _lastSentMoveX!).abs() < epsilon &&
         (pending.dy - _lastSentMoveY!).abs() < epsilon;
@@ -2922,22 +3129,19 @@ switch ($action) {
     final dy = _lastSentMoveY == null ? 0.0 : (pending.dy - _lastSentMoveY!);
     final vx = dtMs > 0 ? (dx * 1000.0 / dtMs) : 0.0;
     final vy = dtMs > 0 ? (dy * 1000.0 / dtMs) : 0.0;
-    final sendAbsolute = _lastSentMoveX == null ||
-      !_remoteSupportsMoveDelta ||
-      _moveDeltaSinceKeyframe >= 8 ||
-      dx.abs() > 0.25 ||
-      dy.abs() > 0.25;
+    final sendAbsolute =
+        _lastSentMoveX == null ||
+        !_remoteSupportsMoveDelta ||
+        _moveDeltaSinceKeyframe >= 8 ||
+        dx.abs() > 0.25 ||
+        dy.abs() > 0.25;
 
     if (sendAbsolute) {
       _sendInputEvent(
         'move',
         normalizedX: pending.dx,
         normalizedY: pending.dy,
-        extra: {
-          'vx': vx,
-          'vy': vy,
-          'dtMs': dtMs,
-        },
+        extra: {'vx': vx, 'vy': vy, 'dtMs': dtMs},
       );
       _moveDeltaSinceKeyframe = 0;
     } else {
@@ -2977,7 +3181,8 @@ switch ($action) {
 
       try {
         _remoteScreenFrame = base64Decode(frameData);
-        if (_pendingRemoteFrameWidth != null && _pendingRemoteFrameHeight != null) {
+        if (_pendingRemoteFrameWidth != null &&
+            _pendingRemoteFrameHeight != null) {
           _remoteFrameWidth = _pendingRemoteFrameWidth!;
           _remoteFrameHeight = _pendingRemoteFrameHeight!;
           if (_remoteVirtualWidth <= 0 || _remoteVirtualHeight <= 0) {
@@ -3005,7 +3210,9 @@ switch ($action) {
         _pendingRemoteScreenIndex = null;
         _framesReceived++;
         if (_framesReceived % 30 == 0) {
-          print('[ScreenShare] Frame applied #$_framesReceived (${_remoteScreenFrame!.length} bytes)');
+          print(
+            '[ScreenShare] Frame applied #$_framesReceived (${_remoteScreenFrame!.length} bytes)',
+          );
         }
         if (mounted) {
           setState(() {});
@@ -3060,7 +3267,11 @@ switch ($action) {
     if (_isFullScreen) {
       _revealOverlayTemporarily();
     }
-    _showMessage(context, _isFullScreen ? tr('full_screen') : tr('exit_full_screen'), _getColors(context));
+    _showMessage(
+      context,
+      _isFullScreen ? tr('full_screen') : tr('exit_full_screen'),
+      _getColors(context),
+    );
   }
 
   @override
@@ -3074,7 +3285,7 @@ switch ($action) {
     // Cleanup cursor update timer and stopwatch
     _cursorUpdateTimer?.cancel();
     _cursorMovementStopwatch.stop();
-    
+
     // Cleanup other resources
     _stopAllManagedRepeats();
     _pressedLogicalKeys.clear();
@@ -3117,11 +3328,11 @@ switch ($action) {
     _remoteControlFocusNode.dispose();
     _fileTransferService?.dispose();
     _fileTransferService = null;
-        _keyboardLayoutTimer?.cancel();
-        _keyboardLayoutTimer = null;
-        _keyboardRepeatController.stopAllRepeats();
-        _keyboardStateManager.forceReleaseAll(reason: 'dispose');
-        _keyboardTransportLayer.dispose();
+    _keyboardLayoutTimer?.cancel();
+    _keyboardLayoutTimer = null;
+    _keyboardRepeatController.stopAllRepeats();
+    _keyboardStateManager.forceReleaseAll(reason: 'dispose');
+    _keyboardTransportLayer.dispose();
     super.dispose();
   }
 
@@ -3141,7 +3352,9 @@ switch ($action) {
                 style: TextStyle(color: colors['text']!),
               ),
             ),
-      body: isController ? _buildControllerView(colors) : _buildRemoteAgentView(colors),
+      body: isController
+          ? _buildControllerView(colors)
+          : _buildRemoteAgentView(colors),
     );
   }
 
@@ -3207,7 +3420,10 @@ switch ($action) {
                   color: Colors.black.withValues(alpha: 0.35),
                   alignment: Alignment.center,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 14,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.black87,
                       borderRadius: BorderRadius.circular(10),
@@ -3227,14 +3443,20 @@ switch ($action) {
                     color: Colors.black.withValues(alpha: 0.45),
                     alignment: Alignment.center,
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 12,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.black87,
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: const Text(
                         'Session paused. Remote screen is frozen.',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
                   ),
@@ -3264,7 +3486,10 @@ switch ($action) {
                         alignment: Alignment.center,
                         child: const Text(
                           'This machine is locked by remote operator',
-                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
                     ),
@@ -3275,7 +3500,10 @@ switch ($action) {
                         alignment: Alignment.center,
                         child: const Text(
                           'Session paused by remote operator',
-                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
                     ),
@@ -3327,15 +3555,30 @@ switch ($action) {
                 ),
               ),
               const SizedBox(width: 8),
-              Text('Session $_sessionTime', style: TextStyle(color: colors['textSecondary']!, fontSize: 11)),
+              Text(
+                'Session $_sessionTime',
+                style: TextStyle(color: colors['textSecondary']!, fontSize: 11),
+              ),
               const Spacer(),
-              Text('Ping $_pingMs ms', style: TextStyle(color: colors['textSecondary']!, fontSize: 11)),
+              Text(
+                'Ping $_pingMs ms',
+                style: TextStyle(color: colors['textSecondary']!, fontSize: 11),
+              ),
               const SizedBox(width: 8),
-              Text(_bandwidthText, style: TextStyle(color: colors['textSecondary']!, fontSize: 11)),
+              Text(
+                _bandwidthText,
+                style: TextStyle(color: colors['textSecondary']!, fontSize: 11),
+              ),
               const SizedBox(width: 8),
-              Text('FPS $_fpsText', style: TextStyle(color: colors['textSecondary']!, fontSize: 11)),
+              Text(
+                'FPS $_fpsText',
+                style: TextStyle(color: colors['textSecondary']!, fontSize: 11),
+              ),
               const SizedBox(width: 8),
-              Text('Loss $_packetLossText', style: TextStyle(color: colors['textSecondary']!, fontSize: 11)),
+              Text(
+                'Loss $_packetLossText',
+                style: TextStyle(color: colors['textSecondary']!, fontSize: 11),
+              ),
             ],
           ),
           const SizedBox(height: 7),
@@ -3508,7 +3751,10 @@ switch ($action) {
           children: const [
             Icon(Icons.visibility_off, size: 72, color: Colors.white),
             SizedBox(height: 14),
-            Text('Screen is hidden for privacy', style: TextStyle(color: Colors.white, fontSize: 17)),
+            Text(
+              'Screen is hidden for privacy',
+              style: TextStyle(color: Colors.white, fontSize: 17),
+            ),
           ],
         ),
       );
@@ -3518,8 +3764,10 @@ switch ($action) {
       final statusText = widget.sendLocalScreen
           ? _hostSessionBannerText
           : (_captureError.isNotEmpty
-              ? 'Error: $_captureError'
-              : (_isConnected ? 'Connected successfully' : 'Error: disconnected'));
+                ? 'Error: $_captureError'
+                : (_isConnected
+                      ? 'Connected successfully'
+                      : 'Error: disconnected'));
       return Container(
         color: Colors.black,
         alignment: Alignment.center,
@@ -3527,7 +3775,9 @@ switch ($action) {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(
-              _captureError.isEmpty ? 'Waiting for remote stream...' : 'Capture issue: $_captureError',
+              _captureError.isEmpty
+                  ? 'Waiting for remote stream...'
+                  : 'Capture issue: $_captureError',
               style: const TextStyle(color: Colors.white70),
             ),
             const SizedBox(height: 12),
@@ -3565,7 +3815,10 @@ switch ($action) {
               focusNode: _remoteControlFocusNode,
               autofocus: !widget.sendLocalScreen,
               onKeyEvent: (event) {
-                if (!_canSendRemoteInput || _isDeviceLocked || _isSessionPaused || !_keyboardInputEnabledForUser2) {
+                if (!_canSendRemoteInput ||
+                    _isDeviceLocked ||
+                    _isSessionPaused ||
+                    !_keyboardInputEnabledForUser2) {
                   return;
                 }
 
@@ -3573,7 +3826,9 @@ switch ($action) {
                   final logical = event.logicalKey.keyId;
                   final managed = _isManagedRepeatKey(event.logicalKey);
                   final modifier = _isModifierLogical(event.logicalKey);
-                  if ((managed || modifier) && _pressedLogicalKeys.contains(logical)) return;
+                  if ((managed || modifier) &&
+                      _pressedLogicalKeys.contains(logical))
+                    return;
                   _pressedLogicalKeys.add(logical);
 
                   // TeamViewer-style: forward controller keydown directly to host.
@@ -3605,7 +3860,11 @@ switch ($action) {
                   }
 
                   return Listener(
-                    onPointerDown: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                    onPointerDown:
+                        _canSendRemoteInput &&
+                            !_isDeviceLocked &&
+                            !_isSessionPaused &&
+                            _mouseInputEnabledForUser2
                         ? (event) {
                             _revealOverlayTemporarily();
                             final p = normalize(event.localPosition);
@@ -3613,7 +3872,8 @@ switch ($action) {
                             _localCursorX = p.dx;
                             _localCursorY = p.dy;
                             _flushPendingMove();
-                            _rightButtonPressed = event.buttons == kSecondaryMouseButton;
+                            _rightButtonPressed =
+                                event.buttons == kSecondaryMouseButton;
                             _mouseButtonDown = true;
                             _sendInputEvent(
                               _rightButtonPressed ? 'right_down' : 'left_down',
@@ -3623,29 +3883,41 @@ switch ($action) {
                             _remoteControlFocusNode.requestFocus();
                           }
                         : (_) => _revealOverlayTemporarily(),
-                    onPointerHover: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                    onPointerHover:
+                        _canSendRemoteInput &&
+                            !_isDeviceLocked &&
+                            !_isSessionPaused &&
+                            _mouseInputEnabledForUser2
                         ? (event) {
                             final now = DateTime.now().millisecondsSinceEpoch;
-                          if (now - _lastPointerMoveMs < 1) return;
+                            if (now - _lastPointerMoveMs < 1) return;
                             _lastPointerMoveMs = now;
                             final p = normalize(event.localPosition);
                             if (p == null) return;
                             _sendMoveIfNeeded(p);
                           }
                         : null,
-                    onPointerMove: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                    onPointerMove:
+                        _canSendRemoteInput &&
+                            !_isDeviceLocked &&
+                            !_isSessionPaused &&
+                            _mouseInputEnabledForUser2
                         ? (event) {
                             final now = DateTime.now().millisecondsSinceEpoch;
-                          if (now - _lastPointerMoveMs < 1) return;
+                            if (now - _lastPointerMoveMs < 1) return;
                             _lastPointerMoveMs = now;
                             final p = normalize(event.localPosition);
                             if (p == null) return;
                             _sendMoveIfNeeded(p);
                           }
                         : null,
-                    onPointerUp: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                    onPointerUp:
+                        _canSendRemoteInput &&
+                            !_isDeviceLocked &&
+                            !_isSessionPaused &&
+                            _mouseInputEnabledForUser2
                         ? (event) {
-                          if (!_mouseButtonDown) return;
+                            if (!_mouseButtonDown) return;
                             final p = normalize(event.localPosition);
                             if (p == null) return;
                             _localCursorX = p.dx;
@@ -3660,7 +3932,11 @@ switch ($action) {
                             _rightButtonPressed = false;
                           }
                         : null,
-                    onPointerCancel: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                    onPointerCancel:
+                        _canSendRemoteInput &&
+                            !_isDeviceLocked &&
+                            !_isSessionPaused &&
+                            _mouseInputEnabledForUser2
                         ? (event) {
                             if (!_mouseButtonDown) return;
                             _flushPendingMove();
@@ -3673,7 +3949,11 @@ switch ($action) {
                             _rightButtonPressed = false;
                           }
                         : null,
-                    onPointerSignal: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                    onPointerSignal:
+                        _canSendRemoteInput &&
+                            !_isDeviceLocked &&
+                            !_isSessionPaused &&
+                            _mouseInputEnabledForUser2
                         ? (event) {
                             if (event is PointerScrollEvent) {
                               _flushPendingMove();
@@ -3681,7 +3961,11 @@ switch ($action) {
                             }
                           }
                         : null,
-                    onPointerPanZoomUpdate: _canSendRemoteInput && !_isDeviceLocked && !_isSessionPaused && _mouseInputEnabledForUser2
+                    onPointerPanZoomUpdate:
+                        _canSendRemoteInput &&
+                            !_isDeviceLocked &&
+                            !_isSessionPaused &&
+                            _mouseInputEnabledForUser2
                         ? (event) {
                             final panDy = event.panDelta.dy;
                             if (panDy.abs() > 0.01) {
@@ -3702,8 +3986,8 @@ switch ($action) {
                             }
                           }
                         : null,
-                      child: LayoutBuilder(
-                        builder: (context, constraints) {
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
                         final viewportWidth = constraints.maxWidth;
                         final viewportHeight = constraints.maxHeight;
                         if (viewportWidth <= 0 || viewportHeight <= 0) {
@@ -3711,10 +3995,16 @@ switch ($action) {
                         }
 
                         // Keep host scaling in sync after window/fullscreen transitions.
-                        _maybeSendViewportHint(Size(viewportWidth, viewportHeight));
+                        _maybeSendViewportHint(
+                          Size(viewportWidth, viewportHeight),
+                        );
 
-                        final sourceWidth = _remoteFrameWidth > 0 ? _remoteFrameWidth : _remoteVirtualWidth;
-                        final sourceHeight = _remoteFrameHeight > 0 ? _remoteFrameHeight : _remoteVirtualHeight;
+                        final sourceWidth = _remoteFrameWidth > 0
+                            ? _remoteFrameWidth
+                            : _remoteVirtualWidth;
+                        final sourceHeight = _remoteFrameHeight > 0
+                            ? _remoteFrameHeight
+                            : _remoteVirtualHeight;
 
                         return Center(
                           child: FittedBox(
@@ -3735,8 +4025,8 @@ switch ($action) {
                             ),
                           ),
                         );
-                        },
-                      ),
+                      },
+                    ),
                   );
                 },
               ),
@@ -3757,7 +4047,11 @@ switch ($action) {
                     const SizedBox(height: 16),
                     const Text(
                       'Session Paused',
-                      style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w600),
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 24,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     const SizedBox(height: 32),
                     Row(
@@ -3771,8 +4065,13 @@ switch ($action) {
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.green,
                             foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 28,
+                              vertical: 14,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
                           ),
                         ),
                         const SizedBox(width: 16),
@@ -3783,8 +4082,13 @@ switch ($action) {
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.red,
                             foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 28,
+                              vertical: 14,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
                           ),
                         ),
                       ],
@@ -3804,7 +4108,14 @@ switch ($action) {
       children: [
         Row(
           children: [
-            Text('Chat', style: TextStyle(color: colors['text']!, fontSize: 16, fontWeight: FontWeight.w700)),
+            Text(
+              'Chat',
+              style: TextStyle(
+                color: colors['text']!,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
             const Spacer(),
             IconButton(
               icon: Icon(Icons.close, color: colors['textSecondary']!),
@@ -3875,7 +4186,9 @@ switch ($action) {
     );
   }
 
-  Future<bool> _confirmIncomingFileTransfer(IncomingTransferRequest request) async {
+  Future<bool> _confirmIncomingFileTransfer(
+    IncomingTransferRequest request,
+  ) async {
     // Accept incoming transfers silently for a smoother workflow.
     return true;
   }
@@ -3951,7 +4264,11 @@ switch ($action) {
       return;
     }
     if (_selectedRemoteFilePaths.isEmpty) {
-      _showMessage(context, 'Select remote file(s) first.', _getColors(context));
+      _showMessage(
+        context,
+        'Select remote file(s) first.',
+        _getColors(context),
+      );
       return;
     }
 
@@ -3965,7 +4282,11 @@ switch ($action) {
   Future<void> _openFileTransferModal() async {
     final service = _fileTransferService;
     if (service == null) {
-      _showMessage(context, 'File transfer service unavailable.', _getColors(context));
+      _showMessage(
+        context,
+        'File transfer service unavailable.',
+        _getColors(context),
+      );
       return;
     }
     final receiveDir = _buildReceivedFilesDirectory();
@@ -3984,7 +4305,10 @@ switch ($action) {
         return StatefulBuilder(
           builder: (modalContext, setModalState) {
             return Dialog(
-              insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 24,
+              ),
               backgroundColor: colors['bg'],
               child: SizedBox(
                 width: 1120,
@@ -4007,7 +4331,10 @@ switch ($action) {
                           const SizedBox(width: 12),
                           Text(
                             'Base directory: ${service.baseDirectory}',
-                            style: TextStyle(color: colors['textSecondary'], fontSize: 11),
+                            style: TextStyle(
+                              color: colors['textSecondary'],
+                              fontSize: 11,
+                            ),
                           ),
                           const Spacer(),
                           IconButton(
@@ -4021,7 +4348,11 @@ switch ($action) {
                         child: Row(
                           children: [
                             Expanded(
-                              child: _buildLocalFilePanel(colors, service, setModalState),
+                              child: _buildLocalFilePanel(
+                                colors,
+                                service,
+                                setModalState,
+                              ),
                             ),
                             const SizedBox(width: 12),
                             SizedBox(
@@ -4030,13 +4361,18 @@ switch ($action) {
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
                                   FilledButton.icon(
-                                    onPressed: _selectedLocalAbsolutePaths.isEmpty ? null : _sendSelectedFilesToRemote,
+                                    onPressed:
+                                        _selectedLocalAbsolutePaths.isEmpty
+                                        ? null
+                                        : _sendSelectedFilesToRemote,
                                     icon: const Icon(Icons.arrow_right_alt),
                                     label: const Text('Send ->'),
                                   ),
                                   const SizedBox(height: 12),
                                   FilledButton.icon(
-                                    onPressed: _selectedRemoteFilePaths.isEmpty ? null : _requestReceiveSelectedRemoteFiles,
+                                    onPressed: _selectedRemoteFilePaths.isEmpty
+                                        ? null
+                                        : _requestReceiveSelectedRemoteFiles,
                                     icon: const Icon(Icons.arrow_left),
                                     label: const Text('<- Receive'),
                                   ),
@@ -4045,17 +4381,23 @@ switch ($action) {
                             ),
                             const SizedBox(width: 12),
                             Expanded(
-                              child: _buildRemoteFilePanel(colors, service, setModalState),
+                              child: _buildRemoteFilePanel(
+                                colors,
+                                service,
+                                setModalState,
+                              ),
                             ),
                           ],
                         ),
                       ),
                       const SizedBox(height: 12),
-                      _buildTransferPathSelectors(colors, service, setModalState),
-                      const SizedBox(height: 12),
-                      Expanded(
-                        child: _buildTransferQueueList(colors, service),
+                      _buildTransferPathSelectors(
+                        colors,
+                        service,
+                        setModalState,
                       ),
+                      const SizedBox(height: 12),
+                      Expanded(child: _buildTransferQueueList(colors, service)),
                     ],
                   ),
                 ),
@@ -4134,7 +4476,13 @@ switch ($action) {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('Controller Files', style: TextStyle(color: colors['text'], fontWeight: FontWeight.w700)),
+          Text(
+            'Controller Files',
+            style: TextStyle(
+              color: colors['text'],
+              fontWeight: FontWeight.w700,
+            ),
+          ),
           const SizedBox(height: 6),
           ValueListenableBuilder<String>(
             valueListenable: service.localPath,
@@ -4158,7 +4506,9 @@ switch ($action) {
               ),
               const SizedBox(width: 8),
               OutlinedButton(
-                onPressed: () => unawaited(service.refreshLocal(path: service.localPath.value)),
+                onPressed: () => unawaited(
+                  service.refreshLocal(path: service.localPath.value),
+                ),
                 child: const Text('Refresh'),
               ),
               const Spacer(),
@@ -4178,23 +4528,46 @@ switch ($action) {
                   itemCount: entries.length,
                   itemBuilder: (context, index) {
                     final entry = entries[index];
-                    final selected = _selectedLocalAbsolutePaths.contains(p.join(service.baseDirectory, entry.relativePath));
+                    final selected = _selectedLocalAbsolutePaths.contains(
+                      p.join(service.baseDirectory, entry.relativePath),
+                    );
                     return ListTile(
                       dense: true,
-                      leading: Icon(entry.isDirectory ? Icons.folder : Icons.insert_drive_file, color: colors['accent']),
-                      title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: colors['text'])),
+                      leading: Icon(
+                        entry.isDirectory
+                            ? Icons.folder
+                            : Icons.insert_drive_file,
+                        color: colors['accent'],
+                      ),
+                      title: Text(
+                        entry.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: colors['text']),
+                      ),
                       subtitle: entry.isDirectory
                           ? null
-                          : Text(_formatTransferBytes(entry.size), style: TextStyle(color: colors['textSecondary'], fontSize: 11)),
+                          : Text(
+                              _formatTransferBytes(entry.size),
+                              style: TextStyle(
+                                color: colors['textSecondary'],
+                                fontSize: 11,
+                              ),
+                            ),
                       trailing: entry.isDirectory
                           ? const Icon(Icons.chevron_right)
                           : Checkbox(
                               value: selected,
                               onChanged: (checked) {
-                                final abs = p.join(service.baseDirectory, entry.relativePath);
+                                final abs = p.join(
+                                  service.baseDirectory,
+                                  entry.relativePath,
+                                );
                                 setModalState(() {
                                   if (checked == true) {
-                                    if (!_selectedLocalAbsolutePaths.contains(abs)) {
+                                    if (!_selectedLocalAbsolutePaths.contains(
+                                      abs,
+                                    )) {
                                       _selectedLocalAbsolutePaths.add(abs);
                                     }
                                   } else {
@@ -4205,10 +4578,15 @@ switch ($action) {
                             ),
                       onTap: () {
                         if (entry.isDirectory) {
-                          unawaited(service.refreshLocal(path: entry.relativePath));
+                          unawaited(
+                            service.refreshLocal(path: entry.relativePath),
+                          );
                           return;
                         }
-                        final abs = p.join(service.baseDirectory, entry.relativePath);
+                        final abs = p.join(
+                          service.baseDirectory,
+                          entry.relativePath,
+                        );
                         setModalState(() {
                           if (_selectedLocalAbsolutePaths.contains(abs)) {
                             _selectedLocalAbsolutePaths.remove(abs);
@@ -4248,7 +4626,13 @@ switch ($action) {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('Host Files', style: TextStyle(color: colors['text'], fontWeight: FontWeight.w700)),
+          Text(
+            'Host Files',
+            style: TextStyle(
+              color: colors['text'],
+              fontWeight: FontWeight.w700,
+            ),
+          ),
           const SizedBox(height: 6),
           ValueListenableBuilder<String>(
             valueListenable: service.remotePath,
@@ -4272,7 +4656,8 @@ switch ($action) {
               ),
               const SizedBox(width: 8),
               OutlinedButton(
-                onPressed: () => service.requestRemoteBrowse(path: service.remotePath.value),
+                onPressed: () =>
+                    service.requestRemoteBrowse(path: service.remotePath.value),
                 child: const Text('Refresh'),
               ),
             ],
@@ -4286,14 +4671,32 @@ switch ($action) {
                   itemCount: entries.length,
                   itemBuilder: (context, index) {
                     final entry = entries[index];
-                    final selected = _selectedRemoteFilePaths.contains(entry.relativePath);
+                    final selected = _selectedRemoteFilePaths.contains(
+                      entry.relativePath,
+                    );
                     return ListTile(
                       dense: true,
-                      leading: Icon(entry.isDirectory ? Icons.folder : Icons.insert_drive_file, color: colors['accent']),
-                      title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: colors['text'])),
+                      leading: Icon(
+                        entry.isDirectory
+                            ? Icons.folder
+                            : Icons.insert_drive_file,
+                        color: colors['accent'],
+                      ),
+                      title: Text(
+                        entry.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: colors['text']),
+                      ),
                       subtitle: entry.isDirectory
                           ? null
-                          : Text(_formatTransferBytes(entry.size), style: TextStyle(color: colors['textSecondary'], fontSize: 11)),
+                          : Text(
+                              _formatTransferBytes(entry.size),
+                              style: TextStyle(
+                                color: colors['textSecondary'],
+                                fontSize: 11,
+                              ),
+                            ),
                       trailing: entry.isDirectory
                           ? const Icon(Icons.chevron_right)
                           : Checkbox(
@@ -4301,9 +4704,13 @@ switch ($action) {
                               onChanged: (checked) {
                                 setModalState(() {
                                   if (checked == true) {
-                                    _selectedRemoteFilePaths.add(entry.relativePath);
+                                    _selectedRemoteFilePaths.add(
+                                      entry.relativePath,
+                                    );
                                   } else {
-                                    _selectedRemoteFilePaths.remove(entry.relativePath);
+                                    _selectedRemoteFilePaths.remove(
+                                      entry.relativePath,
+                                    );
                                   }
                                 });
                               },
@@ -4314,7 +4721,9 @@ switch ($action) {
                           return;
                         }
                         setModalState(() {
-                          if (_selectedRemoteFilePaths.contains(entry.relativePath)) {
+                          if (_selectedRemoteFilePaths.contains(
+                            entry.relativePath,
+                          )) {
                             _selectedRemoteFilePaths.remove(entry.relativePath);
                           } else {
                             _selectedRemoteFilePaths.add(entry.relativePath);
@@ -4337,7 +4746,10 @@ switch ($action) {
     );
   }
 
-  Widget _buildTransferQueueList(Map<String, Color> colors, FileTransferService service) {
+  Widget _buildTransferQueueList(
+    Map<String, Color> colors,
+    FileTransferService service,
+  ) {
     return Container(
       decoration: BoxDecoration(
         color: colors['cardBg'],
@@ -4378,14 +4790,20 @@ switch ($action) {
                         Expanded(
                           child: Text(
                             item.name,
-                            style: TextStyle(color: colors['text'], fontWeight: FontWeight.w600),
+                            style: TextStyle(
+                              color: colors['text'],
+                              fontWeight: FontWeight.w600,
+                            ),
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
                         const SizedBox(width: 8),
                         Text(
                           item.status,
-                          style: TextStyle(color: colors['textSecondary'], fontSize: 12),
+                          style: TextStyle(
+                            color: colors['textSecondary'],
+                            fontSize: 12,
+                          ),
                         ),
                         const SizedBox(width: 8),
                         if (item.canCancel)
@@ -4398,19 +4816,28 @@ switch ($action) {
                     ),
                     Text(
                       '${item.direction} | ${_formatTransferBytes(item.bytesDone)} / ${_formatTransferBytes(item.bytesTotal)} | ${_formatTransferSpeed(item.speedBytesPerSecond)}',
-                      style: TextStyle(color: colors['textSecondary'], fontSize: 11),
+                      style: TextStyle(
+                        color: colors['textSecondary'],
+                        fontSize: 11,
+                      ),
                     ),
                     const SizedBox(height: 6),
                     LinearProgressIndicator(value: progress),
                     const SizedBox(height: 4),
                     Text(
                       progressLabel,
-                      style: TextStyle(color: colors['textSecondary'], fontSize: 11),
+                      style: TextStyle(
+                        color: colors['textSecondary'],
+                        fontSize: 11,
+                      ),
                     ),
                     if (item.error != null && item.error!.isNotEmpty)
                       Text(
                         item.error!,
-                        style: const TextStyle(color: Colors.redAccent, fontSize: 11),
+                        style: const TextStyle(
+                          color: Colors.redAccent,
+                          fontSize: 11,
+                        ),
                       ),
                   ],
                 ),
@@ -4428,7 +4855,14 @@ switch ($action) {
       children: [
         Row(
           children: [
-            Text('File Transfer', style: TextStyle(color: colors['text']!, fontSize: 16, fontWeight: FontWeight.w700)),
+            Text(
+              'File Transfer',
+              style: TextStyle(
+                color: colors['text']!,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
             const Spacer(),
             IconButton(
               icon: Icon(Icons.close, color: colors['textSecondary']!),
@@ -4522,13 +4956,24 @@ switch ($action) {
     return ListView(
       shrinkWrap: true,
       children: [
-        Text('Session Control', style: TextStyle(color: colors['text']!, fontSize: 16, fontWeight: FontWeight.w700)),
+        Text(
+          'Session Control',
+          style: TextStyle(
+            color: colors['text']!,
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
         const SizedBox(height: 10),
         _buildSessionControlListItem(
           colors,
-          icon: _keyboardInputEnabledForUser2 ? Icons.keyboard : Icons.keyboard_hide,
+          icon: _keyboardInputEnabledForUser2
+              ? Icons.keyboard
+              : Icons.keyboard_hide,
           title: 'Keyboard',
-          subtitle: _keyboardInputEnabledForUser2 ? 'Enabled for remote input' : 'Disabled for remote input',
+          subtitle: _keyboardInputEnabledForUser2
+              ? 'Enabled for remote input'
+              : 'Disabled for remote input',
           trailing: Switch.adaptive(
             value: _keyboardInputEnabledForUser2,
             onChanged: (value) => _setInputControl(keyboardEnabled: value),
@@ -4538,7 +4983,9 @@ switch ($action) {
           colors,
           icon: _mouseInputEnabledForUser2 ? Icons.mouse : Icons.mouse_outlined,
           title: 'Mouse',
-          subtitle: _mouseInputEnabledForUser2 ? 'Enabled for remote input' : 'Disabled for remote input',
+          subtitle: _mouseInputEnabledForUser2
+              ? 'Enabled for remote input'
+              : 'Disabled for remote input',
           trailing: Switch.adaptive(
             value: _mouseInputEnabledForUser2,
             onChanged: (value) => _setInputControl(mouseEnabled: value),
@@ -4587,7 +5034,10 @@ switch ($action) {
           onTap: () => _sendSystemAction('logout'),
         ),
         const SizedBox(height: 12),
-        Text('Display', style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600)),
+        Text(
+          'Display',
+          style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600),
+        ),
         const SizedBox(height: 8),
         _buildPresetSelectors(colors),
         const SizedBox(height: 14),
@@ -4618,7 +5068,10 @@ switch ($action) {
           ],
         ),
         const SizedBox(height: 14),
-        Text('File Paths', style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600)),
+        Text(
+          'File Paths',
+          style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600),
+        ),
         const SizedBox(height: 8),
         Container(
           padding: const EdgeInsets.all(10),
@@ -4690,7 +5143,11 @@ switch ($action) {
         ),
         title: Text(
           title,
-          style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600, fontSize: 13),
+          style: TextStyle(
+            color: colors['text']!,
+            fontWeight: FontWeight.w600,
+            fontSize: 13,
+          ),
         ),
         subtitle: Text(
           subtitle,
@@ -4715,19 +5172,29 @@ switch ($action) {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Screenshots Path:', style: TextStyle(fontWeight: FontWeight.w600)),
+                const Text(
+                  'Screenshots Path:',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
                 const SizedBox(height: 8),
                 TextField(
                   controller: TextEditingController(text: tempScreenshot),
-                  decoration: const InputDecoration(hintText: 'Enter screenshots path'),
+                  decoration: const InputDecoration(
+                    hintText: 'Enter screenshots path',
+                  ),
                   onChanged: (v) => tempScreenshot = v,
                 ),
                 const SizedBox(height: 16),
-                const Text('Recordings Path:', style: TextStyle(fontWeight: FontWeight.w600)),
+                const Text(
+                  'Recordings Path:',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
                 const SizedBox(height: 8),
                 TextField(
                   controller: TextEditingController(text: tempRecordings),
-                  decoration: const InputDecoration(hintText: 'Enter recordings path'),
+                  decoration: const InputDecoration(
+                    hintText: 'Enter recordings path',
+                  ),
                   onChanged: (v) => tempRecordings = v,
                 ),
               ],
@@ -4740,7 +5207,8 @@ switch ($action) {
             ),
             TextButton(
               onPressed: () {
-                if (tempScreenshot.trim().isNotEmpty && tempRecordings.trim().isNotEmpty) {
+                if (tempScreenshot.trim().isNotEmpty &&
+                    tempRecordings.trim().isNotEmpty) {
                   try {
                     io.Directory(tempScreenshot).createSync(recursive: true);
                     io.Directory(tempRecordings).createSync(recursive: true);
@@ -4748,13 +5216,25 @@ switch ($action) {
                       _screenshotPath = tempScreenshot;
                       _recordingsPath = tempRecordings;
                     });
-                    _showMessage(context, 'Paths updated successfully', _getColors(context));
+                    _showMessage(
+                      context,
+                      'Paths updated successfully',
+                      _getColors(context),
+                    );
                     Navigator.pop(ctx);
                   } catch (e) {
-                    _showMessage(context, 'Error creating directories: $e', _getColors(context));
+                    _showMessage(
+                      context,
+                      'Error creating directories: $e',
+                      _getColors(context),
+                    );
                   }
                 } else {
-                  _showMessage(context, 'Both paths cannot be empty', _getColors(context));
+                  _showMessage(
+                    context,
+                    'Both paths cannot be empty',
+                    _getColors(context),
+                  );
                 }
               },
               child: const Text('Save'),
@@ -4772,10 +5252,16 @@ switch ($action) {
         const SizedBox(height: 8),
         DropdownButtonFormField<String>(
           initialValue: _captureResolutionLabel,
-          style: const TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.w700),
+          style: const TextStyle(
+            color: Colors.orangeAccent,
+            fontWeight: FontWeight.w700,
+          ),
           decoration: const InputDecoration(
             labelText: 'Resolution',
-            labelStyle: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.w700),
+            labelStyle: TextStyle(
+              color: Colors.orangeAccent,
+              fontWeight: FontWeight.w700,
+            ),
           ),
           items: const [
             DropdownMenuItem(value: 'Full Screen', child: Text('Full Screen')),
@@ -4811,7 +5297,10 @@ switch ($action) {
               },
               borderRadius: BorderRadius.circular(6),
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: selected ? colors['accent']! : colors['cardBg']!,
                   borderRadius: BorderRadius.circular(6),
@@ -4836,13 +5325,28 @@ switch ($action) {
   Widget _buildNetworkPanel(Map<String, Color> colors) {
     return ListView(
       children: [
-        Text('Network Tools', style: TextStyle(color: colors['text']!, fontSize: 16, fontWeight: FontWeight.w700)),
+        Text(
+          'Network Tools',
+          style: TextStyle(
+            color: colors['text']!,
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
         const SizedBox(height: 10),
         _buildMetricLine('Ping', '$_pingMs ms', colors),
-        _buildMetricLine('Connection', _isConnected ? 'Connected' : 'Disconnected', colors),
+        _buildMetricLine(
+          'Connection',
+          _isConnected ? 'Connected' : 'Disconnected',
+          colors,
+        ),
         _buildMetricLine('Bitrate', _bandwidthText, colors),
         _buildMetricLine('FPS', _fpsText, colors),
-        _buildMetricLine('Frame latency', '${_frameAvgLatencyMs.toStringAsFixed(1)} ms', colors),
+        _buildMetricLine(
+          'Frame latency',
+          '${_frameAvgLatencyMs.toStringAsFixed(1)} ms',
+          colors,
+        ),
         _buildMetricLine('Packet loss', _packetLossText, colors),
         _buildMetricLine('Protocol', 'v$_remoteProtocolVersion', colors),
         _buildMetricLine(
@@ -4855,7 +5359,11 @@ switch ($action) {
           '${_remoteVirtualWidth > 0 ? _remoteVirtualWidth : _remoteFrameWidth}x${_remoteVirtualHeight > 0 ? _remoteVirtualHeight : _remoteFrameHeight}',
           colors,
         ),
-        _buildMetricLine('Scale ratio', _remoteScaleRatio.toStringAsFixed(3), colors),
+        _buildMetricLine(
+          'Scale ratio',
+          _remoteScaleRatio.toStringAsFixed(3),
+          colors,
+        ),
         _buildMetricLine(
           'Peer Capabilities',
           'delta=${_remoteSupportsMoveDelta ? 'on' : 'off'} viewport=${_remoteSupportsViewportHint ? 'on' : 'off'}',
@@ -4865,12 +5373,21 @@ switch ($action) {
         _buildMetricLine('Frames RX', '$_framesReceived', colors),
         _buildMetricLine('Frames TX', '$_framesSent', colors),
         const SizedBox(height: 10),
-        _buildActionButton(Icons.refresh, 'Refresh Diagnostics', () => _refreshPing(), colors),
+        _buildActionButton(
+          Icons.refresh,
+          'Refresh Diagnostics',
+          () => _refreshPing(),
+          colors,
+        ),
       ],
     );
   }
 
-  Widget _buildMetricLine(String label, String value, Map<String, Color> colors) {
+  Widget _buildMetricLine(
+    String label,
+    String value,
+    Map<String, Color> colors,
+  ) {
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
@@ -4883,7 +5400,13 @@ switch ($action) {
         children: [
           Text(label, style: TextStyle(color: colors['textSecondary']!)),
           const Spacer(),
-          Text(value, style: TextStyle(color: colors['text']!, fontWeight: FontWeight.w600)),
+          Text(
+            value,
+            style: TextStyle(
+              color: colors['text']!,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ],
       ),
     );
@@ -4938,18 +5461,29 @@ switch ($action) {
                     isReceived
                         ? 'Reâ”œÂºu de: $from${fileSize.isNotEmpty ? '  Î“Ã‡Ã³  $fileSize' : ''}'
                         : 'Envoyâ”œâŒ${fileSize.isNotEmpty ? '  Î“Ã‡Ã³  $fileSize' : ''}',
-                    style: TextStyle(color: colors['textSecondary'], fontSize: 10),
+                    style: TextStyle(
+                      color: colors['textSecondary'],
+                      fontSize: 10,
+                    ),
                   ),
                   if (path.isNotEmpty)
                     Text(
                       'Path: $path',
-                      style: TextStyle(color: colors['textSecondary'], fontSize: 10),
+                      style: TextStyle(
+                        color: colors['textSecondary'],
+                        fontSize: 10,
+                      ),
                       overflow: TextOverflow.ellipsis,
                     ),
-                  if (status.isNotEmpty || speed.isNotEmpty || progress.isNotEmpty)
+                  if (status.isNotEmpty ||
+                      speed.isNotEmpty ||
+                      progress.isNotEmpty)
                     Text(
                       'Status: $status  ${progress.isNotEmpty ? 'Î“Ã‡Ã³ $progress%' : ''}  ${speed.isNotEmpty ? 'Î“Ã‡Ã³ $speed' : ''}',
-                      style: TextStyle(color: colors['textSecondary'], fontSize: 10),
+                      style: TextStyle(
+                        color: colors['textSecondary'],
+                        fontSize: 10,
+                      ),
                     ),
                 ],
               ),
@@ -4966,7 +5500,11 @@ switch ($action) {
                       color: colors['accent']!,
                       borderRadius: BorderRadius.circular(6),
                     ),
-                    child: const Icon(Icons.save_alt, color: Colors.white, size: 14),
+                    child: const Icon(
+                      Icons.save_alt,
+                      color: Colors.white,
+                      size: 14,
+                    ),
                   ),
                 ),
               )
@@ -5000,7 +5538,11 @@ switch ($action) {
                       color: Colors.red.shade500,
                       borderRadius: BorderRadius.circular(6),
                     ),
-                    child: const Icon(Icons.close, color: Colors.white, size: 14),
+                    child: const Icon(
+                      Icons.close,
+                      color: Colors.white,
+                      size: 14,
+                    ),
                   ),
                 ),
               ),
@@ -5050,7 +5592,10 @@ switch ($action) {
         children: [
           Icon(icon, size: 18),
           const SizedBox(width: 8),
-          Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+          ),
         ],
       ),
     );
@@ -5058,11 +5603,15 @@ switch ($action) {
 
   Widget _buildMessageBubble(String message, Map<String, Color> colors) {
     final isPeer = message.startsWith('Peer::');
-    final clean = isPeer ? message.substring('Peer::'.length) : message.replaceFirst('You: ', '');
+    final clean = isPeer
+        ? message.substring('Peer::'.length)
+        : message.replaceFirst('You: ', '');
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
-        mainAxisAlignment: isPeer ? MainAxisAlignment.start : MainAxisAlignment.end,
+        mainAxisAlignment: isPeer
+            ? MainAxisAlignment.start
+            : MainAxisAlignment.end,
         children: [
           Flexible(
             child: Container(
@@ -5090,14 +5639,13 @@ switch ($action) {
 
     setState(() {
       _chatMessages.add('You: $value');
-      _sendSessionPayload(
-        messageType: 'chat',
-        payload: {'text': value},
-      );
+      _sendSessionPayload(messageType: 'chat', payload: {'text': value});
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_chatScrollController.hasClients) {
-        _chatScrollController.jumpTo(_chatScrollController.position.maxScrollExtent);
+        _chatScrollController.jumpTo(
+          _chatScrollController.position.maxScrollExtent,
+        );
       }
     });
     _composerController.clear();
@@ -5121,7 +5669,11 @@ switch ($action) {
     }
     const maxSize = 8 * 1024 * 1024; // 8 MB
     if (bytes.length > maxSize) {
-      _showMessage(context, 'Fichier trop grand (max 8 MB)', _getColors(context));
+      _showMessage(
+        context,
+        'Fichier trop grand (max 8 MB)',
+        _getColors(context),
+      );
       return;
     }
     final fileName = file.name;
@@ -5147,13 +5699,21 @@ switch ($action) {
         'fileData': '',
       });
     });
-    _showMessage(context, '${tr('selected_for_upload')}: $fileName', _getColors(context));
+    _showMessage(
+      context,
+      '${tr('selected_for_upload')}: $fileName',
+      _getColors(context),
+    );
   }
 
   Future<void> _saveReceivedFile(Map<String, String> transfer) async {
     final fileData = transfer['fileData'] ?? '';
     if (fileData.isEmpty) {
-      _showMessage(context, 'Aucune donnâ”œâŒe disponible', _getColors(context));
+      _showMessage(
+        context,
+        'Aucune donnâ”œâŒe disponible',
+        _getColors(context),
+      );
       return;
     }
     final receiveDir = _buildReceivedFilesDirectory();
@@ -5169,14 +5729,22 @@ switch ($action) {
       }
       await outputFile.writeAsBytes(bytes);
       if (!mounted) return;
-      _showMessage(context, 'Fichier sauvegardâ”œâŒ: $outputPath', _getColors(context));
+      _showMessage(
+        context,
+        'Fichier sauvegardâ”œâŒ: $outputPath',
+        _getColors(context),
+      );
     } catch (e) {
       if (!mounted) return;
       _showMessage(context, 'Erreur sauvegarde: $e', _getColors(context));
     }
   }
 
-  void _showMessage(BuildContext context, String message, Map<String, Color> colors) {
+  void _showMessage(
+    BuildContext context,
+    String message,
+    Map<String, Color> colors,
+  ) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
@@ -5190,13 +5758,10 @@ switch ($action) {
     final dir = _buildReceivedFilesDirectory();
     if (!mounted) return;
     setState(() => _receiveTargetPath = dir);
-    
+
     // Request list of files from remote machine for browsing
-    _sendSessionPayload(
-      messageType: 'list_files',
-      payload: {'path': ''},
-    );
-    
+    _sendSessionPayload(messageType: 'list_files', payload: {'path': ''});
+
     _showMessage(context, 'Receive folder fixed: $dir', _getColors(context));
   }
 
@@ -5213,7 +5778,8 @@ switch ($action) {
       if (!screenshotsDir.existsSync()) {
         screenshotsDir.createSync(recursive: true);
       }
-      final outputPath = '${screenshotsDir.path}\\remote_screenshot_${_timestampForFile()}.jpg';
+      final outputPath =
+          '${screenshotsDir.path}\\remote_screenshot_${_timestampForFile()}.jpg';
 
       await io.File(outputPath).writeAsBytes(_remoteScreenFrame!, flush: true);
       if (!mounted) return;
@@ -5237,59 +5803,66 @@ switch ($action) {
     debugPrint('LOOP_START: _isScreenSharing=$_isScreenSharing');
     if (!_canSignal || !_isScreenSharing || _isCapturing) return;
     final nowMs = DateTime.now().millisecondsSinceEpoch;
-    
+
     // OPTIMIZATION: Reduced latency check from 24ms to 8ms
     // Previously: if (nowMs - _lastInputSentAtMs < 24) return;
     // This allows video to send more frequently while still respecting input priority
     if (nowMs - _lastInputSentAtMs < 8) return;
-    
+
     _isCapturing = true;
     final captureStartMs = DateTime.now().millisecondsSinceEpoch;
-    
+
     try {
       final bytes = await _captureLocalScreenToJpegBytes();
       debugPrint('CAPTURE_RESULT: bytes=${bytes?.length ?? "null"}');
       if (!mounted) return;
       if (bytes == null || bytes.isEmpty) {
         print('[ScreenShare] Capture returned null/empty');
-        final detail = _captureError.isNotEmpty ? _captureError : 'capture null';
+        final detail = _captureError.isNotEmpty
+            ? _captureError
+            : 'capture null';
         if (mounted && _captureError.isEmpty) {
           setState(() => _captureError = detail);
         }
         _sendCaptureStatus('error', detail);
         return;
       }
-      
+
       const maxFrameBytes = 20 * 1024 * 1024;
       if (bytes.length > maxFrameBytes) {
         print('[ScreenShare] Frame too large: ${bytes.length} bytes');
-        if (mounted) setState(() => _captureError = 'too large: ${bytes.length}');
+        if (mounted)
+          setState(() => _captureError = 'too large: ${bytes.length}');
         _sendCaptureStatus('error', 'Frame too large: ${bytes.length} bytes');
         return;
       }
-      
+
       // OPTIMIZATION: Enhanced frame differencing
       // Check if frame is identical to last sent frame
       final hash = _quickFrameHashAdvanced(bytes);
-      final captureTimeMs = DateTime.now().millisecondsSinceEpoch - captureStartMs;
-      
+      final captureTimeMs =
+          DateTime.now().millisecondsSinceEpoch - captureStartMs;
+
       if (hash == _lastFrameHash && (nowMs - _lastFrameSentAtMs) < 1000) {
         // Frame hasn't changed - skip sending (saves bandwidth)
         _framesDropped++;
         _captureTimeMs = captureTimeMs;
         return;
       }
-      
+
       // OPTIMIZATION: Adaptive JPEG quality based on frame size and network
       int quality = _captureJpegQuality;
       if (bytes.length > 512 * 1024) {
         quality = (quality * 0.8).toInt().clamp(30, 90);
       }
-      
+
       final channel = widget.signalingService?.channel;
       debugPrint('PRE_SEND: channel=${channel != null ? "ok" : "NULL"}');
       final b64 = base64Encode(bytes);
-      final encodeTimeMs = DateTime.now().millisecondsSinceEpoch - captureStartMs - captureTimeMs;
+      final encodeTimeMs =
+          DateTime.now().millisecondsSinceEpoch -
+          captureStartMs -
+          captureTimeMs;
       final sent = _sendSessionPayload(
         messageType: 'screen_frame',
         payload: {
@@ -5299,10 +5872,18 @@ switch ($action) {
           'frameHash': hash,
           'frameWidth': _localFrameWidth,
           'frameHeight': _localFrameHeight,
-          'virtualWidth': _localFrameWidth > 0 ? _localFrameWidth : _virtualWidth,
-          'virtualHeight': _localFrameHeight > 0 ? _localFrameHeight : _virtualHeight,
-          'remoteWidth': _localCaptureWidth > 0 ? _localCaptureWidth : _screenWidthActual,
-          'remoteHeight': _localCaptureHeight > 0 ? _localCaptureHeight : _screenHeightActual,
+          'virtualWidth': _localFrameWidth > 0
+              ? _localFrameWidth
+              : _virtualWidth,
+          'virtualHeight': _localFrameHeight > 0
+              ? _localFrameHeight
+              : _virtualHeight,
+          'remoteWidth': _localCaptureWidth > 0
+              ? _localCaptureWidth
+              : _screenWidthActual,
+          'remoteHeight': _localCaptureHeight > 0
+              ? _localCaptureHeight
+              : _screenHeightActual,
           'screenCount': _localScreenCount,
           'screenIndex': _selectedLocalScreenIndex,
           'captureLeft': _localCaptureLeft,
@@ -5321,23 +5902,26 @@ switch ($action) {
         return;
       }
       debugPrint('POST_SEND: _framesTX=$_framesSent');
-      
+
       _lastFrameHash = hash;
       _lastFrameSentHash = hash;
       _lastFrameSentAtMs = nowMs;
       _lastFrameBytes = bytes;
       _lastFrameCaptureTime = DateTime.now();
-      
-      if (mounted) setState(() { 
-        _framesSent++; 
-        _captureError = '';
-        _captureTimeMs = captureTimeMs;
-        _encodeTimeMs = encodeTimeMs;
-      });
-      
+
+      if (mounted)
+        setState(() {
+          _framesSent++;
+          _captureError = '';
+          _captureTimeMs = captureTimeMs;
+          _encodeTimeMs = encodeTimeMs;
+        });
+
       _sendCaptureStatus('ok', '');
       if (_framesSent % 30 == 0) {
-        print('[ScreenShare] Sent frame #$_framesSent (${bytes.length} bytes) ${_localFrameWidth}x$_localFrameHeight quality=$quality');
+        print(
+          '[ScreenShare] Sent frame #$_framesSent (${bytes.length} bytes) ${_localFrameWidth}x$_localFrameHeight quality=$quality',
+        );
       }
     } catch (e, st) {
       debugPrint('LOOP_EXCEPTION: $e\n$st');
@@ -5362,28 +5946,28 @@ switch ($action) {
   /// Uses multi-level hashing to detect frame changes at different granularities
   int _quickFrameHashAdvanced(Uint8List bytes) {
     if (bytes.isEmpty) return 0;
-    
+
     // Sample from multiple regions: start, middle, end, and scattered points
     var hash = bytes.length * 33;
-    
+
     // Start region (first 1%)
     final startLen = (bytes.length ~/ 100).clamp(256, 2048);
     for (var i = 0; i < startLen && i < bytes.length; i += 4) {
       hash = ((hash * 33) ^ bytes[i]) & 0x7fffffff;
     }
-    
+
     // Middle region
     final mid = bytes.length ~/ 2;
     for (var i = mid; i < mid + startLen && i < bytes.length; i += 4) {
       hash = ((hash * 33) ^ bytes[i]) & 0x7fffffff;
     }
-    
+
     // End region
     final endStart = (bytes.length - startLen).clamp(0, bytes.length);
     for (var i = endStart; i < bytes.length; i += 4) {
       hash = ((hash * 33) ^ bytes[i]) & 0x7fffffff;
     }
-    
+
     return hash;
   }
 
@@ -5394,7 +5978,7 @@ switch ($action) {
     if (_lastFrameCaptureTime != null) {
       final latency = now - _lastFrameCaptureTime!.millisecondsSinceEpoch;
       _frameAvgLatencyMs = (_frameAvgLatencyMs * 0.9) + (latency * 0.1);
-      
+
       // Histogram for latency distribution
       final bucket = (latency ~/ 50).clamp(0, 19);
       _latencyHistogram[bucket]++;
@@ -5414,18 +5998,25 @@ switch ($action) {
     try {
       _user32Lib ??= DynamicLibrary.open('user32.dll');
       _gdi32Lib ??= DynamicLibrary.open('gdi32.dll');
-      _nativeGetCursorInfo ??= _user32Lib!.lookupFunction<
-          Int32 Function(Pointer<_CursorInfoNative>),
-          int Function(Pointer<_CursorInfoNative>)>('GetCursorInfo');
-      _nativeLoadCursorW ??= _user32Lib!.lookupFunction<
-          IntPtr Function(IntPtr, Pointer<Utf16>),
-          int Function(int, Pointer<Utf16>)>('LoadCursorW');
-      _nativeGetIconInfo ??= _user32Lib!.lookupFunction<
-          Int32 Function(IntPtr, Pointer<_IconInfoNative>),
-          int Function(int, Pointer<_IconInfoNative>)>('GetIconInfo');
-      _nativeDeleteObject ??= _gdi32Lib!.lookupFunction<
-          Int32 Function(IntPtr),
-          int Function(int)>('DeleteObject');
+      _nativeGetCursorInfo ??= _user32Lib!
+          .lookupFunction<
+            Int32 Function(Pointer<_CursorInfoNative>),
+            int Function(Pointer<_CursorInfoNative>)
+          >('GetCursorInfo');
+      _nativeLoadCursorW ??= _user32Lib!
+          .lookupFunction<
+            IntPtr Function(IntPtr, Pointer<Utf16>),
+            int Function(int, Pointer<Utf16>)
+          >('LoadCursorW');
+      _nativeGetIconInfo ??= _user32Lib!
+          .lookupFunction<
+            Int32 Function(IntPtr, Pointer<_IconInfoNative>),
+            int Function(int, Pointer<_IconInfoNative>)
+          >('GetIconInfo');
+      _nativeDeleteObject ??= _gdi32Lib!
+          .lookupFunction<Int32 Function(IntPtr), int Function(int)>(
+            'DeleteObject',
+          );
     } catch (e) {
       _nativeCursorApiInitFailed = true;
       debugPrint('[Cursor] Native API init failed: $e');
@@ -5502,12 +6093,14 @@ switch ($action) {
   void _startCursorUpdateTimer() {
     // Cancel existing timer
     _cursorUpdateTimer?.cancel();
-    
+
     // Start high-frequency cursor update loop
     // 60-120Hz = 8-16ms interval (NOT tied to frame refresh rate)
-    final cursorFreqMs = _cursorUpdateFreqMs;  // 250 Hz target
-    
-    _cursorUpdateTimer = Timer.periodic(Duration(milliseconds: cursorFreqMs), (_) {
+    final cursorFreqMs = _cursorUpdateFreqMs; // 250 Hz target
+
+    _cursorUpdateTimer = Timer.periodic(Duration(milliseconds: cursorFreqMs), (
+      _,
+    ) {
       _cursorUpdateLoop();
     });
   }
@@ -5521,21 +6114,21 @@ switch ($action) {
     if (widget.sendLocalScreen) {
       _syncLocalCursorFromSystem();
     }
-    
+
     // Avoid extra UI churn while actively holding mouse button down.
     if (!_mouseButtonDown) {
       _updateCursorPredictionFrame();
     }
-    
+
     // Check if cursor position has changed significantly
     final dx = (_localCursorX - _lastSentCursorX).abs();
     final dy = (_localCursorY - _lastSentCursorY).abs();
-    
+
     // Send update if cursor moved (even slightly) or hasn't been sent recently
     final timeSinceLastSend = _cursorMovementStopwatch.elapsedMilliseconds;
     final significantMovement = dx > 0.001 || dy > 0.001;
-    final timeoutElapsed = timeSinceLastSend > 120;  // Keep alive updates
-    
+    final timeoutElapsed = timeSinceLastSend > 120; // Keep alive updates
+
     if (significantMovement || timeoutElapsed) {
       _sendCursorUpdate();
     }
@@ -5543,8 +6136,12 @@ switch ($action) {
 
   void _syncLocalCursorFromSystem() {
     if (!io.Platform.isWindows) return;
-    final capWidth = _localCaptureWidth > 0 ? _localCaptureWidth : _screenWidthActual;
-    final capHeight = _localCaptureHeight > 0 ? _localCaptureHeight : _screenHeightActual;
+    final capWidth = _localCaptureWidth > 0
+        ? _localCaptureWidth
+        : _screenWidthActual;
+    final capHeight = _localCaptureHeight > 0
+        ? _localCaptureHeight
+        : _screenHeightActual;
     if (capWidth <= 0 || capHeight <= 0) return;
 
     final point = calloc<win32.POINT>();
@@ -5565,7 +6162,7 @@ switch ($action) {
   /// Also sends cursor type (light: ~30 bytes total, not icon data)
   void _sendCursorUpdate() {
     if (!_canSignal) return;
-    
+
     // Native cursor-shape polling.
     // Keep this moderate to avoid adding jitter during heavy click bursts.
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -5573,21 +6170,22 @@ switch ($action) {
       _lastCursorShapeUpdateMs = now;
       _cursorShapeType = _detectSystemCursorShape();
     }
-    
+
     // Build cursor payload (very small: 2 floats + type string = ~30-50 bytes)
     final payload = <String, dynamic>{
       'action': 'move',
       'x': _localCursorX.clamp(0.0, 1.0),
       'y': _localCursorY.clamp(0.0, 1.0),
-      'channel': 'cursor_input',  // 🔑 SEPARATE CHANNEL (not 'input' or 'video')
-      'cursorShape': _cursorShapeType,  // Light: just the type string (pointer, text, hand, etc)
+      'channel': 'cursor_input', // 🔑 SEPARATE CHANNEL (not 'input' or 'video')
+      'cursorShape':
+          _cursorShapeType, // Light: just the type string (pointer, text, hand, etc)
       'timestamp': DateTime.now().millisecondsSinceEpoch,
       'seq': ++_inputSequence,
     };
-    
+
     // Send immediately (high priority, tiny packet)
     _sendSessionPayload(messageType: 'cursor_update', payload: payload);
-    
+
     // Update tracking
     _lastSentCursorX = _localCursorX;
     _lastSentCursorY = _localCursorY;
@@ -5660,7 +6258,10 @@ switch ($action) {
     final inX = local.dx - frameRect.left;
     final inY = local.dy - frameRect.top;
     if (!fillViewport &&
-        (inX < 0 || inY < 0 || inX > frameRect.width || inY > frameRect.height)) {
+        (inX < 0 ||
+            inY < 0 ||
+            inX > frameRect.width ||
+            inY > frameRect.height)) {
       return null;
     }
 
@@ -5681,16 +6282,22 @@ switch ($action) {
     final ny = normY.clamp(0.0, 1.0);
     final safeWidth = targetWidth.clamp(1, 32768);
     final safeHeight = targetHeight.clamp(1, 32768);
-    final px = targetLeft + ((safeWidth - 1) * nx).round().clamp(0, safeWidth - 1);
-    final py = targetTop + ((safeHeight - 1) * ny).round().clamp(0, safeHeight - 1);
+    final px =
+        targetLeft + ((safeWidth - 1) * nx).round().clamp(0, safeWidth - 1);
+    final py =
+        targetTop + ((safeHeight - 1) * ny).round().clamp(0, safeHeight - 1);
     return Offset(px.toDouble(), py.toDouble());
   }
 
   Rect _computeRemoteFrameDrawRect(Size viewportSize) {
     return computeDisplayBounds(
       viewportSize: viewportSize,
-      sourceWidth: _remoteFrameWidth > 0 ? _remoteFrameWidth : _remoteVirtualWidth,
-      sourceHeight: _remoteFrameHeight > 0 ? _remoteFrameHeight : _remoteVirtualHeight,
+      sourceWidth: _remoteFrameWidth > 0
+          ? _remoteFrameWidth
+          : _remoteVirtualWidth,
+      sourceHeight: _remoteFrameHeight > 0
+          ? _remoteFrameHeight
+          : _remoteVirtualHeight,
       fillViewport: _fillRemoteViewport,
     );
   }
@@ -5699,8 +6306,12 @@ switch ($action) {
     return normalizeCoordinates(
       local: local,
       viewportSize: viewportSize,
-      sourceWidth: _remoteFrameWidth > 0 ? _remoteFrameWidth : _remoteVirtualWidth,
-      sourceHeight: _remoteFrameHeight > 0 ? _remoteFrameHeight : _remoteVirtualHeight,
+      sourceWidth: _remoteFrameWidth > 0
+          ? _remoteFrameWidth
+          : _remoteVirtualWidth,
+      sourceHeight: _remoteFrameHeight > 0
+          ? _remoteFrameHeight
+          : _remoteVirtualHeight,
       // Rendering is always BoxFit.contain; keep input mapping identical.
       fillViewport: false,
     );
@@ -5790,7 +6401,11 @@ switch ($action) {
       case 'loading':
       case 'wait':
         // Wait/loading cursor (animated would be ideal, but static for now)
-        return const Icon(Icons.hourglass_bottom, color: Colors.white, size: 18);
+        return const Icon(
+          Icons.hourglass_bottom,
+          color: Colors.white,
+          size: 18,
+        );
       default:
         // Fallback to arrow
         return CustomPaint(
@@ -5805,22 +6420,28 @@ switch ($action) {
     final x = (payload['x'] is num) ? (payload['x'] as num).toDouble() : 0.5;
     final y = (payload['y'] is num) ? (payload['y'] as num).toDouble() : 0.5;
     final shape = (payload['cursorShape'] ?? 'arrow').toString();
-    
+
     // Calculate velocity for smooth prediction
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     int deltaMs = nowMs - _lastRemoteCursorUpdateMs;
     if (deltaMs == 0) deltaMs = 1;
-    
+
     // Clamp new position
     final newX = x.clamp(0.0, 1.0);
     final newY = y.clamp(0.0, 1.0);
-    
+
     // Calculate velocity (pixels/second)
     final oldX = _remoteCursorDisplayX;
     final oldY = _remoteCursorDisplayY;
-    _remoteCursorVelocityX = ((newX - oldX) / (deltaMs / 1000.0)).clamp(-5.0, 5.0);
-    _remoteCursorVelocityY = ((newY - oldY) / (deltaMs / 1000.0)).clamp(-5.0, 5.0);
-    
+    _remoteCursorVelocityX = ((newX - oldX) / (deltaMs / 1000.0)).clamp(
+      -5.0,
+      5.0,
+    );
+    _remoteCursorVelocityY = ((newY - oldY) / (deltaMs / 1000.0)).clamp(
+      -5.0,
+      5.0,
+    );
+
     if (mounted) {
       setState(() {
         // Update remote cursor display position with smooth animation
@@ -5832,17 +6453,17 @@ switch ($action) {
         _cursorShapeType = shape;
         _showRemoteCursor = false;
       });
-      
+
       // Trigger animation frame updates for smooth motion
       _updateCursorPredictionFrame();
     }
   }
-  
+
   void _updateCursorPredictionFrame() {
     // Called frequently to animate cursor toward predicted position
     // This creates smooth interpolation between updates instead of jumpy movement
     if (!mounted) return;
-    
+
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final deltaMs = (nowMs - _lastRemoteCursorUpdateMs).toDouble();
 
@@ -5852,24 +6473,29 @@ switch ($action) {
       });
       return;
     }
-    
+
     // Apply velocity prediction (extrapolate where cursor should be)
     // This anticipates the cursor movement based on velocity
-    if (deltaMs < 50 && (
-        (_remoteCursorVelocityX.abs() > 0.01 || _remoteCursorVelocityY.abs() > 0.01)
-    )) {
+    if (deltaMs < 50 &&
+        ((_remoteCursorVelocityX.abs() > 0.01 ||
+            _remoteCursorVelocityY.abs() > 0.01))) {
       final predictDeltaSec = deltaMs / 1000.0;
-      final predictX = (_remoteCursorDisplayX + _remoteCursorVelocityX * predictDeltaSec).clamp(0.0, 1.0);
-      final predictY = (_remoteCursorDisplayY + _remoteCursorVelocityY * predictDeltaSec).clamp(0.0, 1.0);
-      
-      if (mounted && (
-          (predictX - _remoteCursorPredictX).abs() > 0.001 ||
-          (predictY - _remoteCursorPredictY).abs() > 0.001
-      )) {
+      final predictX =
+          (_remoteCursorDisplayX + _remoteCursorVelocityX * predictDeltaSec)
+              .clamp(0.0, 1.0);
+      final predictY =
+          (_remoteCursorDisplayY + _remoteCursorVelocityY * predictDeltaSec)
+              .clamp(0.0, 1.0);
+
+      if (mounted &&
+          ((predictX - _remoteCursorPredictX).abs() > 0.001 ||
+              (predictY - _remoteCursorPredictY).abs() > 0.001)) {
         setState(() {
           // Smoothly update predicted position
-          _remoteCursorPredictX = _remoteCursorPredictX + (predictX - _remoteCursorPredictX) * 0.3;
-          _remoteCursorPredictY = _remoteCursorPredictY + (predictY - _remoteCursorPredictY) * 0.3;
+          _remoteCursorPredictX =
+              _remoteCursorPredictX + (predictX - _remoteCursorPredictX) * 0.3;
+          _remoteCursorPredictY =
+              _remoteCursorPredictY + (predictY - _remoteCursorPredictY) * 0.3;
         });
       }
     }
@@ -5884,7 +6510,9 @@ switch ($action) {
     }
 
     // Use stable paths so antivirus exclusions can target one precise location.
-    final stableDir = io.Directory('${io.Platform.environment['LOCALAPPDATA']}\\BIMStreaming\\screenshare');
+    final stableDir = io.Directory(
+      '${io.Platform.environment['LOCALAPPDATA']}\\BIMStreaming\\screenshare',
+    );
     if (!stableDir.existsSync()) {
       stableDir.createSync(recursive: true);
     }
@@ -5893,7 +6521,8 @@ switch ($action) {
     final escapedOutput = outputPath.replaceAll("'", "''");
 
     // Script â”œâŒcrit dans un fichier (.ps1) pour â”œâŒviter tout problâ”œÂ¿me d'encodage en ligne de commande
-    final scriptContent = r'''Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+    final scriptContent =
+        r'''Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -5931,18 +6560,21 @@ Write-Output "$tw,$th,$($b.Left),$($b.Top),$($b.Width),$($b.Height)"
 $params.Dispose()
 $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
 '''
-        .replaceAll('OUTPUT_PATH', escapedOutput)
-        .replaceAll('MAX_WIDTH', _captureMaxWidth.toString())
-        .replaceAll('SCREEN_INDEX', _selectedLocalScreenIndex.toString())
-        .replaceAll('JPEG_QUALITY', '${_captureJpegQuality}L');
+            .replaceAll('OUTPUT_PATH', escapedOutput)
+            .replaceAll('MAX_WIDTH', _captureMaxWidth.toString())
+            .replaceAll('SCREEN_INDEX', _selectedLocalScreenIndex.toString())
+            .replaceAll('JPEG_QUALITY', '${_captureJpegQuality}L');
 
     await io.File(scriptPath).writeAsString(scriptContent);
 
     try {
-      final result = await _runPowerShell(
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
-        timeout: const Duration(seconds: 12),
-      );
+      final result = await _runPowerShell([
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        scriptPath,
+      ], timeout: const Duration(seconds: 12));
       if (result.exitCode != 0) {
         var err = '${result.stderr}'.trim();
         if (err.isEmpty) {
@@ -5959,12 +6591,19 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
         if (blockedBySecurity) {
           _forceNativeScreenCapture = true;
           if (mounted) {
-            setState(() => _captureError = 'PowerShell capture blocked by security policy; using native capture fallback.');
+            setState(
+              () => _captureError =
+                  'PowerShell capture blocked by security policy; using native capture fallback.',
+            );
           }
           return _captureLocalScreenNativeJpegBytes();
         }
         print('[ScreenShare] PS1 failed (exit=${result.exitCode}): $err');
-        if (mounted) setState(() => _captureError = 'PS1 exit=${result.exitCode}: ${err.substring(0, err.length.clamp(0, 120))}');
+        if (mounted)
+          setState(
+            () => _captureError =
+                'PS1 exit=${result.exitCode}: ${err.substring(0, err.length.clamp(0, 120))}',
+          );
         return await _captureLocalScreenFallbackPngBytes(stableDir);
       }
       final file = io.File(outputPath);
@@ -5974,10 +6613,9 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
         return await _captureLocalScreenFallbackPngBytes(stableDir);
       }
       final out = '${result.stdout}'.trim();
-      final line = out.split(RegExp(r'[\r\n]+')).firstWhere(
-        (l) => l.contains(','),
-        orElse: () => '',
-      );
+      final line = out
+          .split(RegExp(r'[\r\n]+'))
+          .firstWhere((l) => l.contains(','), orElse: () => '');
       if (line.isNotEmpty) {
         final parts = line.split(',');
         if (parts.length >= 2) {
@@ -5989,15 +6627,19 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
           }
         }
         if (parts.length >= 6) {
-          _localCaptureLeft = int.tryParse(parts[2].trim()) ?? _localCaptureLeft;
+          _localCaptureLeft =
+              int.tryParse(parts[2].trim()) ?? _localCaptureLeft;
           _localCaptureTop = int.tryParse(parts[3].trim()) ?? _localCaptureTop;
-          _localCaptureWidth = int.tryParse(parts[4].trim()) ?? _localCaptureWidth;
-          _localCaptureHeight = int.tryParse(parts[5].trim()) ?? _localCaptureHeight;
+          _localCaptureWidth =
+              int.tryParse(parts[4].trim()) ?? _localCaptureWidth;
+          _localCaptureHeight =
+              int.tryParse(parts[5].trim()) ?? _localCaptureHeight;
         }
       }
       final bytes = await file.readAsBytes();
       if (bytes.isEmpty) {
-        if (mounted) setState(() => _captureError = 'capture produced empty JPEG');
+        if (mounted)
+          setState(() => _captureError = 'capture produced empty JPEG');
         return await _captureLocalScreenFallbackPngBytes(stableDir);
       }
       return bytes;
@@ -6006,7 +6648,9 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
       if (mounted) setState(() => _captureError = e.toString());
       return await _captureLocalScreenFallbackPngBytes(stableDir);
     } finally {
-      try { io.File(outputPath).deleteSync(); } catch (_) {}
+      try {
+        io.File(outputPath).deleteSync();
+      } catch (_) {}
     }
   }
 
@@ -6026,28 +6670,40 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
     }
 
     if (capWidth <= 0 || capHeight <= 0) {
-      if (mounted) setState(() => _captureError = 'Native capture invalid screen bounds');
+      if (mounted)
+        setState(() => _captureError = 'Native capture invalid screen bounds');
       return null;
     }
 
     final hScreenDc = win32.GetDC(0);
     if (hScreenDc == 0) {
-      if (mounted) setState(() => _captureError = 'Native capture GetDC failed');
+      if (mounted)
+        setState(() => _captureError = 'Native capture GetDC failed');
       return null;
     }
 
     final hMemoryDc = win32.CreateCompatibleDC(hScreenDc);
     if (hMemoryDc == 0) {
       win32.ReleaseDC(0, hScreenDc);
-      if (mounted) setState(() => _captureError = 'Native capture CreateCompatibleDC failed');
+      if (mounted)
+        setState(
+          () => _captureError = 'Native capture CreateCompatibleDC failed',
+        );
       return null;
     }
 
-    final hBitmap = win32.CreateCompatibleBitmap(hScreenDc, capWidth, capHeight);
+    final hBitmap = win32.CreateCompatibleBitmap(
+      hScreenDc,
+      capWidth,
+      capHeight,
+    );
     if (hBitmap == 0) {
       win32.DeleteDC(hMemoryDc);
       win32.ReleaseDC(0, hScreenDc);
-      if (mounted) setState(() => _captureError = 'Native capture CreateCompatibleBitmap failed');
+      if (mounted)
+        setState(
+          () => _captureError = 'Native capture CreateCompatibleBitmap failed',
+        );
       return null;
     }
 
@@ -6069,7 +6725,8 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
       win32.DeleteObject(hBitmap);
       win32.DeleteDC(hMemoryDc);
       win32.ReleaseDC(0, hScreenDc);
-      if (mounted) setState(() => _captureError = 'Native capture BitBlt failed');
+      if (mounted)
+        setState(() => _captureError = 'Native capture BitBlt failed');
       return null;
     }
 
@@ -6096,7 +6753,8 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
       );
 
       if (rows == 0) {
-        if (mounted) setState(() => _captureError = 'Native capture GetDIBits failed');
+        if (mounted)
+          setState(() => _captureError = 'Native capture GetDIBits failed');
         return null;
       }
 
@@ -6133,7 +6791,8 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
       if (mounted) setState(() => _captureError = '');
       return Uint8List.fromList(jpg);
     } catch (e) {
-      if (mounted) setState(() => _captureError = 'Native capture exception: $e');
+      if (mounted)
+        setState(() => _captureError = 'Native capture exception: $e');
       return null;
     } finally {
       calloc.free(pixelBuffer);
@@ -6145,9 +6804,12 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
     }
   }
 
-  Future<Uint8List?> _captureLocalScreenFallbackPngBytes(io.Directory stableDir) async {
+  Future<Uint8List?> _captureLocalScreenFallbackPngBytes(
+    io.Directory stableDir,
+  ) async {
     final outputPath = '${stableDir.path}\\frame_fallback.png';
-    final script = r'''
+    final script =
+        r'''
 Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 $all=[System.Windows.Forms.Screen]::AllScreens
 $idx=SCREEN_INDEX
@@ -6161,29 +6823,38 @@ $bmp.Save('OUTPUT_PATH',[System.Drawing.Imaging.ImageFormat]::Png)
 Write-Output "$($bmp.Width),$($bmp.Height),$($b.Left),$($b.Top),$($b.Width),$($b.Height)"
 $g.Dispose();$bmp.Dispose()
 '''
-        .replaceAll('OUTPUT_PATH', outputPath.replaceAll("'", "''"))
-        .replaceAll('SCREEN_INDEX', _selectedLocalScreenIndex.toString());
+            .replaceAll('OUTPUT_PATH', outputPath.replaceAll("'", "''"))
+            .replaceAll('SCREEN_INDEX', _selectedLocalScreenIndex.toString());
 
     try {
-      final result = await _runPowerShell(
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
-        timeout: const Duration(seconds: 10),
-      );
+      final result = await _runPowerShell([
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        script,
+      ], timeout: const Duration(seconds: 10));
       if (result.exitCode != 0) {
         var err = '${result.stderr}'.trim();
         if (err.isEmpty) err = '${result.stdout}'.trim();
         if (mounted && err.isNotEmpty) {
-          setState(() => _captureError = 'Fallback capture failed: ${err.substring(0, err.length.clamp(0, 120))}');
+          setState(
+            () => _captureError =
+                'Fallback capture failed: ${err.substring(0, err.length.clamp(0, 120))}',
+          );
         }
         return null;
       }
       final file = io.File(outputPath);
       if (!file.existsSync()) {
-        if (mounted) setState(() => _captureError = 'Fallback capture file not found');
+        if (mounted)
+          setState(() => _captureError = 'Fallback capture file not found');
         return null;
       }
       final out = '${result.stdout}'.trim();
-      final line = out.split(RegExp(r'[\r\n]+')).firstWhere((l) => l.contains(','), orElse: () => '');
+      final line = out
+          .split(RegExp(r'[\r\n]+'))
+          .firstWhere((l) => l.contains(','), orElse: () => '');
       if (line.isNotEmpty) {
         final parts = line.split(',');
         if (parts.length >= 2) {
@@ -6195,24 +6866,31 @@ $g.Dispose();$bmp.Dispose()
           }
         }
         if (parts.length >= 6) {
-          _localCaptureLeft = int.tryParse(parts[2].trim()) ?? _localCaptureLeft;
+          _localCaptureLeft =
+              int.tryParse(parts[2].trim()) ?? _localCaptureLeft;
           _localCaptureTop = int.tryParse(parts[3].trim()) ?? _localCaptureTop;
-          _localCaptureWidth = int.tryParse(parts[4].trim()) ?? _localCaptureWidth;
-          _localCaptureHeight = int.tryParse(parts[5].trim()) ?? _localCaptureHeight;
+          _localCaptureWidth =
+              int.tryParse(parts[4].trim()) ?? _localCaptureWidth;
+          _localCaptureHeight =
+              int.tryParse(parts[5].trim()) ?? _localCaptureHeight;
         }
       }
       final bytes = await file.readAsBytes();
       if (bytes.isEmpty) {
-        if (mounted) setState(() => _captureError = 'Fallback capture produced empty PNG');
+        if (mounted)
+          setState(() => _captureError = 'Fallback capture produced empty PNG');
         return null;
       }
       if (mounted) setState(() => _captureError = '');
       return bytes;
     } catch (e) {
-      if (mounted) setState(() => _captureError = 'Fallback capture exception: $e');
+      if (mounted)
+        setState(() => _captureError = 'Fallback capture exception: $e');
       return null;
     } finally {
-      try { io.File(outputPath).deleteSync(); } catch (_) {}
+      try {
+        io.File(outputPath).deleteSync();
+      } catch (_) {}
     }
   }
 
@@ -6223,17 +6901,24 @@ $g.Dispose();$bmp.Dispose()
     if (next) {
       _recordingTimer?.cancel();
       _recordingTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
-        if (!_isRecording || _remoteScreenFrame == null || _remoteScreenFrame!.isEmpty) return;
+        if (!_isRecording ||
+            _remoteScreenFrame == null ||
+            _remoteScreenFrame!.isEmpty)
+          return;
         try {
           final dir = io.Directory(_recordingsPath);
           if (!dir.existsSync()) {
             dir.createSync(recursive: true);
           }
-          final path = '${dir.path}\\frame_${_timestampForFile()}_${_recordedFrames.length + 1}.jpg';
+          final path =
+              '${dir.path}\\frame_${_timestampForFile()}_${_recordedFrames.length + 1}.jpg';
           await io.File(path).writeAsBytes(_remoteScreenFrame!, flush: true);
           if (!mounted) return;
           setState(() {
-            _recordedFrames.add({'path': path, 'time': DateTime.now().toIso8601String()});
+            _recordedFrames.add({
+              'path': path,
+              'time': DateTime.now().toIso8601String(),
+            });
           });
         } catch (_) {
           // Ignore intermittent write failures.
@@ -6269,7 +6954,11 @@ $g.Dispose();$bmp.Dispose()
       payload: {'enabled': _audioEnabled},
     );
     unawaited(_syncRemoteAudioPipeline());
-    _showMessage(context, _audioEnabled ? tr('audio_enabled') : tr('audio_disabled'), _getColors(context));
+    _showMessage(
+      context,
+      _audioEnabled ? tr('audio_enabled') : tr('audio_disabled'),
+      _getColors(context),
+    );
   }
 
   void _rebootDevice() {
@@ -6293,7 +6982,11 @@ $g.Dispose();$bmp.Dispose()
                 _connectionStatus = 'Rebooting remote machine...';
               });
               _sendSystemAction('reboot');
-              _showMessage(context, tr('device_rebooting'), _getColors(context));
+              _showMessage(
+                context,
+                tr('device_rebooting'),
+                _getColors(context),
+              );
               _startReconnectLoop();
             },
             child: Text(tr('btn_reboot')),
@@ -6323,7 +7016,9 @@ $g.Dispose();$bmp.Dispose()
                     .map(
                       (value) => DropdownMenuItem<int>(
                         value: value,
-                        child: Text(value == 1 ? '1 minute (default)' : '$value minutes'),
+                        child: Text(
+                          value == 1 ? '1 minute (default)' : '$value minutes',
+                        ),
                       ),
                     )
                     .toList(),
@@ -6381,10 +7076,7 @@ $g.Dispose();$bmp.Dispose()
 
     _sendSessionPayload(
       messageType: 'privacy_mode',
-      payload: {
-        'enabled': true,
-        'durationMs': durationMs,
-      },
+      payload: {'enabled': true, 'durationMs': durationMs},
     );
 
     _privacyModeAutoOffTimer = Timer(Duration(milliseconds: durationMs), () {
@@ -6445,7 +7137,8 @@ $g.Dispose();$bmp.Dispose()
           break;
         case 'privacy_mode_on':
           // Prefer native overlay blackout to ensure reliable privacy mode on host.
-          final nativeBlackoutEnabled = await HostSessionOverlay.startPrivacyOverlay();
+          final nativeBlackoutEnabled =
+              await HostSessionOverlay.startPrivacyOverlay();
           if (!nativeBlackoutEnabled) {
             await io.Process.run('powershell', [
               '-NoProfile',
@@ -6465,9 +7158,12 @@ $null = Add-Type -MemberDefinition '[DllImport("user32.dll")] public static exte
               ? (payload['durationMs'] as num).toInt()
               : 0;
           if (durationMs > 0) {
-            _privacySystemRestoreTimer = Timer(Duration(milliseconds: durationMs), () {
-              unawaited(_applySystemAction({'action': 'privacy_mode_off'}));
-            });
+            _privacySystemRestoreTimer = Timer(
+              Duration(milliseconds: durationMs),
+              () {
+                unawaited(_applySystemAction({'action': 'privacy_mode_off'}));
+              },
+            );
           }
           break;
         case 'privacy_mode_off':
@@ -6490,12 +7186,16 @@ $null = Add-Type -MemberDefinition '[DllImport("user32.dll")] public static exte
       if (!recordingsDir.existsSync()) {
         recordingsDir.createSync(recursive: true);
       }
-      final listPath = '${recordingsDir.path}\\frames_${_timestampForFile()}.txt';
-      final outPath = '${recordingsDir.path}\\session_${_timestampForFile()}.mp4';
+      final listPath =
+          '${recordingsDir.path}\\frames_${_timestampForFile()}.txt';
+      final outPath =
+          '${recordingsDir.path}\\session_${_timestampForFile()}.mp4';
 
       final buffer = StringBuffer();
       for (final frame in _recordedFrames) {
-        final p = (frame['path'] ?? '').replaceAll('\\', '/').replaceAll("'", "''");
+        final p = (frame['path'] ?? '')
+            .replaceAll('\\', '/')
+            .replaceAll("'", "''");
         if (p.isEmpty) continue;
         buffer.writeln("file '$p'");
         buffer.writeln('duration ${1 / _recordingFps}');
@@ -6503,23 +7203,20 @@ $null = Add-Type -MemberDefinition '[DllImport("user32.dll")] public static exte
 
       try {
         await io.File(listPath).writeAsString(buffer.toString());
-        final result = await io.Process.run(
-          'ffmpeg',
-          [
-            '-y',
-            '-f',
-            'concat',
-            '-safe',
-            '0',
-            '-i',
-            listPath,
-            '-vf',
-            'fps=$_recordingFps',
-            '-pix_fmt',
-            'yuv420p',
-            outPath,
-          ],
-        );
+        final result = await io.Process.run('ffmpeg', [
+          '-y',
+          '-f',
+          'concat',
+          '-safe',
+          '0',
+          '-i',
+          listPath,
+          '-vf',
+          'fps=$_recordingFps',
+          '-pix_fmt',
+          'yuv420p',
+          outPath,
+        ]);
 
         if (result.exitCode == 0 && io.File(outPath).existsSync()) {
           return outPath;
@@ -6537,16 +7234,28 @@ $null = Add-Type -MemberDefinition '[DllImport("user32.dll")] public static exte
     return null;
   }
 
-  Widget _buildActionButton(IconData icon, String label, VoidCallback onTap, Map<String, Color> colors, {bool isActive = false, bool isDanger = false, bool enabled = true}) {
+  Widget _buildActionButton(
+    IconData icon,
+    String label,
+    VoidCallback onTap,
+    Map<String, Color> colors, {
+    bool isActive = false,
+    bool isDanger = false,
+    bool enabled = true,
+  }) {
     final bgColor = !enabled
         ? colors['cardBg']!
-        : (isDanger ? Colors.red[600] : (isActive ? colors['accent']! : colors['cardBg']!));
+        : (isDanger
+              ? Colors.red[600]
+              : (isActive ? colors['accent']! : colors['cardBg']!));
     final borderColor = !enabled
         ? colors['border']!
         : (isDanger ? Colors.red[700]! : colors['border']!);
     final fgColor = !enabled
         ? colors['textSecondary']!
-        : (isDanger ? Colors.white : (isActive ? Colors.white : colors['text']!));
+        : (isDanger
+              ? Colors.white
+              : (isActive ? Colors.white : colors['text']!));
 
     return Tooltip(
       message: label,
@@ -6564,7 +7273,14 @@ $null = Add-Type -MemberDefinition '[DllImport("user32.dll")] public static exte
             children: [
               Icon(icon, color: fgColor, size: 16),
               const SizedBox(width: 4),
-              Text(label, style: TextStyle(color: fgColor, fontSize: 12, fontWeight: FontWeight.w500)),
+              Text(
+                label,
+                style: TextStyle(
+                  color: fgColor,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
             ],
           ),
         ),
@@ -6578,12 +7294,15 @@ $null = Add-Type -MemberDefinition '[DllImport("user32.dll")] public static exte
       'bg': isDark ? const Color(0xFF1A1A1A) : const Color(0xFFF5F5F5),
       'cardBg': isDark ? const Color(0xFF2A2A2A) : Colors.white,
       'text': isDark ? Colors.white : Colors.black,
-      'textSecondary': isDark ? const Color(0xFF999999) : const Color(0xFF666666),
+      'textSecondary': isDark
+          ? const Color(0xFF999999)
+          : const Color(0xFF666666),
       'accent': isDark ? const Color(0xFF4A90E2) : const Color(0xFF2E5BF8),
       'border': isDark ? const Color(0xFF404040) : const Color(0xFFE0E0E0),
     };
   }
 }
+
 // ===== Cursor Shape Painters =====
 /// Renders standard arrow cursor (pointer)
 class _ArrowCursorPainter extends CustomPainter {
@@ -6593,7 +7312,7 @@ class _ArrowCursorPainter extends CustomPainter {
       ..color = Colors.white
       ..strokeWidth = 1.5
       ..style = PaintingStyle.fill;
-    
+
     // Arrow pointing up-left
     final path = Path();
     path.moveTo(0, 0);
@@ -6604,10 +7323,10 @@ class _ArrowCursorPainter extends CustomPainter {
     path.lineTo(8, 8);
     path.lineTo(16, 8);
     path.close();
-    
+
     canvas.drawPath(path, fillPaint);
   }
-  
+
   @override
   bool shouldRepaint(_ArrowCursorPainter oldDelegate) => false;
 }
@@ -6620,19 +7339,19 @@ class _TextCursorPainter extends CustomPainter {
       ..color = Colors.white
       ..strokeWidth = 2
       ..style = PaintingStyle.stroke;
-    
+
     final center = size.width / 2;
-    
+
     // Top horizontal bar
     canvas.drawLine(Offset(center - 4, 2), Offset(center + 4, 2), paint);
-    
+
     // Center vertical line
     canvas.drawLine(Offset(center, 4), Offset(center, 16), paint);
-    
+
     // Bottom horizontal bar
     canvas.drawLine(Offset(center - 4, 18), Offset(center + 4, 18), paint);
   }
-  
+
   @override
   bool shouldRepaint(_TextCursorPainter oldDelegate) => false;
 }
@@ -6645,20 +7364,20 @@ class _ResizeXCursorPainter extends CustomPainter {
       ..color = Colors.white
       ..strokeWidth = 2
       ..style = PaintingStyle.stroke;
-    
+
     final center = size.height / 2;
-    
+
     // Left arrow
     canvas.drawLine(Offset(2, center), Offset(8, center), paint);
     canvas.drawLine(Offset(2, center), Offset(6, center - 3), paint);
     canvas.drawLine(Offset(2, center), Offset(6, center + 3), paint);
-    
+
     // Right arrow
     canvas.drawLine(Offset(12, center), Offset(18, center), paint);
     canvas.drawLine(Offset(18, center), Offset(14, center - 3), paint);
     canvas.drawLine(Offset(18, center), Offset(14, center + 3), paint);
   }
-  
+
   @override
   bool shouldRepaint(_ResizeXCursorPainter oldDelegate) => false;
 }
@@ -6671,21 +7390,22 @@ class _ResizeYCursorPainter extends CustomPainter {
       ..color = Colors.white
       ..strokeWidth = 2
       ..style = PaintingStyle.stroke;
-    
+
     final center = size.width / 2;
-    
+
     // Top arrow
     canvas.drawLine(Offset(center, 2), Offset(center, 8), paint);
     canvas.drawLine(Offset(center, 2), Offset(center - 3, 6), paint);
     canvas.drawLine(Offset(center, 2), Offset(center + 3, 6), paint);
-    
+
     // Bottom arrow
     canvas.drawLine(Offset(center, 12), Offset(center, 18), paint);
     canvas.drawLine(Offset(center, 18), Offset(center - 3, 14), paint);
     canvas.drawLine(Offset(center, 18), Offset(center + 3, 14), paint);
   }
-  
+
   @override
   bool shouldRepaint(_ResizeYCursorPainter oldDelegate) => false;
 }
+
 // ===== END: Cursor Shape Painters =====

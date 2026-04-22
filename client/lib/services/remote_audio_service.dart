@@ -48,9 +48,7 @@ class RemoteAudioService {
 
   double _volume = 1.0;
 
-  Future<void> startHost({
-    required int bitrateKbps,
-  }) async {
+  Future<void> startHost({required int bitrateKbps}) async {
     if (_disposed) return;
     _targetBitrateKbps = bitrateKbps.clamp(64, 256);
     _hostRunning = true;
@@ -83,9 +81,7 @@ class RemoteAudioService {
     }
   }
 
-  Future<void> startClient({
-    required double volume,
-  }) async {
+  Future<void> startClient({required double volume}) async {
     if (_disposed) return;
     _volume = volume.clamp(0.0, 1.0);
     _clientRunning = true;
@@ -150,7 +146,11 @@ class RemoteAudioService {
       }
       final seq = seqRaw.toInt();
       if (seq < _expectedSequence) return;
-      _packetBuffer[seq] = _AudioPacket(seq: seq, tsMs: tsRaw.toInt(), bytes: data);
+      _packetBuffer[seq] = _AudioPacket(
+        seq: seq,
+        tsMs: tsRaw.toInt(),
+        bytes: data,
+      );
       _receivedPackets++;
       _firstBufferedAt ??= DateTime.now();
       return;
@@ -201,13 +201,15 @@ class RemoteAudioService {
       // Keep stderr drained.
     });
 
-    unawaited(process.exitCode.then((_) async {
-      if (!_hostRunning || _disposed) return;
-      await Future<void>.delayed(const Duration(milliseconds: 800));
-      if (_hostRunning && !_disposed) {
-        await _startCaptureProcess();
-      }
-    }));
+    unawaited(
+      process.exitCode.then((_) async {
+        if (!_hostRunning || _disposed) return;
+        await Future<void>.delayed(const Duration(milliseconds: 800));
+        if (_hostRunning && !_disposed) {
+          await _startCaptureProcess();
+        }
+      }),
+    );
   }
 
   Future<void> _restartCaptureProcess() async {
@@ -298,29 +300,26 @@ class RemoteAudioService {
     final vol = (_volume * 100).round().clamp(0, 100);
     io.Process process;
     try {
-      process = await io.Process.start(
-        'ffplay',
-        <String>[
-          '-hide_banner',
-          '-loglevel',
-          'warning',
-          '-nodisp',
-          '-fflags',
-          'nobuffer',
-          '-flags',
-          'low_delay',
-          '-probesize',
-          '32',
-          '-analyzeduration',
-          '0',
-          '-sync',
-          'ext',
-          '-volume',
-          '$vol',
-          '-i',
-          'pipe:0',
-        ],
-      );
+      process = await io.Process.start('ffplay', <String>[
+        '-hide_banner',
+        '-loglevel',
+        'warning',
+        '-nodisp',
+        '-fflags',
+        'nobuffer',
+        '-flags',
+        'low_delay',
+        '-probesize',
+        '32',
+        '-analyzeduration',
+        '0',
+        '-sync',
+        'ext',
+        '-volume',
+        '$vol',
+        '-i',
+        'pipe:0',
+      ]);
     } catch (_) {
       return;
     }
@@ -330,13 +329,15 @@ class RemoteAudioService {
       // Keep stderr drained.
     });
 
-    unawaited(process.exitCode.then((_) async {
-      if (!_clientRunning || _disposed) return;
-      await Future<void>.delayed(const Duration(milliseconds: 300));
-      if (_clientRunning && !_disposed) {
-        await _startPlaybackProcess();
-      }
-    }));
+    unawaited(
+      process.exitCode.then((_) async {
+        if (!_clientRunning || _disposed) return;
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        if (_clientRunning && !_disposed) {
+          await _startPlaybackProcess();
+        }
+      }),
+    );
   }
 
   Future<void> _stopPlaybackProcess() async {
@@ -359,7 +360,8 @@ class RemoteAudioService {
     if (_packetBuffer.isEmpty) return;
 
     final now = DateTime.now();
-    if (_firstBufferedAt != null && now.difference(_firstBufferedAt!).inMilliseconds < jitterBufferMs) {
+    if (_firstBufferedAt != null &&
+        now.difference(_firstBufferedAt!).inMilliseconds < jitterBufferMs) {
       return;
     }
 
@@ -409,8 +411,12 @@ class RemoteAudioService {
   }
 
   Future<void> _applyFeedback(Map<String, dynamic> payload) async {
-    final loss = payload['lossRate'] is num ? (payload['lossRate'] as num).toDouble() : 0.0;
-    final ping = payload['pingMs'] is num ? (payload['pingMs'] as num).toInt() : 999;
+    final loss = payload['lossRate'] is num
+        ? (payload['lossRate'] as num).toDouble()
+        : 0.0;
+    final ping = payload['pingMs'] is num
+        ? (payload['pingMs'] as num).toInt()
+        : 999;
 
     var next = _targetBitrateKbps;
     if (loss > 0.08 || ping > 220) {

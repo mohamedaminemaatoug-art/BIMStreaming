@@ -1,9 +1,9 @@
 // Énumération des rôles d'utilisateurs
 enum UserRole {
-  adminGlobal,      // Admin Principal - accès total
-  adminPays,        // Admin Pays - accès aux devices du pays
+  adminGlobal, // Admin Principal - accès total
+  adminPays, // Admin Pays - accès aux devices du pays
   adminDepartement, // Admin Département - accès aux devices du département
-  client            // Client - aucun accès
+  client, // Client - aucun accès
 }
 
 // Extension pour convertir le rôle en string lisible
@@ -41,6 +41,7 @@ class User {
   final String name;
   final String password; // À hacher en production
   final UserRole role;
+  final String? avatarUrl;
   final String? countryCode; // Pour Admin Pays
   final String? departmentCode; // Pour Admin Département
   final DateTime createdAt;
@@ -51,12 +52,13 @@ class User {
     required this.name,
     required this.password,
     required this.role,
+    this.avatarUrl,
     this.countryCode,
     this.departmentCode,
     DateTime? createdAt,
     DateTime? lastLogin,
-  })  : createdAt = createdAt ?? DateTime.now(),
-        lastLogin = lastLogin ?? DateTime.now();
+  }) : createdAt = createdAt ?? DateTime.now(),
+       lastLogin = lastLogin ?? DateTime.now();
 
   // Vérifier les permissions
   bool canModifyDevice(String deviceCountry, String deviceDepartment) {
@@ -66,8 +68,8 @@ class User {
       case UserRole.adminPays:
         return countryCode == deviceCountry; // Accès au pays
       case UserRole.adminDepartement:
-        return departmentCode == deviceDepartment && 
-               countryCode == deviceCountry; // Accès au département
+        return departmentCode == deviceDepartment &&
+            countryCode == deviceCountry; // Accès au département
       case UserRole.client:
         return false; // Aucun accès
     }
@@ -90,9 +92,9 @@ class User {
   }
 
   bool canViewDepartmentDevices() {
-    return role == UserRole.adminGlobal || 
-           role == UserRole.adminPays || 
-           role == UserRole.adminDepartement;
+    return role == UserRole.adminGlobal ||
+        role == UserRole.adminPays ||
+        role == UserRole.adminDepartement;
   }
 
   // Créer une copie avec modifications
@@ -101,6 +103,7 @@ class User {
     String? name,
     String? password,
     UserRole? role,
+    String? avatarUrl,
     String? countryCode,
     String? departmentCode,
     DateTime? createdAt,
@@ -111,6 +114,7 @@ class User {
       name: name ?? this.name,
       password: password ?? this.password,
       role: role ?? this.role,
+      avatarUrl: avatarUrl ?? this.avatarUrl,
       countryCode: countryCode ?? this.countryCode,
       departmentCode: departmentCode ?? this.departmentCode,
       createdAt: createdAt ?? this.createdAt,

@@ -14,9 +14,7 @@ class KeyboardInputAbstraction {
   /// Callback when input is captured.
   final void Function(KeyboardKeyEvent event)? onInputCaptured;
 
-  KeyboardInputAbstraction({
-    this.onInputCaptured,
-  });
+  KeyboardInputAbstraction({this.onInputCaptured});
 
   /// Convert a Flutter KeyEvent into structured abstraction.
   KeyboardKeyEvent abstractKeyEvent(
@@ -27,14 +25,13 @@ class KeyboardInputAbstraction {
     final phase = flutterEvent is KeyDownEvent
         ? 'down'
         : flutterEvent is KeyUpEvent
-            ? 'up'
-            : 'unknown';
+        ? 'up'
+        : 'unknown';
 
     final physicalCode = flutterEvent.physicalKey.usbHidUsage;
     final logicalKeyId = flutterEvent.logicalKey.keyId;
     final character = flutterEvent.character ?? '';
-    final characterCodePoint =
-        character.isNotEmpty ? character.runes.first : 0;
+    final characterCodePoint = character.isNotEmpty ? character.runes.first : 0;
 
     final keyLabel = flutterEvent.logicalKey.keyLabel.trim();
     final debugName = (flutterEvent.logicalKey.debugName ?? '').trim();

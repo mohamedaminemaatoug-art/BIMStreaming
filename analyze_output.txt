@@ -1,0 +1,141 @@
+Analyzing BimStreaming...                                       
+
+warning - Unused import: '../../screens/notifications_screen.dart' - client\lib\app\layout\app_shell.dart:5:8 - unused_import
+  error - The name 'ChatMessage' isn't a type, so it can't be used as a type argument - client\lib\app\pages\messages_screen.dart:41:16 - non_type_as_type_argument
+  error - The method 'markConversationRead' isn't defined for the type 'RealtimeController' - client\lib\app\pages\messages_screen.dart:66:32 - undefined_method
+  error - The method 'addReaction' isn't defined for the type 'RealtimeController' - client\lib\app\pages\messages_screen.dart:130:56 - undefined_method
+  error - The method 'setTyping' isn't defined for the type 'RealtimeController' - client\lib\app\pages\messages_screen.dart:174:40 - undefined_method
+  error - The method 'sendMessage' isn't defined for the type 'RealtimeController' - client\lib\app\pages\messages_screen.dart:190:38 - undefined_method
+  error - The method 'setTyping' isn't defined for the type 'RealtimeController' - client\lib\app\pages\messages_screen.dart:195:38 - undefined_method
+  error - The method 'markAllNotificationsRead' isn't defined for the type 'RealtimeController' - client\lib\app\pages\notifications_screen.dart:22:20 - undefined_method
+warning - Unused import: '../screens/friends_screen.dart' - client\lib\app\router.dart:18:8 - unused_import
+warning - Unused import: '../screens/notifications_screen.dart' - client\lib\app\router.dart:19:8 - unused_import
+  error - The named parameter 'email' is required, but there's no corresponding argument - client\lib\app\state\auth_controller.dart:47:39 - missing_required_argument
+  error - The named parameter 'password' is required, but there's no corresponding argument - client\lib\app\state\auth_controller.dart:47:39 - missing_required_argument
+  error - Too many positional arguments: 0 expected, but 2 found - client\lib\app\state\auth_controller.dart:47:45 - extra_positional_arguments_could_be_named
+  error - The getter 'success' isn't defined for the type 'AuthSession' - client\lib\app\state\auth_controller.dart:48:17 - undefined_getter
+warning - The operand can't be 'null', so the condition is always 'false' - client\lib\app\state\auth_controller.dart:48:40 - unnecessary_null_comparison
+  error - The getter 'message' isn't defined for the type 'AuthSession' - client\lib\app\state\auth_controller.dart:49:58 - undefined_getter
+  error - The getter 'dispose' isn't defined for the type 'ApiClient' - client\lib\app\state\data_providers.dart:11:24 - undefined_getter
+  error - The argument type 'Map<dynamic, dynamic>' can't be assigned to the parameter type 'Map<String, dynamic>'.  - client\lib\app\state\data_providers.dart:780:13 - argument_type_not_assignable
+  error - Undefined name 'WebSocketChannel' - client\lib\app\state\data_providers.dart:790:23 - undefined_identifier
+  error - The method 'flatMap' isn't defined for the type 'Stream' - client\lib\app\state\data_providers.dart:813:38 - undefined_method
+warning - Unused import: '../../models/user_model.dart' - client\lib\app\state\realtime_controller.dart:5:8 - unused_import
+warning - The value of the local variable 'wsStream' isn't used - client\lib\app\state\realtime_controller.dart:16:11 - unused_local_variable
+  error - The name 'realtimeControllerProvider' is already defined - client\lib\app\state\realtime_controller.dart:181:7 - duplicate_definition
+  error - 'RealtimeController' doesn't conform to the bound 'StateNotifier<InvalidType>' of the type parameter 'NotifierT' - client\lib\app\state\realtime_controller.dart:182:27 - type_argument_not_matching_bounds
+  error - The name 'RealtimeState' isn't a type, so it can't be used as a type argument - client\lib\app\state\realtime_controller.dart:182:47 - non_type_as_type_argument
+  error - The argument type 'Provider<SignalingClientService>' can't be assigned to the parameter type 'ProviderListenable<Ref<Object?>>'.  - client\lib\app\state\realtime_controller.dart:183:43 - argument_type_not_assignable
+   info - The import of 'package:flutter/foundation.dart' is unnecessary because all of the used elements are also provided by the import of 'package:flutter/services.dart' - client\lib\native\overlay_window.dart:1:8 - unnecessary_import
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - client\lib\screens\communities_screen.dart:137:53 - deprecated_member_use
+  error - Arguments of a constant creation must be constant expressions - client\lib\screens\dm_screen.dart:218:27 - const_with_non_constant_argument
+  error - The getter 'message_outline' isn't defined for the type 'Icons' - client\lib\screens\dm_screen.dart:218:33 - undefined_getter
+  error - Arguments of a constant creation must be constant expressions - client\lib\screens\friends_screen.dart:226:24 - const_with_non_constant_argument
+  error - The getter 'person_add_outline' isn't defined for the type 'Icons' - client\lib\screens\friends_screen.dart:226:30 - undefined_getter
+  error - The named parameter 'email' is required, but there's no corresponding argument - client\lib\screens\login_page.dart:54:39 - missing_required_argument
+  error - The named parameter 'password' is required, but there's no corresponding argument - client\lib\screens\login_page.dart:54:39 - missing_required_argument
+  error - Too many positional arguments: 0 expected, but 2 found - client\lib\screens\login_page.dart:54:45 - extra_positional_arguments_could_be_named
+  error - The getter 'success' isn't defined for the type 'AuthSession' - client\lib\screens\login_page.dart:58:16 - undefined_getter
+warning - The operand can't be 'null', so the condition is always 'true' - client\lib\screens\login_page.dart:58:39 - unnecessary_null_comparison
+warning - The '!' will have no effect because the receiver can't be null - client\lib\screens\login_page.dart:59:40 - unnecessary_non_null_assertion
+  error - The getter 'message' isn't defined for the type 'AuthSession' - client\lib\screens\login_page.dart:62:32 - undefined_getter
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - client\lib\screens\notifications_screen.dart:143:32 - deprecated_member_use
+  error - The getter 'at' isn't defined for the type 'Icons' - client\lib\screens\notifications_screen.dart:185:22 - undefined_getter
+   info - The import of 'dart:typed_data' is unnecessary because all of the used elements are also provided by the import of 'package:flutter/services.dart' - client\lib\screens\remote_support_page.dart:5:8 - unnecessary_import
+warning - The value of the field '_minCaptureIntervalMs' isn't used - client\lib\screens\remote_support_page.dart:87:20 - unused_field
+warning - The value of the field '_maxCaptureIntervalMs' isn't used - client\lib\screens\remote_support_page.dart:88:20 - unused_field
+warning - The value of the field '_captureTimeMs' isn't used - client\lib\screens\remote_support_page.dart:92:7 - unused_field
+warning - The value of the field '_encodeTimeMs' isn't used - client\lib\screens\remote_support_page.dart:93:7 - unused_field
+warning - The value of the field '_sendTimeMs' isn't used - client\lib\screens\remote_support_page.dart:94:7 - unused_field
+warning - The value of the field '_networkLatencyMs' isn't used - client\lib\screens\remote_support_page.dart:95:7 - unused_field
+warning - The value of the field '_framesDropped' isn't used - client\lib\screens\remote_support_page.dart:97:7 - unused_field
+warning - The value of the field '_lastFrameBytes' isn't used - client\lib\screens\remote_support_page.dart:98:14 - unused_field
+warning - The value of the field '_cursorPredictX' isn't used - client\lib\screens\remote_support_page.dart:105:10 - unused_field
+warning - The value of the field '_cursorPredictY' isn't used - client\lib\screens\remote_support_page.dart:106:10 - unused_field
+warning - The value of the field '_cursorPositionHistory' isn't used - client\lib\screens\remote_support_page.dart:109:22 - unused_field
+warning - The value of the field '_cursorShapeDetectionInFlight' isn't used - client\lib\screens\remote_support_page.dart:139:8 - unused_field
+warning - The value of the field '_isEncrypted' isn't used - client\lib\screens\remote_support_page.dart:146:8 - unused_field
+warning - The value of the field '_encryptionType' isn't used - client\lib\screens\remote_support_page.dart:148:10 - unused_field
+warning - The value of the field '_lastFrameSentHash' isn't used - client\lib\screens\remote_support_page.dart:233:7 - unused_field
+warning - The declaration '_hasHostSessionError' isn't referenced - client\lib\screens\remote_support_page.dart:589:12 - unused_element
+warning - The declaration '_setQualityPreset' isn't referenced - client\lib\screens\remote_support_page.dart:1039:8 - unused_element
+warning - The value of the local variable 'inputBurst' isn't used - client\lib\screens\remote_support_page.dart:1084:11 - unused_local_variable
+warning - The declaration '_restartInputControl' isn't referenced - client\lib\screens\remote_support_page.dart:1203:8 - unused_element
+warning - The declaration '_isManagedRepeatKeyV2' isn't referenced - client\lib\screens\remote_support_page.dart:1946:8 - unused_element
+warning - The declaration '_resolveVirtualKey' isn't referenced - client\lib\screens\remote_support_page.dart:2713:7 - unused_element
+warning - The declaration '_buildSendKeysStroke' isn't referenced - client\lib\screens\remote_support_page.dart:2827:10 - unused_element
+warning - The operand can't be 'null', so the condition is always 'false' - client\lib\screens\remote_support_page.dart:5720:32 - unnecessary_null_comparison
+warning - The declaration '_quickFrameHash' isn't referenced - client\lib\screens\remote_support_page.dart:5933:7 - unused_element
+warning - The declaration '_updateDiagnostics' isn't referenced - client\lib\screens\remote_support_page.dart:5973:8 - unused_element
+warning - The declaration '_computeRemoteFrameDrawRect' isn't referenced - client\lib\screens\remote_support_page.dart:6290:8 - unused_element
+warning - The declaration '_cursorHotspotForShape' isn't referenced - client\lib\screens\remote_support_page.dart:6318:10 - unused_element
+warning - The declaration '_buildCursorShape' isn't referenced - client\lib\screens\remote_support_page.dart:6367:10 - unused_element
+warning - The declaration '_toggleRecording' isn't referenced - client\lib\screens\remote_support_page.dart:6895:16 - unused_element
+warning - The declaration '_toggleAudio' isn't referenced - client\lib\screens\remote_support_page.dart:6947:8 - unused_element
+   info - 'value' is deprecated and shouldn't be used. Use initialValue instead. This will set the initial value for the form field. This feature was deprecated after v3.33.0-1.0.pre - client\lib\screens\remote_support_page.dart:7009:17 - deprecated_member_use
+  error - Expected to find ';' - client\lib\services\auth_service.dart:133:7 - expected_token
+  error - Variables must be declared using the keywords 'const', 'final', 'var' or a type name - client\lib\services\auth_service.dart:133:7 - missing_const_final_var_or_type
+  error - Expected a method, getter, setter or operator declaration - client\lib\services\auth_service.dart:133:11 - expected_executable
+  error - Expected to find ';' - client\lib\services\auth_service.dart:133:13 - expected_token
+  error - The name 'user' is already defined - client\lib\services\auth_service.dart:133:13 - duplicate_definition
+  error - Variables must be declared using the keywords 'const', 'final', 'var' or a type name - client\lib\services\auth_service.dart:133:13 - missing_const_final_var_or_type
+  error - Expected a method, getter, setter or operator declaration - client\lib\services\auth_service.dart:133:18 - expected_executable
+  error - 'this' can't be used as an identifier because it's a keyword - client\lib\services\auth_service.dart:133:21 - expected_identifier_but_got_keyword
+  error - Functions must have an explicit list of parameters - client\lib\services\auth_service.dart:133:21 - missing_function_parameters
+  error - A function body must be provided - client\lib\services\auth_service.dart:133:25 - missing_function_body
+  error - Expected a method, getter, setter or operator declaration - client\lib\services\auth_service.dart:133:25 - expected_executable
+  error - The name 'user' is already defined - client\lib\services\auth_service.dart:133:26 - duplicate_definition
+  error - Variables must be declared using the keywords 'const', 'final', 'var' or a type name - client\lib\services\auth_service.dart:133:26 - missing_const_final_var_or_type
+  error - Expected to find ';' - client\lib\services\auth_service.dart:134:7 - expected_token
+  error - Expected a method, getter, setter or operator declaration - client\lib\services\auth_service.dart:134:12 - expected_executable
+  error - Expected to find ';' - client\lib\services\auth_service.dart:134:14 - expected_token
+  error - The name 'token' is already defined - client\lib\services\auth_service.dart:134:14 - duplicate_definition
+  error - Variables must be declared using the keywords 'const', 'final', 'var' or a type name - client\lib\services\auth_service.dart:134:14 - missing_const_final_var_or_type
+  error - Expected a method, getter, setter or operator declaration - client\lib\services\auth_service.dart:134:20 - expected_executable
+  error - 'this' can't be used as an identifier because it's a keyword - client\lib\services\auth_service.dart:134:23 - expected_identifier_but_got_keyword
+  error - Functions must have an explicit list of parameters - client\lib\services\auth_service.dart:134:23 - missing_function_parameters
+  error - The name 'this' is already defined - client\lib\services\auth_service.dart:134:23 - duplicate_definition
+  error - A function body must be provided - client\lib\services\auth_service.dart:134:27 - missing_function_body
+  error - Expected a method, getter, setter or operator declaration - client\lib\services\auth_service.dart:134:27 - expected_executable
+  error - The name 'token' is already defined - client\lib\services\auth_service.dart:134:28 - duplicate_definition
+  error - Variables must be declared using the keywords 'const', 'final', 'var' or a type name - client\lib\services\auth_service.dart:134:28 - missing_const_final_var_or_type
+  error - Expected to find ';' - client\lib\services\auth_service.dart:135:7 - expected_token
+  error - Expected a method, getter, setter or operator declaration - client\lib\services\auth_service.dart:135:16 - expected_executable
+  error - Expected to find ';' - client\lib\services\auth_service.dart:135:18 - expected_token
+  error - The name 'loginTime' is already defined - client\lib\services\auth_service.dart:135:18 - duplicate_definition
+  error - Variables must be declared using the keywords 'const', 'final', 'var' or a type name - client\lib\services\auth_service.dart:135:18 - missing_const_final_var_or_type
+  error - Expected a method, getter, setter or operator declaration - client\lib\services\auth_service.dart:135:28 - expected_executable
+  error - 'this' can't be used as an identifier because it's a keyword - client\lib\services\auth_service.dart:135:31 - expected_identifier_but_got_keyword
+  error - Functions must have an explicit list of parameters - client\lib\services\auth_service.dart:135:31 - missing_function_parameters
+  error - The name 'this' is already defined - client\lib\services\auth_service.dart:135:31 - duplicate_definition
+  error - A function body must be provided - client\lib\services\auth_service.dart:135:35 - missing_function_body
+  error - Expected a method, getter, setter or operator declaration - client\lib\services\auth_service.dart:135:35 - expected_executable
+  error - The name 'loginTime' is already defined - client\lib\services\auth_service.dart:135:36 - duplicate_definition
+  error - Variables must be declared using the keywords 'const', 'final', 'var' or a type name - client\lib\services\auth_service.dart:135:36 - missing_const_final_var_or_type
+  error - Expected to find ';' - client\lib\services\auth_service.dart:136:7 - expected_token
+  error - Expected a method, getter, setter or operator declaration - client\lib\services\auth_service.dart:136:22 - expected_executable
+  error - Expected to find ';' - client\lib\services\auth_service.dart:136:24 - expected_token
+  error - Variables must be declared using the keywords 'const', 'final', 'var' or a type name - client\lib\services\auth_service.dart:136:24 - missing_const_final_var_or_type
+  error - Expected a method, getter, setter or operator declaration - client\lib\services\auth_service.dart:136:34 - expected_executable
+  error - Expected to find ')' - client\lib\services\auth_service.dart:136:57 - expected_token
+  error - A function body must be provided - client\lib\services\auth_service.dart:136:76 - missing_function_body
+  error - Expected a method, getter, setter or operator declaration - client\lib\services\auth_service.dart:136:76 - expected_executable
+  error - 'this' can't be used as an identifier because it's a keyword - client\lib\services\auth_service.dart:137:24 - expected_identifier_but_got_keyword
+  error - Functions must have an explicit list of parameters - client\lib\services\auth_service.dart:137:24 - missing_function_parameters
+  error - The name 'this' is already defined - client\lib\services\auth_service.dart:137:24 - duplicate_definition
+  error - A function body must be provided - client\lib\services\auth_service.dart:137:28 - missing_function_body
+  error - Expected a method, getter, setter or operator declaration - client\lib\services\auth_service.dart:137:28 - expected_executable
+  error - Functions must have an explicit list of parameters - client\lib\services\auth_service.dart:137:29 - missing_function_parameters
+  error - The name 'expiryTime' is already defined - client\lib\services\auth_service.dart:137:29 - duplicate_definition
+  error - A function body must be provided - client\lib\services\auth_service.dart:137:39 - missing_function_body
+  error - Expected a method, getter, setter or operator declaration - client\lib\services\auth_service.dart:137:39 - expected_executable
+  error - The name 'difference' is already defined - client\lib\services\auth_service.dart:137:40 - duplicate_definition
+  error - Field formal parameters can only be used in a constructor - client\lib\services\auth_service.dart:137:51 - field_initializer_outside_constructor
+  error - A function body must be provided - client\lib\services\auth_service.dart:137:66 - missing_function_body
+  error - Expected a method, getter, setter or operator declaration - client\lib\services\auth_service.dart:137:66 - expected_executable
+  error - Expected a method, getter, setter or operator declaration - client\lib\services\auth_service.dart:138:5 - expected_executable
+  error - Unexpected text ';' - client\lib\services\auth_service.dart:138:6 - unexpected_token
+  error - Expected a method, getter, setter or operator declaration - client\lib\services\auth_service.dart:139:3 - expected_executable
+  error - Expected a method, getter, setter or operator declaration - client\lib\services\auth_service.dart:140:1 - expected_executable
+
+137 issues found. (ran in 4.3s)

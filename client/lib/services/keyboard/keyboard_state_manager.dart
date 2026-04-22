@@ -16,10 +16,7 @@ class KeyboardStateManager {
   /// Callback when stuck key is detected and forced released.
   final void Function(int physicalCode, String reason)? onStuckKeyForceReleased;
 
-  KeyboardStateManager({
-    this.onKeyStateChanged,
-    this.onStuckKeyForceReleased,
-  });
+  KeyboardStateManager({this.onKeyStateChanged, this.onStuckKeyForceReleased});
 
   /// Get all currently active keys.
   List<ActiveKey> get activeKeys => _activeKeys.values.toList();
@@ -27,7 +24,8 @@ class KeyboardStateManager {
   /// Check if a key is currently pressed.
   bool isKeyPressed(int physicalCode) {
     final key = _activeKeys[physicalCode];
-    return key != null && (key.state == KeyState.down || key.state == KeyState.hold);
+    return key != null &&
+        (key.state == KeyState.down || key.state == KeyState.hold);
   }
 
   /// Get active key by physical code.
@@ -154,12 +152,14 @@ class KeyboardStateManager {
   List<Map<String, dynamic>> exportState() {
     final now = DateTime.now().millisecondsSinceEpoch;
     return _activeKeys.values
-        .map((key) => {
-              'physicalCode': key.physicalCode,
-              'state': key.state.name,
-              'holdDurationMs': now - key.pressedAtMs,
-              'lastRepeatAtMs': key.lastRepeatAtMs,
-            })
+        .map(
+          (key) => {
+            'physicalCode': key.physicalCode,
+            'state': key.state.name,
+            'holdDurationMs': now - key.pressedAtMs,
+            'lastRepeatAtMs': key.lastRepeatAtMs,
+          },
+        )
         .toList();
   }
 }

@@ -1,0 +1,1246 @@
+openapi: 3.0.3
+info:
+  title: bim_streaming backend API
+  version: 1.0.0
+  description: |
+    REST API and WebSocket signaling surface for the bim_streaming remote support platform.
+    The existing remote-control signaling flow remains under /api/v1/ws; this spec documents
+    the new auth, social, community, remote invite, notification, and media endpoints.
+servers:
+  - url: /api/v1
+paths:
+  /auth/register:
+    post:
+      summary: Register a new user and send a verification code
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201': { description: Verification code sent }
+        '400': { description: Invalid input }
+  /auth/verify-email:
+    post:
+      summary: Verify a registration code and issue tokens
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyEmailRequest'
+      responses:
+        '200': { description: Verified }
+        '401': { description: Invalid or expired code }
+  /auth/resend-verification:
+    post:
+      summary: Resend verification code
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id: { type: string, format: uuid }
+      responses:
+        '200': { description: Code resent }
+        '429': { description: Rate limited }
+  /auth/login:
+    post:
+      summary: Login with email, username, or phone number
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200': { description: Access and refresh tokens }
+        '401': { description: Invalid credentials }
+  /auth/refresh:
+    post:
+      summary: Refresh the access token
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        '200': { description: New access token }
+        '401': { description: Invalid refresh token }
+  /auth/logout:
+    post:
+      summary: Revoke a refresh token
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        '200': { description: Logged out }
+  /auth/forgot-password:
+    post:
+      summary: Send a password reset code (6-digit) to email
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200': { description: Reset code sent to email if account exists }
+  /auth/verify-reset-code:
+    post:
+      summary: Verify the 6-digit reset code
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code]
+              properties:
+                email: { type: string, format: email }
+                code: { type: string, pattern: '^[0-9]{6}$' }
+      responses:
+        '200': { description: Code verified }
+        '400': { description: Invalid or expired code }
+  /auth/reset-password:
+    post:
+      summary: Reset password with email, code, and new password
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code, password, confirm_password]
+              properties:
+                email: { type: string, format: email }
+                code: { type: string, pattern: '^[0-9]{6}$' }
+                password: { type: string }
+                confirm_password: { type: string }
+      responses:
+        '200': { description: Password reset successful }
+        '400': { description: Invalid or expired code }
+  /users/me:
+    get:
+      summary: Get current user profile
+      tags: [Users]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Current profile }
+    patch:
+      summary: Update current user profile
+      tags: [Users]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username: { type: string }
+                phone: { type: string }
+                bio: { type: string }
+      responses:
+        '200': { description: Updated profile }
+  /users/me/export:
+    get:
+      summary: Queue my data export
+      tags: [Users]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '202': { description: Export queued }
+  /users/me/delete:
+    post:
+      summary: Request account deletion (30 day grace)
+      tags: [Users]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses:
+        '202': { description: Deletion scheduled }
+  /users/me/avatar:
+    post:
+      summary: Upload a new avatar
+      tags: [Users]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                avatar:
+                  type: string
+                  format: binary
+      responses:
+        '200': { description: Avatar URL }
+  /users/search:
+    get:
+      summary: Search users by prefix
+      tags: [Users]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: q
+          schema: { type: string }
+      responses:
+        '200': { description: Matching users }
+  /users/{id}:
+    get:
+      summary: Public profile by user ID
+      tags: [Users]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200': { description: Public profile }
+  /users/me/status:
+    get:
+      summary: Get my presence status
+      tags: [Users]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Current status }
+    patch:
+      summary: Update my presence status
+      tags: [Users]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                emoji: { type: string }
+                message: { type: string }
+                availability:
+                  type: string
+                  enum: [online, away, busy, offline]
+                expires_at: { type: string, format: date-time }
+      responses:
+        '200': { description: Updated status }
+  /users/{id}/status:
+    get:
+      summary: Get a user's presence status
+      tags: [Users]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200': { description: Current status }
+  /security/login-history:
+    get:
+      summary: List my login history
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Login history }
+  /security/trusted-devices:
+    get:
+      summary: List trusted devices
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Trusted devices }
+  /security/trusted-devices/{id}:
+    delete:
+      summary: Revoke a trusted device
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Revoked }
+  /security/revoke-all-sessions:
+    post:
+      summary: Revoke all refresh tokens for the current user
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Sessions revoked }
+  /push/register:
+    post:
+      summary: Register a push token
+      tags: [Push]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, platform]
+              properties:
+                token: { type: string }
+                platform:
+                  type: string
+                  enum: [fcm, apns, web]
+                device_fingerprint: { type: string }
+      responses:
+        '201': { description: Registered }
+  /push/unregister:
+    delete:
+      summary: Unregister a push token
+      tags: [Push]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token: { type: string }
+                device_fingerprint: { type: string }
+      responses:
+        '200': { description: Unregistered }
+  /admin/audit:
+    get:
+      summary: List audit log entries
+      tags: [Admin]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Audit log entries }
+  /admin/users:
+    get:
+      summary: List users (superadmin)
+      tags: [Admin]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: q
+          schema: { type: string }
+        - in: query
+          name: verified
+          schema: { type: boolean }
+        - in: query
+          name: banned
+          schema: { type: boolean }
+      responses:
+        '200': { description: Users }
+  /admin/users/{id}:
+    get:
+      summary: Get full user profile + subscription + audit (superadmin)
+      tags: [Admin]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200': { description: User detail }
+  /admin/users/{id}/ban:
+    post:
+      summary: Ban user (superadmin)
+      tags: [Admin]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses:
+        '200': { description: Banned }
+  /admin/users/{id}/unban:
+    post:
+      summary: Unban user (superadmin)
+      tags: [Admin]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200': { description: Unbanned }
+  /admin/users/{id}/verify:
+    post:
+      summary: Manually verify email (superadmin)
+      tags: [Admin]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200': { description: Verified }
+  /admin/communities:
+    get:
+      summary: List communities (superadmin)
+      tags: [Admin]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: q
+          schema: { type: string }
+      responses:
+        '200': { description: Communities }
+  /admin/sessions:
+    get:
+      summary: List all remote sessions (superadmin)
+      tags: [Admin]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200': { description: Sessions }
+  /admin/sessions/active:
+    get:
+      summary: List active remote sessions (superadmin)
+      tags: [Admin]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200': { description: Active sessions }
+  /admin/stats:
+    get:
+      summary: Platform stats (superadmin)
+      tags: [Admin]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Stats }
+  /friends:
+    get:
+      summary: List accepted friends
+      tags: [Friends]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Friends list }
+  /friends/requests:
+    get:
+      summary: List friend requests
+      tags: [Friends]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Incoming and outgoing requests }
+  /friends/request/{user_id}:
+    post:
+      summary: Send a friend request
+      tags: [Friends]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '201': { description: Request created }
+  /friends/request/{id}:
+    patch:
+      summary: Accept or reject a request
+      tags: [Friends]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                  enum: [accept, reject]
+      responses:
+        '200': { description: Updated request }
+  /friends/{user_id}:
+    delete:
+      summary: Remove or cancel a friendship
+      tags: [Friends]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200': { description: Removed }
+  /friends/block/{user_id}:
+    post:
+      summary: Block a user
+      tags: [Friends]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200': { description: Blocked }
+  /friends/blocked:
+    get:
+      summary: List blocked users
+      tags: [Friends]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Blocked users }
+  /dm:
+    get:
+      summary: List conversations
+      tags: [Direct Messages]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Conversation list }
+  /dm/{user_id}:
+    get:
+      summary: Get conversation history
+      tags: [Direct Messages]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200': { description: Messages }
+    post:
+      summary: Send a direct message
+      tags: [Direct Messages]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string }
+      responses:
+        '201': { description: Sent }
+  /dm/{user_id}/read:
+    patch:
+      summary: Mark a conversation as read
+      tags: [Direct Messages]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200': { description: Marked read }
+  /communities:
+    get:
+      summary: List joined communities
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Communities }
+    post:
+      summary: Create a community
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                description: { type: string }
+                country: { type: string, maxLength: 2 }
+                is_public: { type: boolean }
+      responses:
+        '201': { description: Created }
+  /communities/discover:
+    get:
+      summary: Discover public communities
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Discovery results }
+  /communities/join:
+    post:
+      summary: Join by invite code
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        '200': { description: Joined or request created }
+  /communities/{id}:
+    get:
+      summary: Community detail
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+      responses:
+        '200': { description: Community }
+    patch:
+      summary: Update a community
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+      responses:
+        '200': { description: Updated }
+    delete:
+      summary: Soft delete a community
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+      responses:
+        '200': { description: Deleted }
+  /communities/{id}/members:
+    get:
+      summary: List community members
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+      responses:
+        '200': { description: Members }
+  /communities/{id}/members/{user_id}:
+    patch:
+      summary: Update member role or department
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200': { description: Updated }
+    delete:
+      summary: Kick a member
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200': { description: Removed }
+  /communities/{id}/request-join:
+    post:
+      summary: Request to join a private community
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+      responses:
+        '201': { description: Request created }
+  /communities/{id}/join-requests:
+    get:
+      summary: List pending join requests
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+      responses:
+        '200': { description: Requests }
+  /communities/{id}/join-requests/{req_id}:
+    patch:
+      summary: Approve or reject a join request
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+        - in: path
+          name: req_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Reviewed }
+  /communities/{id}/invite:
+    post:
+      summary: Generate a community invite
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+      responses:
+        '201': { description: Invite created }
+  /communities/{id}/messages:
+    get:
+      summary: List community chat messages
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+      responses:
+        '200': { description: Messages }
+    post:
+      summary: Send a community message
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string }
+      responses:
+        '201': { description: Sent }
+  /communities/{id}/messages/{message_id}:
+    patch:
+      summary: Edit a community message
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+        - in: path
+          name: message_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Updated }
+    delete:
+      summary: Delete a community message
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+        - in: path
+          name: message_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Deleted }
+  /communities/{id}/messages/{message_id}/reactions:
+    get:
+      summary: List reactions for a community message
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+        - in: path
+          name: message_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Reactions }
+    post:
+      summary: Add a reaction to a community message
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+        - in: path
+          name: message_id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [emoji]
+              properties:
+                emoji: { type: string }
+      responses:
+        '200': { description: Added }
+    delete:
+      summary: Remove a reaction from a community message
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+        - in: path
+          name: message_id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [emoji]
+              properties:
+                emoji: { type: string }
+      responses:
+        '200': { description: Removed }
+  /communities/{id}/messages/{message_id}/attachments:
+    get:
+      summary: List attachments for a community message
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+        - in: path
+          name: message_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Attachments }
+    post:
+      summary: Upload a community message attachment
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+        - in: path
+          name: message_id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201': { description: Attachment created }
+  /communities/{id}/departments:
+    post:
+      summary: Create a department
+      tags: [Departments]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+      responses:
+        '201': { description: Created }
+  /communities/{id}/departments/{dept_id}:
+    patch:
+      summary: Update a department
+      tags: [Departments]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+        - in: path
+          name: dept_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Updated }
+    delete:
+      summary: Delete a department
+      tags: [Departments]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+        - in: path
+          name: dept_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Deleted }
+  /communities/{id}/announcements:
+    get:
+      summary: List community announcements
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+      responses:
+        '200': { description: Announcements }
+    post:
+      summary: Create a community announcement
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, content]
+              properties:
+                title: { type: string }
+                content: { type: string }
+                pinned: { type: boolean }
+      responses:
+        '201': { description: Created }
+  /communities/{id}/announcements/{announcement_id}:
+    patch:
+      summary: Update a community announcement
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+        - in: path
+          name: announcement_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Updated }
+    delete:
+      summary: Delete a community announcement
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+        - in: path
+          name: announcement_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Deleted }
+  /communities/{id}/members/{user_id}/ban:
+    post:
+      summary: Ban a community member
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+                expires_at: { type: string, format: date-time }
+      responses:
+        '201': { description: Banned }
+    delete:
+      summary: Unban a community member
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200': { description: Unbanned }
+  /communities/{id}/audit:
+    get:
+      summary: List community audit log
+      tags: [Communities]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CommunityId'
+      responses:
+        '200': { description: Audit events }
+  /remote/invite/{user_id}:
+    post:
+      summary: Request a remote session invite
+      tags: [Remote]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '201': { description: Invite created }
+  /remote/invite/{id}:
+    patch:
+      summary: Accept or reject a remote session invite
+      tags: [Remote]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                  enum: [accept, reject]
+      responses:
+        '200': { description: Updated invite }
+  /remote/sessions:
+    post:
+      summary: Create a remote session record
+      tags: [Remote]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [host_user_id, host_device_id, session_token]
+              properties:
+                host_user_id: { type: string, format: uuid }
+                host_device_id: { type: string }
+                invite_id: { type: string, format: uuid }
+                session_type:
+                  type: string
+                  enum: [control, view_only, file_transfer, presentation]
+                quality:
+                  type: string
+                  enum: [auto, low, medium, high, ultra]
+                session_token: { type: string }
+      responses:
+        '201': { description: Session created }
+  /remote/sessions/{id}:
+    get:
+      summary: Get a remote session
+      tags: [Remote]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Session }
+  /remote/sessions/{id}/permissions:
+    patch:
+      summary: Update remote session permissions
+      tags: [Remote]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Updated permissions }
+  /remote/sessions/{id}/quality:
+    patch:
+      summary: Update remote session quality
+      tags: [Remote]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Updated quality }
+  /remote/sessions/{id}/stats:
+    patch:
+      summary: Update remote session statistics
+      tags: [Remote]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Updated stats }
+  /remote/sessions/{id}/end:
+    post:
+      summary: End a remote session
+      tags: [Remote]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Session ended }
+  /remote/unattended-access:
+    get:
+      summary: List unattended access rules
+      tags: [Remote]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Unattended access rules }
+    post:
+      summary: Create unattended access rule
+      tags: [Remote]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [controller_user_id, password]
+              properties:
+                controller_user_id: { type: string, format: uuid }
+                password: { type: string }
+      responses:
+        '201': { description: Created }
+  /remote/unattended-access/{id}:
+    delete:
+      summary: Disable unattended access rule
+      tags: [Remote]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Disabled }
+  /remote/history:
+    get:
+      summary: Get remote activity history
+      tags: [Remote]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Activity list }
+  /notifications:
+    get:
+      summary: List notifications
+      tags: [Notifications]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Notifications }
+    post:
+      summary: Create and dispatch a notification
+      tags: [Notifications]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id, type]
+              properties:
+                user_id: { type: string, format: uuid }
+                type: { type: string }
+                payload: { type: object, additionalProperties: true }
+      responses:
+        '201': { description: Created }
+  /notifications/read:
+    patch:
+      summary: Mark all notifications read
+      tags: [Notifications]
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Updated }
+  /notifications/{id}/read:
+    patch:
+      summary: Mark one notification read
+      tags: [Notifications]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Updated }
+  /ws:
+    get:
+      summary: WebSocket signaling and real-time events
+      tags: [WebSocket]
+      description: |
+        Connect with ?token=<access_token>. The socket carries the existing remote-control
+        signaling traffic plus event types such as user:online, dm:new, friend:request,
+        community:message, community:join_request, remote:invite, and notification:new.
+      responses:
+        '101': { description: WebSocket upgrade }
+  /healthz:
+    get:
+      summary: Health check
+      tags: [System]
+      responses:
+        '200': { description: ok }
+components:
+  parameters:
+    UserId:
+      in: path
+      name: user_id
+      required: true
+      schema: { type: string, format: uuid }
+    CommunityId:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, format: uuid }
+  schemas:
+    RegisterRequest:
+      type: object
+      required: [username, email, password, confirm_password]
+      properties:
+        username: { type: string }
+        email: { type: string, format: email }
+        phone: { type: string }
+        password: { type: string }
+        confirm_password: { type: string }
+    VerifyEmailRequest:
+      type: object
+      required: [user_id, code]
+      properties:
+        user_id: { type: string, format: uuid }
+        code: { type: string, pattern: '^[0-9]{6}$' }
+    LoginRequest:
+      type: object
+      required: [identifier, password]
+      properties:
+        identifier: { type: string }
+        password: { type: string }
+        device_fingerprint: { type: string }
+        device_label: { type: string }
+    ResetPasswordRequest:
+      type: object
+      required: [email, code, password, confirm_password]
+      properties:
+        email: { type: string, format: email }
+        code: { type: string, pattern: '^[0-9]{6}$' }
+        password: { type: string }
+        confirm_password: { type: string }
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

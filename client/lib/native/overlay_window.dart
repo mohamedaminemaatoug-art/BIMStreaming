@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 class HostSessionOverlay {
@@ -16,10 +15,9 @@ class HostSessionOverlay {
 
   static Future<bool> startOverlay({required String label}) async {
     try {
-      final result = await _channel.invokeMethod<bool>(
-        'start',
-        {'label': label},
-      );
+      final result = await _channel.invokeMethod<bool>('start', {
+        'label': label,
+      });
       return result ?? false;
     } on MissingPluginException {
       return false;
@@ -67,4 +65,3 @@ class HostSessionOverlay {
     }
   }
 }
-

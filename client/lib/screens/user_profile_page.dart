@@ -20,101 +20,105 @@ class UserProfilePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = isDarkMode;
-    
+
     return Container(
       padding: const EdgeInsets.all(20),
       child: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // User Card
-            Card(
-              color: isDark ? Colors.grey[800] : Colors.white,
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  children: [
-                    CircleAvatar(
-                      radius: 50,
-                      backgroundColor: Colors.blue[600],
-                      child: Text(
-                        user.name.isNotEmpty ? user.name[0].toUpperCase() : '?',
-                        style: const TextStyle(
-                          fontSize: 32,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    Text(
-                      user.name,
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      '${tr('profile_id_label')}: ${user.id}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: isDark ? Colors.grey[400] : Colors.grey[600],
-                      ),
-                    ),
-                  ],
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(22),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: isDark
+                      ? const [Color(0xFF112432), Color(0xFF174058)]
+                      : const [Color(0xFFE8F6FF), Color(0xFFD8EEFF)],
                 ),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: isDark
+                      ? const Color(0xFF27536B)
+                      : const Color(0xFFC2DCEE),
+                ),
+              ),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    radius: 36,
+                    backgroundColor: const Color(0xFF0F8DCC),
+                    child: Text(
+                      user.name.isNotEmpty ? user.name[0].toUpperCase() : '?',
+                      style: const TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          user.name,
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800,
+                            color: isDark
+                                ? Colors.white
+                                : const Color(0xFF112333),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${tr('profile_id_label')}: ${user.id}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isDark
+                                ? const Color(0xFFB9D2E3)
+                                : const Color(0xFF4B6678),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 7,
+                          ),
+                          decoration: BoxDecoration(
+                            color: _getRoleColor(user.role),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            user.role.label,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 24),
-            // Role Card
-            Card(
-              color: isDark ? Colors.grey[800] : Colors.white,
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      translate('current_role'),
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: _getRoleColor(user.role),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        user.role.label,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 24),
-            // Permissions
             Text(
               tr('profile_permissions'),
               style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
                 color: isDark ? Colors.white : Colors.black87,
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 14),
             _buildPermissionTile(
               icon: Icons.visibility,
               title: tr('profile_permission_view_title'),
@@ -144,43 +148,49 @@ class UserProfilePage extends StatelessWidget {
             ),
             const SizedBox(height: 24),
             // Region Info
-            if (user.role == UserRole.adminPays || 
-                user.role == UserRole.adminDepartement)
-              ...[
-                Card(
-                  color: isDark ? Colors.grey[800] : Colors.white,
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          tr('profile_region_info'),
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        if (user.countryCode != null)
-                          _buildInfoTile(
-                            tr('profile_country_label'),
-                            user.countryCode!,
-                            isDark,
-                          ),
-                        if (user.departmentCode != null)
-                          _buildInfoTile(
-                            tr('profile_department_label'),
-                            user.departmentCode!,
-                            isDark,
-                          ),
-                      ],
-                    ),
+            if (user.role == UserRole.adminPays ||
+                user.role == UserRole.adminDepartement) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(
+                  color: isDark ? const Color(0xFF132330) : Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: isDark
+                        ? const Color(0xFF284051)
+                        : const Color(0xFFDCE5EC),
                   ),
                 ),
-                const SizedBox(height: 24),
-              ],
-            // Logout Button
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      tr('profile_region_info'),
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        color: isDark ? Colors.white : const Color(0xFF182B38),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    if (user.countryCode != null)
+                      _buildInfoTile(
+                        tr('profile_country_label'),
+                        user.countryCode!,
+                        isDark,
+                      ),
+                    if (user.departmentCode != null)
+                      _buildInfoTile(
+                        tr('profile_department_label'),
+                        user.departmentCode!,
+                        isDark,
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+            ],
             ElevatedButton.icon(
               onPressed: () {
                 showDialog(
@@ -210,8 +220,11 @@ class UserProfilePage extends StatelessWidget {
               icon: const Icon(Icons.logout),
               label: Text(tr('btn_disconnect')),
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red[600],
+                backgroundColor: const Color(0xFFC53A2E),
                 minimumSize: const Size(double.infinity, 48),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
               ),
             ),
           ],
@@ -227,44 +240,55 @@ class UserProfilePage extends StatelessWidget {
     required bool isDark,
     bool canAccess = true,
   }) {
-    return Card(
-      color: isDark ? Colors.grey[800] : Colors.white,
+    return Container(
       margin: const EdgeInsets.only(bottom: 12),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            Icon(
-              icon,
-              color: canAccess ? Colors.green : Colors.red,
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  Text(
-                    description,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: isDark ? Colors.grey[400] : Colors.grey[600],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Icon(
-              canAccess ? Icons.check_circle : Icons.cancel,
-              color: canAccess ? Colors.green : Colors.red,
-            ),
-          ],
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF132330) : Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isDark ? const Color(0xFF284051) : const Color(0xFFDCE5EC),
         ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            icon,
+            color: canAccess
+                ? const Color(0xFF0EA271)
+                : const Color(0xFFC53A2E),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: isDark ? Colors.white : const Color(0xFF1A2D3B),
+                  ),
+                ),
+                Text(
+                  description,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark
+                        ? const Color(0xFFA8C2D4)
+                        : const Color(0xFF6A8190),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Icon(
+            canAccess ? Icons.check_circle : Icons.cancel,
+            color: canAccess
+                ? const Color(0xFF0EA271)
+                : const Color(0xFFC53A2E),
+          ),
+        ],
       ),
     );
   }
@@ -281,12 +305,7 @@ class UserProfilePage extends StatelessWidget {
               color: isDark ? Colors.grey[400] : Colors.grey[600],
             ),
           ),
-          Text(
-            value,
-            style: const TextStyle(
-              fontWeight: FontWeight.bold,
-            ),
-          ),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
         ],
       ),
     );

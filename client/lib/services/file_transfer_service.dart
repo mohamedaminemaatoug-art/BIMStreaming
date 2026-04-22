@@ -39,7 +39,9 @@ class FileTransferBrowserEntry {
       relativePath: (map['relativePath'] ?? '').toString(),
       isDirectory: map['isDirectory'] == true,
       size: map['size'] is num ? (map['size'] as num).toInt() : 0,
-      modifiedAtMs: map['modifiedAtMs'] is num ? (map['modifiedAtMs'] as num).toInt() : 0,
+      modifiedAtMs: map['modifiedAtMs'] is num
+          ? (map['modifiedAtMs'] as num).toInt()
+          : 0,
     );
   }
 
@@ -129,8 +131,10 @@ class IncomingTransferRequest {
   });
 }
 
-typedef TransferSignalSender = bool Function(String messageType, Map<String, dynamic> payload);
-typedef TransferRequestDecision = Future<bool> Function(IncomingTransferRequest request);
+typedef TransferSignalSender =
+    bool Function(String messageType, Map<String, dynamic> payload);
+typedef TransferRequestDecision =
+    Future<bool> Function(IncomingTransferRequest request);
 
 class FileTransferService {
   FileTransferService({
@@ -140,12 +144,12 @@ class FileTransferService {
     required String receiveDirectory,
     int maxFileSizeBytes = 1024 * 1024 * 1024,
     int chunkSizeBytes = 256 * 1024,
-  })  : _isHost = isHost,
-        _sendSignal = sendSignal,
-        _baseDirectory = p.normalize(baseDirectory),
-        _receiveDirectory = p.normalize(receiveDirectory),
-        _maxFileSizeBytes = maxFileSizeBytes,
-        _chunkSizeBytes = chunkSizeBytes.clamp(64 * 1024, 1024 * 1024);
+  }) : _isHost = isHost,
+       _sendSignal = sendSignal,
+       _baseDirectory = p.normalize(baseDirectory),
+       _receiveDirectory = p.normalize(receiveDirectory),
+       _maxFileSizeBytes = maxFileSizeBytes,
+       _chunkSizeBytes = chunkSizeBytes.clamp(64 * 1024, 1024 * 1024);
 
   final bool _isHost;
   final TransferSignalSender _sendSignal;
@@ -154,14 +158,23 @@ class FileTransferService {
   final int _maxFileSizeBytes;
   final int _chunkSizeBytes;
 
-  final ValueNotifier<List<FileTransferBrowserEntry>> localEntries = ValueNotifier<List<FileTransferBrowserEntry>>(<FileTransferBrowserEntry>[]);
-  final ValueNotifier<List<FileTransferBrowserEntry>> remoteEntries = ValueNotifier<List<FileTransferBrowserEntry>>(<FileTransferBrowserEntry>[]);
-  final ValueNotifier<List<FileTransferQueueItem>> queue = ValueNotifier<List<FileTransferQueueItem>>(<FileTransferQueueItem>[]);
+  final ValueNotifier<List<FileTransferBrowserEntry>> localEntries =
+      ValueNotifier<List<FileTransferBrowserEntry>>(
+        <FileTransferBrowserEntry>[],
+      );
+  final ValueNotifier<List<FileTransferBrowserEntry>> remoteEntries =
+      ValueNotifier<List<FileTransferBrowserEntry>>(
+        <FileTransferBrowserEntry>[],
+      );
+  final ValueNotifier<List<FileTransferQueueItem>> queue =
+      ValueNotifier<List<FileTransferQueueItem>>(<FileTransferQueueItem>[]);
   final ValueNotifier<String> localPath = ValueNotifier<String>('');
   final ValueNotifier<String> remotePath = ValueNotifier<String>('');
 
-  final Map<String, _OutgoingTransferState> _outgoing = <String, _OutgoingTransferState>{};
-  final Map<String, _IncomingTransferState> _incoming = <String, _IncomingTransferState>{};
+  final Map<String, _OutgoingTransferState> _outgoing =
+      <String, _OutgoingTransferState>{};
+  final Map<String, _IncomingTransferState> _incoming =
+      <String, _IncomingTransferState>{};
 
   String get baseDirectory => _baseDirectory;
 
@@ -197,7 +210,11 @@ class FileTransferService {
 
   Future<void> refreshLocal({required String path}) async {
     final safePath = _normalizeRelativePath(path);
-    final target = _resolveWithinBase(safePath, mustExist: true, expectDirectory: true);
+    final target = _resolveWithinBase(
+      safePath,
+      mustExist: true,
+      expectDirectory: true,
+    );
     if (target == null) {
       return;
     }
@@ -232,7 +249,9 @@ class FileTransferService {
             speedBytesPerSecond: 0,
             sourceRelativePath: absolutePath,
             destinationRelativePath: remoteDestinationPath,
-            error: stat.size > _maxFileSizeBytes ? 'File exceeds configured size limit' : 'Empty file',
+            error: stat.size > _maxFileSizeBytes
+                ? 'File exceeds configured size limit'
+                : 'Empty file',
             canCancel: false,
           ),
         );
@@ -292,7 +311,9 @@ class FileTransferService {
       final transferId = _newTransferId();
       final normalizedRemotePath = _normalizeRelativePath(remoteFilePath);
       final normalizedLocalDest = _normalizeRelativePath(
-        localDestinationPath.trim().isEmpty ? _defaultReceiveRelativePath() : localDestinationPath,
+        localDestinationPath.trim().isEmpty
+            ? _defaultReceiveRelativePath()
+            : localDestinationPath,
       );
       final fileName = p.basename(normalizedRemotePath);
       final direction = _isHost ? 'controller->host' : 'host->controller';
@@ -365,7 +386,10 @@ class FileTransferService {
     outgoing?.close();
     final incoming = _incoming.remove(transferId);
     incoming?.close(deleteTemp: true);
-    _updateQueue(transferId, (item) => item.copyWith(status: 'canceled', canCancel: false));
+    _updateQueue(
+      transferId,
+      (item) => item.copyWith(status: 'canceled', canCancel: false),
+    );
     _sendSignal(fileTransferCancel, {'transferId': transferId});
   }
 
@@ -380,12 +404,22 @@ class FileTransferService {
       return;
     }
 
-    final thisSideReceives = (_isHost && direction == 'controller->host') || (!_isHost && direction == 'host->controller');
-    final thisSideSends = (_isHost && direction == 'host->controller') || (!_isHost && direction == 'controller->host');
+    final thisSideReceives =
+        (_isHost && direction == 'controller->host') ||
+        (!_isHost && direction == 'host->controller');
+    final thisSideSends =
+        (_isHost && direction == 'host->controller') ||
+        (!_isHost && direction == 'controller->host');
 
     if (requestType == 'pull' && thisSideSends) {
-      final sourceRel = _normalizeRelativePath((payload['sourcePath'] ?? '').toString());
-      final sourceAbs = _resolveWithinBase(sourceRel, mustExist: true, expectDirectory: false);
+      final sourceRel = _normalizeRelativePath(
+        (payload['sourcePath'] ?? '').toString(),
+      );
+      final sourceAbs = _resolveWithinBase(
+        sourceRel,
+        mustExist: true,
+        expectDirectory: false,
+      );
       if (sourceAbs == null) {
         _sendSignal(fileTransferInitAck, {
           'transferId': transferId,
@@ -412,7 +446,9 @@ class FileTransferService {
         transferId: transferId,
         sourceFilePath: sourceAbs,
         direction: direction,
-        destinationRelativePath: _normalizeRelativePath((payload['destinationPath'] ?? '').toString()),
+        destinationRelativePath: _normalizeRelativePath(
+          (payload['destinationPath'] ?? '').toString(),
+        ),
         totalBytes: stat.size,
         totalChunks: totalChunks,
         chunkSize: _chunkSizeBytes,
@@ -431,7 +467,9 @@ class FileTransferService {
           bytesDone: 0,
           speedBytesPerSecond: 0,
           sourceRelativePath: sourceRel,
-          destinationRelativePath: _normalizeRelativePath((payload['destinationPath'] ?? '').toString()),
+          destinationRelativePath: _normalizeRelativePath(
+            (payload['destinationPath'] ?? '').toString(),
+          ),
           canCancel: true,
         ),
       );
@@ -452,11 +490,22 @@ class FileTransferService {
       return;
     }
 
-    final fileName = (payload['fileName'] ?? p.basename((payload['sourcePath'] ?? '').toString())).toString();
-    final fileSize = payload['fileSize'] is num ? (payload['fileSize'] as num).toInt() : 0;
-    final totalChunks = payload['totalChunks'] is num ? (payload['totalChunks'] as num).toInt() : 0;
-    final chunkSize = payload['chunkSize'] is num ? (payload['chunkSize'] as num).toInt() : _chunkSizeBytes;
-    final sourceRel = _normalizeRelativePath((payload['sourcePath'] ?? fileName).toString());
+    final fileName =
+        (payload['fileName'] ??
+                p.basename((payload['sourcePath'] ?? '').toString()))
+            .toString();
+    final fileSize = payload['fileSize'] is num
+        ? (payload['fileSize'] as num).toInt()
+        : 0;
+    final totalChunks = payload['totalChunks'] is num
+        ? (payload['totalChunks'] as num).toInt()
+        : 0;
+    final chunkSize = payload['chunkSize'] is num
+        ? (payload['chunkSize'] as num).toInt()
+        : _chunkSizeBytes;
+    final sourceRel = _normalizeRelativePath(
+      (payload['sourcePath'] ?? fileName).toString(),
+    );
     // Enforce a single local receive folder for all incoming uploads.
     final destinationRel = _defaultReceiveRelativePath();
 
@@ -558,27 +607,41 @@ class FileTransferService {
     if (!accepted) {
       outgoing.close();
       _outgoing.remove(transferId);
-      _updateQueue(transferId, (item) => item.copyWith(status: 'failed', error: (payload['error'] ?? 'Rejected').toString(), canCancel: false));
+      _updateQueue(
+        transferId,
+        (item) => item.copyWith(
+          status: 'failed',
+          error: (payload['error'] ?? 'Rejected').toString(),
+          canCancel: false,
+        ),
+      );
       return;
     }
 
-    final remoteFileSize = payload['fileSize'] is num ? (payload['fileSize'] as num).toInt() : 0;
+    final remoteFileSize = payload['fileSize'] is num
+        ? (payload['fileSize'] as num).toInt()
+        : 0;
     if (remoteFileSize > 0) {
-      _updateQueue(transferId, (item) => FileTransferQueueItem(
-            id: item.id,
-            name: (payload['fileName'] ?? item.name).toString(),
-            direction: item.direction,
-            status: 'in-progress',
-            bytesTotal: remoteFileSize,
-            bytesDone: item.bytesDone,
-            speedBytesPerSecond: item.speedBytesPerSecond,
-            sourceRelativePath: item.sourceRelativePath,
-            destinationRelativePath: item.destinationRelativePath,
-            error: item.error,
-            canCancel: true,
-          ));
+      _updateQueue(
+        transferId,
+        (item) => FileTransferQueueItem(
+          id: item.id,
+          name: (payload['fileName'] ?? item.name).toString(),
+          direction: item.direction,
+          status: 'in-progress',
+          bytesTotal: remoteFileSize,
+          bytesDone: item.bytesDone,
+          speedBytesPerSecond: item.speedBytesPerSecond,
+          sourceRelativePath: item.sourceRelativePath,
+          destinationRelativePath: item.destinationRelativePath,
+          error: item.error,
+          canCancel: true,
+        ),
+      );
       outgoing.totalBytes = remoteFileSize;
-      outgoing.totalChunks = (payload['totalChunks'] is num ? (payload['totalChunks'] as num).toInt() : outgoing.totalChunks);
+      outgoing.totalChunks = (payload['totalChunks'] is num
+          ? (payload['totalChunks'] as num).toInt()
+          : outgoing.totalChunks);
       outgoing.sha256Hex = (payload['sha256'] ?? outgoing.sha256Hex).toString();
     }
     await _sendNextChunk(outgoing);
@@ -602,7 +665,14 @@ class FileTransferService {
         'transferId': state.transferId,
         'error': 'Unable to read next chunk',
       });
-      _updateQueue(state.transferId, (item) => item.copyWith(status: 'failed', error: 'Read error', canCancel: false));
+      _updateQueue(
+        state.transferId,
+        (item) => item.copyWith(
+          status: 'failed',
+          error: 'Read error',
+          canCancel: false,
+        ),
+      );
       return;
     }
 
@@ -618,16 +688,29 @@ class FileTransferService {
 
   Future<void> _handleChunkAck(Map<String, dynamic> payload) async {
     final transferId = (payload['transferId'] ?? '').toString();
-    final chunkIndex = payload['chunkIndex'] is num ? (payload['chunkIndex'] as num).toInt() : -1;
+    final chunkIndex = payload['chunkIndex'] is num
+        ? (payload['chunkIndex'] as num).toInt()
+        : -1;
     final outgoing = _outgoing[transferId];
-    if (outgoing == null || chunkIndex < 0 || chunkIndex != outgoing.nextChunkIndex) {
+    if (outgoing == null ||
+        chunkIndex < 0 ||
+        chunkIndex != outgoing.nextChunkIndex) {
       return;
     }
 
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final dtMs = max(1, nowMs - outgoing.lastChunkSentAtMs);
-    final bytesDone = min(outgoing.totalBytes, (chunkIndex + 1) * outgoing.chunkSize);
-    final speed = (min(outgoing.chunkSize, outgoing.totalBytes - (chunkIndex * outgoing.chunkSize)) * 1000) / dtMs;
+    final bytesDone = min(
+      outgoing.totalBytes,
+      (chunkIndex + 1) * outgoing.chunkSize,
+    );
+    final speed =
+        (min(
+              outgoing.chunkSize,
+              outgoing.totalBytes - (chunkIndex * outgoing.chunkSize),
+            ) *
+            1000) /
+        dtMs;
 
     outgoing.nextChunkIndex += 1;
     _updateQueue(
@@ -650,14 +733,23 @@ class FileTransferService {
       return;
     }
 
-    final chunkIndex = payload['chunkIndex'] is num ? (payload['chunkIndex'] as num).toInt() : -1;
+    final chunkIndex = payload['chunkIndex'] is num
+        ? (payload['chunkIndex'] as num).toInt()
+        : -1;
     final chunkData = (payload['chunkData'] ?? '').toString();
     if (chunkIndex != incoming.nextChunkIndex || chunkData.isEmpty) {
       _sendSignal(fileTransferError, {
         'transferId': transferId,
         'error': 'Chunk sequence mismatch',
       });
-      _updateQueue(transferId, (item) => item.copyWith(status: 'failed', error: 'Chunk mismatch', canCancel: false));
+      _updateQueue(
+        transferId,
+        (item) => item.copyWith(
+          status: 'failed',
+          error: 'Chunk mismatch',
+          canCancel: false,
+        ),
+      );
       return;
     }
 
@@ -700,20 +792,36 @@ class FileTransferService {
         'success': false,
         'error': 'Temporary file missing',
       });
-      _updateQueue(transferId, (item) => item.copyWith(status: 'failed', error: 'Temp file missing', canCancel: false));
+      _updateQueue(
+        transferId,
+        (item) => item.copyWith(
+          status: 'failed',
+          error: 'Temp file missing',
+          canCancel: false,
+        ),
+      );
       return;
     }
 
     final actualDigest = await sha256.bind(tempFile.openRead()).first;
-    final expectedDigest = (payload['sha256'] ?? incoming.expectedSha256Hex).toString();
-    if (expectedDigest.isNotEmpty && actualDigest.toString() != expectedDigest) {
+    final expectedDigest = (payload['sha256'] ?? incoming.expectedSha256Hex)
+        .toString();
+    if (expectedDigest.isNotEmpty &&
+        actualDigest.toString() != expectedDigest) {
       tempFile.deleteSync();
       _sendSignal(fileTransferCompleteAck, {
         'transferId': transferId,
         'success': false,
         'error': 'SHA-256 mismatch',
       });
-      _updateQueue(transferId, (item) => item.copyWith(status: 'failed', error: 'SHA-256 mismatch', canCancel: false));
+      _updateQueue(
+        transferId,
+        (item) => item.copyWith(
+          status: 'failed',
+          error: 'SHA-256 mismatch',
+          canCancel: false,
+        ),
+      );
       return;
     }
 
@@ -733,7 +841,9 @@ class FileTransferService {
       transferId,
       (item) => item.copyWith(
         status: 'completed',
-        bytesDone: item.bytesTotal > 0 ? item.bytesTotal : incoming.bytesReceived,
+        bytesDone: item.bytesTotal > 0
+            ? item.bytesTotal
+            : incoming.bytesReceived,
         canCancel: false,
       ),
     );
@@ -752,7 +862,9 @@ class FileTransferService {
       (item) => item.copyWith(
         status: success ? 'completed' : 'failed',
         bytesDone: success ? item.bytesTotal : item.bytesDone,
-        error: success ? null : (payload['error'] ?? 'Remote failed').toString(),
+        error: success
+            ? null
+            : (payload['error'] ?? 'Remote failed').toString(),
         canCancel: false,
       ),
     );
@@ -768,7 +880,10 @@ class FileTransferService {
     final incoming = _incoming.remove(transferId);
     incoming?.close(deleteTemp: true);
 
-    _updateQueue(transferId, (item) => item.copyWith(status: 'failed', error: error, canCancel: false));
+    _updateQueue(
+      transferId,
+      (item) => item.copyWith(status: 'failed', error: error, canCancel: false),
+    );
   }
 
   void _handleCancel(Map<String, dynamic> payload) {
@@ -779,12 +894,19 @@ class FileTransferService {
     final incoming = _incoming.remove(transferId);
     incoming?.close(deleteTemp: true);
 
-    _updateQueue(transferId, (item) => item.copyWith(status: 'canceled', canCancel: false));
+    _updateQueue(
+      transferId,
+      (item) => item.copyWith(status: 'canceled', canCancel: false),
+    );
   }
 
   void _handleBrowseRequest(Map<String, dynamic> payload) {
     final path = _normalizeRelativePath((payload['path'] ?? '').toString());
-    final target = _resolveWithinBase(path, mustExist: true, expectDirectory: true);
+    final target = _resolveWithinBase(
+      path,
+      mustExist: true,
+      expectDirectory: true,
+    );
     if (target == null) {
       _sendSignal(fileTransferBrowseResponse, {
         'path': '',
@@ -802,7 +924,9 @@ class FileTransferService {
   }
 
   void _handleBrowseResponse(Map<String, dynamic> payload) {
-    remotePath.value = _normalizeRelativePath((payload['path'] ?? '').toString());
+    remotePath.value = _normalizeRelativePath(
+      (payload['path'] ?? '').toString(),
+    );
     final rawEntries = payload['entries'];
     if (rawEntries is! List) {
       remoteEntries.value = <FileTransferBrowserEntry>[];
@@ -812,7 +936,9 @@ class FileTransferService {
     final parsed = <FileTransferBrowserEntry>[];
     for (final raw in rawEntries) {
       if (raw is Map) {
-        parsed.add(FileTransferBrowserEntry.fromMap(Map<String, dynamic>.from(raw)));
+        parsed.add(
+          FileTransferBrowserEntry.fromMap(Map<String, dynamic>.from(raw)),
+        );
       }
     }
     remoteEntries.value = parsed;
@@ -877,7 +1003,11 @@ class FileTransferService {
     return normalized;
   }
 
-  String? _resolveWithinBase(String relativePath, {required bool mustExist, required bool expectDirectory}) {
+  String? _resolveWithinBase(
+    String relativePath, {
+    required bool mustExist,
+    required bool expectDirectory,
+  }) {
     final base = p.normalize(_baseDirectory);
     final candidate = p.normalize(p.join(base, relativePath));
     if (!_isWithinBase(candidate)) {
@@ -920,10 +1050,16 @@ class FileTransferService {
 
   String? _resolveOrCreateDestinationDirectory(String relativePath) {
     final normalizedRequested = _normalizeRelativePath(relativePath);
-    final normalizedFallback = _normalizeRelativePath(_defaultReceiveRelativePath());
+    final normalizedFallback = _normalizeRelativePath(
+      _defaultReceiveRelativePath(),
+    );
 
     String? ensureDirectory(String relPath) {
-      final absPath = _resolveWithinBase(relPath, mustExist: false, expectDirectory: true);
+      final absPath = _resolveWithinBase(
+        relPath,
+        mustExist: false,
+        expectDirectory: true,
+      );
       if (absPath == null) {
         return null;
       }
@@ -963,7 +1099,8 @@ class FileTransferService {
       if (!dir.existsSync()) {
         dir.createSync(recursive: true);
       }
-      if (io.FileSystemEntity.typeSync(absPath, followLinks: false) == io.FileSystemEntityType.directory) {
+      if (io.FileSystemEntity.typeSync(absPath, followLinks: false) ==
+          io.FileSystemEntityType.directory) {
         return absPath;
       }
     } catch (_) {
@@ -1001,7 +1138,10 @@ class FileTransferService {
     queue.value = next;
   }
 
-  void _updateQueue(String transferId, FileTransferQueueItem Function(FileTransferQueueItem item) updater) {
+  void _updateQueue(
+    String transferId,
+    FileTransferQueueItem Function(FileTransferQueueItem item) updater,
+  ) {
     final next = List<FileTransferQueueItem>.from(queue.value);
     final index = next.indexWhere((item) => item.id == transferId);
     if (index < 0) {

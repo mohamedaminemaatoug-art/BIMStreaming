@@ -80,21 +80,25 @@ class KeyboardKeyEvent {
   };
 
   /// Create from JSON.
-  factory KeyboardKeyEvent.fromJson(Map<String, dynamic> json) => KeyboardKeyEvent(
-    physicalCode: (json['physicalCode'] as num?)?.toInt() ?? 0,
-    logicalKeyId: (json['logicalKeyId'] as num?)?.toInt() ?? 0,
-    characterCodePoint: (json['characterCodePoint'] as num?)?.toInt() ?? 0,
-    keyName: (json['keyName'] as String?) ?? 'unknown',
-    keyLabel: (json['keyLabel'] as String?) ?? '',
-    phase: (json['phase'] as String?) ?? 'down',
-    modifiers: ModifierState.fromJson(json['modifiers'] as Map<String, dynamic>? ?? {}),
-    isNumpad: (json['isNumpad'] as bool?) ?? false,
-    isModifier: (json['isModifier'] as bool?) ?? false,
-    clientLayout: (json['clientLayout'] as String?) ?? 'unknown',
-    clientLayoutFamily: (json['clientLayoutFamily'] as String?) ?? 'unknown',
-    captureTimestampMs: (json['captureTimestampMs'] as num?)?.toInt() ?? 0,
-    sequenceNumber: (json['sequenceNumber'] as num?)?.toInt() ?? 0,
-  );
+  factory KeyboardKeyEvent.fromJson(Map<String, dynamic> json) =>
+      KeyboardKeyEvent(
+        physicalCode: (json['physicalCode'] as num?)?.toInt() ?? 0,
+        logicalKeyId: (json['logicalKeyId'] as num?)?.toInt() ?? 0,
+        characterCodePoint: (json['characterCodePoint'] as num?)?.toInt() ?? 0,
+        keyName: (json['keyName'] as String?) ?? 'unknown',
+        keyLabel: (json['keyLabel'] as String?) ?? '',
+        phase: (json['phase'] as String?) ?? 'down',
+        modifiers: ModifierState.fromJson(
+          json['modifiers'] as Map<String, dynamic>? ?? {},
+        ),
+        isNumpad: (json['isNumpad'] as bool?) ?? false,
+        isModifier: (json['isModifier'] as bool?) ?? false,
+        clientLayout: (json['clientLayout'] as String?) ?? 'unknown',
+        clientLayoutFamily:
+            (json['clientLayoutFamily'] as String?) ?? 'unknown',
+        captureTimestampMs: (json['captureTimestampMs'] as num?)?.toInt() ?? 0,
+        sequenceNumber: (json['sequenceNumber'] as num?)?.toInt() ?? 0,
+      );
 
   @override
   String toString() =>
@@ -127,14 +131,13 @@ class ModifierState {
     bool? alt,
     bool? meta,
     bool? altGraph,
-  }) =>
-      ModifierState(
-        shift: shift ?? this.shift,
-        control: control ?? this.control,
-        alt: alt ?? this.alt,
-        meta: meta ?? this.meta,
-        altGraph: altGraph ?? this.altGraph,
-      );
+  }) => ModifierState(
+    shift: shift ?? this.shift,
+    control: control ?? this.control,
+    alt: alt ?? this.alt,
+    meta: meta ?? this.meta,
+    altGraph: altGraph ?? this.altGraph,
+  );
 
   Map<String, dynamic> toJson() => {
     'shift': shift,
@@ -233,7 +236,7 @@ enum KeyState {
   hold,
 
   /// Key was released.
-  up;
+  up,
 }
 
 /// Tracks active key state for lifecycle management.
@@ -265,7 +268,8 @@ class ActiveKey {
   int get holdDurationMs => DateTime.now().millisecondsSinceEpoch - pressedAtMs;
 
   @override
-  String toString() => 'ActiveKey(code=$physicalCode, state=$state, held=${holdDurationMs}ms)';
+  String toString() =>
+      'ActiveKey(code=$physicalCode, state=$state, held=${holdDurationMs}ms)';
 }
 
 /// Protocol version constants.

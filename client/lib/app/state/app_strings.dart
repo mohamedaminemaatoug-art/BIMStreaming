@@ -1,0 +1,598 @@
+import 'package:flutter/material.dart';
+
+class AppStrings {
+  const AppStrings._(this.locale);
+
+  final Locale locale;
+
+  static const Map<String, Map<String, String>> _localized = {
+    'en': {
+      'appName': 'BimStreaming',
+      'home': 'Home',
+      'profile': 'Profile',
+      'friends': 'Friends',
+      'messages': 'Messages',
+      'communities': 'Communities',
+      'notifications': 'Notifications',
+      'settings': 'Settings',
+      'theme': 'Theme',
+      'dark': 'Dark',
+      'light': 'Light',
+      'language': 'Language',
+      'saveAppearance': 'Save appearance',
+      'saving': 'Saving...',
+      'themeLanguageSaved': 'Theme and language saved',
+      'deviceId': 'Device ID',
+      'sessionPassword': 'Session password',
+      'establishConnection': 'Establish Connection',
+      'targetDeviceId': 'Target device ID (or user UUID)',
+      'targetSessionPassword': 'Target session password',
+      'deviceIdCopied': 'Device ID copied to clipboard',
+      'connectionInviteSent': 'Connection invite sent',
+      'searchByEmailOrUsername': 'Search by username or email',
+      'searchUsersByEmailOrUsername': 'Search users by email or username.',
+      'search': 'Search',
+      'addFriend': 'Add Friend',
+      'searchUsers': 'Search users by email or username',
+      'sendSession': 'Send session',
+      'sessionInviteSent': 'Session invite sent',
+      'friendsTitle': 'Friends',
+      'requests': 'Requests',
+      'blocked': 'Blocked',
+      'remoteSessionRequest': 'Remote Session Request',
+      'decline': 'Decline',
+      'accept': 'Accept',
+      'close': 'Close',
+      'english': 'English',
+      'french': 'French',
+      'spanish': 'Spanish',
+      'german': 'German',
+      'italian': 'Italian',
+      'profileUpdatedSuccessfully': 'Profile updated successfully',
+      'failedToSaveProfile': 'Failed to save profile: ',
+      'statusUpdatedSuccessfully': 'Status updated successfully',
+      'failedToUpdateStatus': 'Failed to update status: ',
+      'avatarUploadedSuccessfully': 'Avatar uploaded successfully',
+      'avatarUploadFailed': 'Avatar upload failed: ',
+      'unableToLoadProfileRightNow': 'Unable to load profile right now.',
+      'myProfile': 'My profile',
+      'userProfile': 'User profile',
+      'retry': 'Retry',
+      'uploadAvatar': 'Upload avatar',
+      'profileInformation': 'Profile Information',
+      'displayName': 'Display name',
+      'bio': 'Bio',
+      'saveProfile': 'Save profile',
+      'status': 'Status',
+      'emoji': 'Emoji',
+      'statusMessage': 'Status message',
+      'availability': 'Availability',
+      'online': 'Online',
+      'away': 'Away',
+      'busy': 'Busy',
+      'offline': 'Offline',
+      'saveStatus': 'Save status',
+      'friendsScreenTitle': 'Friends',
+      'friendsLoadingError': 'Unable to load friends right now.',
+      'noFriendsYet': 'No friends yet',
+      'tapToAddFriends': 'Tap the + button to add friends',
+      'noFriendRequests': 'No friend requests',
+      'noBlockedUsers': 'No blocked users',
+      'addFriendTitle': 'Add Friend',
+      'searchPlaceholder': 'Search by username or email',
+      'searchHint': 'Search users by email or username.',
+      'noUsersFound': 'No users found.',
+      'friendRequestSent': 'Friend request sent',
+      'searchButton': 'Search',
+      'closeButton': 'Close',
+      'message': 'Message',
+      'block': 'Block',
+      'remove': 'Remove',
+      'unblockUser': 'Unblock User',
+      'cancel': 'Cancel',
+      'unblock': 'Unblock',
+      'newFriendRequestFrom': 'New friend request from ',
+      'notificationsTitle': 'Notifications',
+      'markAllRead': 'Mark all read',
+      'noNotifications': 'No notifications',
+      'notificationErrorPrefix': 'Error: ',
+      'notificationActionFailedPrefix': 'Action failed: ',
+      'justNow': 'just now',
+      'retryAction': 'Retry',
+      'saveNotifications': 'Save notifications',
+      'saveCommunityPreferences': 'Save community preferences',
+      'communitySettings': 'Community settings',
+    },
+    'fr': {
+      'appName': 'BimStreaming',
+      'home': 'Accueil',
+      'profile': 'Profil',
+      'friends': 'Amis',
+      'messages': 'Messages',
+      'communities': 'Communautés',
+      'notifications': 'Notifications',
+      'settings': 'Paramètres',
+      'theme': 'Thème',
+      'dark': 'Sombre',
+      'light': 'Clair',
+      'language': 'Langue',
+      'saveAppearance': 'Enregistrer l’apparence',
+      'saving': 'Enregistrement...',
+      'themeLanguageSaved': 'Thème et langue enregistrés',
+      'deviceId': 'ID du périphérique',
+      'sessionPassword': 'Mot de passe de session',
+      'establishConnection': 'Établir la connexion',
+      'targetDeviceId': 'ID de l’appareil cible (ou UUID utilisateur)',
+      'targetSessionPassword': 'Mot de passe de session cible',
+      'deviceIdCopied': 'ID du périphérique copié dans le presse-papiers',
+      'connectionInviteSent': 'Invitation de connexion envoyée',
+      'searchByEmailOrUsername': 'Rechercher par nom d’utilisateur ou e-mail',
+      'searchUsersByEmailOrUsername': 'Recherchez des utilisateurs par e-mail ou nom d’utilisateur.',
+      'search': 'Rechercher',
+      'addFriend': 'Ajouter un ami',
+      'searchUsers': 'Rechercher des utilisateurs par e-mail ou nom d’utilisateur',
+      'sendSession': 'Envoyer une session',
+      'sessionInviteSent': 'Invitation de session envoyée',
+      'friendsTitle': 'Amis',
+      'requests': 'Demandes',
+      'blocked': 'Bloqués',
+      'remoteSessionRequest': 'Demande de session distante',
+      'decline': 'Refuser',
+      'accept': 'Accepter',
+      'close': 'Fermer',
+      'english': 'Anglais',
+      'french': 'Français',
+      'spanish': 'Espagnol',
+      'german': 'Allemand',
+      'italian': 'Italien',
+      'profileUpdatedSuccessfully': 'Profil mis à jour avec succès',
+      'failedToSaveProfile': 'Échec de l’enregistrement du profil : ',
+      'statusUpdatedSuccessfully': 'Statut mis à jour avec succès',
+      'failedToUpdateStatus': 'Échec de la mise à jour du statut : ',
+      'avatarUploadedSuccessfully': 'Avatar téléversé avec succès',
+      'avatarUploadFailed': 'Échec du téléversement de l’avatar : ',
+      'unableToLoadProfileRightNow': 'Impossible de charger le profil pour le moment.',
+      'myProfile': 'Mon profil',
+      'userProfile': 'Profil utilisateur',
+      'retry': 'Réessayer',
+      'uploadAvatar': 'Téléverser l’avatar',
+      'profileInformation': 'Informations du profil',
+      'displayName': 'Nom affiché',
+      'bio': 'Bio',
+      'saveProfile': 'Enregistrer le profil',
+      'status': 'Statut',
+      'emoji': 'Emoji',
+      'statusMessage': 'Message de statut',
+      'availability': 'Disponibilité',
+      'online': 'En ligne',
+      'away': 'Absent',
+      'busy': 'Occupé',
+      'offline': 'Hors ligne',
+      'saveStatus': 'Enregistrer le statut',
+      'friendsScreenTitle': 'Amis',
+      'friendsLoadingError': 'Impossible de charger les amis pour le moment.',
+      'noFriendsYet': 'Aucun ami pour le moment',
+      'tapToAddFriends': 'Appuyez sur + pour ajouter des amis',
+      'noFriendRequests': 'Aucune demande d’ami',
+      'noBlockedUsers': 'Aucun utilisateur bloqué',
+      'addFriendTitle': 'Ajouter un ami',
+      'searchPlaceholder': 'Rechercher par nom d’utilisateur ou e-mail',
+      'searchHint': 'Recherchez des utilisateurs par e-mail ou nom d’utilisateur.',
+      'noUsersFound': 'Aucun utilisateur trouvé.',
+      'friendRequestSent': 'Demande d’ami envoyée',
+      'searchButton': 'Rechercher',
+      'closeButton': 'Fermer',
+      'message': 'Message',
+      'block': 'Bloquer',
+      'remove': 'Supprimer',
+      'unblockUser': 'Débloquer l’utilisateur',
+      'cancel': 'Annuler',
+      'unblock': 'Débloquer',
+      'newFriendRequestFrom': 'Nouvelle demande d’ami de ',
+      'notificationsTitle': 'Notifications',
+      'markAllRead': 'Tout marquer comme lu',
+      'noNotifications': 'Aucune notification',
+      'notificationErrorPrefix': 'Erreur : ',
+      'notificationActionFailedPrefix': 'Action échouée : ',
+      'justNow': 'à l’instant',
+      'retryAction': 'Réessayer',
+      'saveNotifications': 'Enregistrer les notifications',
+      'saveCommunityPreferences': 'Enregistrer les préférences de la communauté',
+      'communitySettings': 'Paramètres de la communauté',
+    },
+    'es': {
+      'appName': 'BimStreaming',
+      'home': 'Inicio',
+      'profile': 'Perfil',
+      'friends': 'Amigos',
+      'messages': 'Mensajes',
+      'communities': 'Comunidades',
+      'notifications': 'Notificaciones',
+      'settings': 'Ajustes',
+      'theme': 'Tema',
+      'dark': 'Oscuro',
+      'light': 'Claro',
+      'language': 'Idioma',
+      'saveAppearance': 'Guardar apariencia',
+      'saving': 'Guardando...',
+      'themeLanguageSaved': 'Tema e idioma guardados',
+      'deviceId': 'ID del dispositivo',
+      'sessionPassword': 'Contraseña de sesión',
+      'establishConnection': 'Establecer conexión',
+      'targetDeviceId': 'ID del dispositivo objetivo (o UUID de usuario)',
+      'targetSessionPassword': 'Contraseña de sesión objetivo',
+      'deviceIdCopied': 'ID del dispositivo copiado al portapapeles',
+      'connectionInviteSent': 'Invitación de conexión enviada',
+      'searchByEmailOrUsername': 'Buscar por usuario o correo',
+      'searchUsersByEmailOrUsername': 'Busca usuarios por correo o nombre de usuario.',
+      'search': 'Buscar',
+      'addFriend': 'Agregar amigo',
+      'searchUsers': 'Buscar usuarios por correo o nombre de usuario',
+      'sendSession': 'Enviar sesión',
+      'sessionInviteSent': 'Invitación de sesión enviada',
+      'friendsTitle': 'Amigos',
+      'requests': 'Solicitudes',
+      'blocked': 'Bloqueados',
+      'remoteSessionRequest': 'Solicitud de sesión remota',
+      'decline': 'Rechazar',
+      'accept': 'Aceptar',
+      'close': 'Cerrar',
+      'english': 'Inglés',
+      'french': 'Francés',
+      'spanish': 'Español',
+      'german': 'Alemán',
+      'italian': 'Italiano',
+      'profileUpdatedSuccessfully': 'Perfil actualizado correctamente',
+      'failedToSaveProfile': 'No se pudo guardar el perfil: ',
+      'statusUpdatedSuccessfully': 'Estado actualizado correctamente',
+      'failedToUpdateStatus': 'No se pudo actualizar el estado: ',
+      'avatarUploadedSuccessfully': 'Avatar cargado correctamente',
+      'avatarUploadFailed': 'No se pudo cargar el avatar: ',
+      'unableToLoadProfileRightNow': 'No se puede cargar el perfil ahora mismo.',
+      'myProfile': 'Mi perfil',
+      'userProfile': 'Perfil de usuario',
+      'retry': 'Reintentar',
+      'uploadAvatar': 'Subir avatar',
+      'profileInformation': 'Información del perfil',
+      'displayName': 'Nombre para mostrar',
+      'bio': 'Biografía',
+      'saveProfile': 'Guardar perfil',
+      'status': 'Estado',
+      'emoji': 'Emoji',
+      'statusMessage': 'Mensaje de estado',
+      'availability': 'Disponibilidad',
+      'online': 'En línea',
+      'away': 'Ausente',
+      'busy': 'Ocupado',
+      'offline': 'Desconectado',
+      'saveStatus': 'Guardar estado',
+      'friendsScreenTitle': 'Amigos',
+      'friendsLoadingError': 'No se pueden cargar los amigos ahora mismo.',
+      'noFriendsYet': 'Aún no tienes amigos',
+      'tapToAddFriends': 'Toca el botón + para agregar amigos',
+      'noFriendRequests': 'No hay solicitudes de amistad',
+      'noBlockedUsers': 'No hay usuarios bloqueados',
+      'addFriendTitle': 'Agregar amigo',
+      'searchPlaceholder': 'Buscar por usuario o correo',
+      'searchHint': 'Busca usuarios por correo o nombre de usuario.',
+      'noUsersFound': 'No se encontraron usuarios.',
+      'friendRequestSent': 'Solicitud de amistad enviada',
+      'searchButton': 'Buscar',
+      'closeButton': 'Cerrar',
+      'message': 'Mensaje',
+      'block': 'Bloquear',
+      'remove': 'Eliminar',
+      'unblockUser': 'Desbloquear usuario',
+      'cancel': 'Cancelar',
+      'unblock': 'Desbloquear',
+      'newFriendRequestFrom': 'Nueva solicitud de amistad de ',
+      'notificationsTitle': 'Notificaciones',
+      'markAllRead': 'Marcar todo como leído',
+      'noNotifications': 'No hay notificaciones',
+      'notificationErrorPrefix': 'Error: ',
+      'notificationActionFailedPrefix': 'La acción falló: ',
+      'justNow': 'ahora mismo',
+      'retryAction': 'Reintentar',
+      'saveNotifications': 'Guardar notificaciones',
+      'saveCommunityPreferences': 'Guardar preferencias de la comunidad',
+      'communitySettings': 'Configuración de la comunidad',
+    },
+    'de': {
+      'appName': 'BimStreaming',
+      'home': 'Startseite',
+      'profile': 'Profil',
+      'friends': 'Freunde',
+      'messages': 'Nachrichten',
+      'communities': 'Communities',
+      'notifications': 'Benachrichtigungen',
+      'settings': 'Einstellungen',
+      'theme': 'Design',
+      'dark': 'Dunkel',
+      'light': 'Hell',
+      'language': 'Sprache',
+      'saveAppearance': 'Erscheinungsbild speichern',
+      'saving': 'Wird gespeichert...',
+      'themeLanguageSaved': 'Design und Sprache gespeichert',
+      'deviceId': 'Geräte-ID',
+      'sessionPassword': 'Sitzungskennwort',
+      'establishConnection': 'Verbindung herstellen',
+      'targetDeviceId': 'Zielgeräte-ID (oder Benutzer-UUID)',
+      'targetSessionPassword': 'Ziel-Sitzungskennwort',
+      'deviceIdCopied': 'Geräte-ID in die Zwischenablage kopiert',
+      'connectionInviteSent': 'Verbindungseinladung gesendet',
+      'searchByEmailOrUsername': 'Nach Benutzername oder E-Mail suchen',
+      'searchUsersByEmailOrUsername': 'Suche Nutzer per E-Mail oder Benutzername.',
+      'search': 'Suchen',
+      'addFriend': 'Freund hinzufügen',
+      'searchUsers': 'Nutzer per E-Mail oder Benutzername suchen',
+      'sendSession': 'Sitzung senden',
+      'sessionInviteSent': 'Sitzungseinladung gesendet',
+      'friendsTitle': 'Freunde',
+      'requests': 'Anfragen',
+      'blocked': 'Blockiert',
+      'remoteSessionRequest': 'Anfrage für Remote-Sitzung',
+      'decline': 'Ablehnen',
+      'accept': 'Annehmen',
+      'close': 'Schließen',
+      'english': 'Englisch',
+      'french': 'Französisch',
+      'spanish': 'Spanisch',
+      'german': 'Deutsch',
+      'italian': 'Italienisch',
+      'profileUpdatedSuccessfully': 'Profil erfolgreich aktualisiert',
+      'failedToSaveProfile': 'Profil konnte nicht gespeichert werden: ',
+      'statusUpdatedSuccessfully': 'Status erfolgreich aktualisiert',
+      'failedToUpdateStatus': 'Status konnte nicht aktualisiert werden: ',
+      'avatarUploadedSuccessfully': 'Avatar erfolgreich hochgeladen',
+      'avatarUploadFailed': 'Avatar-Upload fehlgeschlagen: ',
+      'unableToLoadProfileRightNow': 'Profil kann derzeit nicht geladen werden.',
+      'myProfile': 'Mein Profil',
+      'userProfile': 'Benutzerprofil',
+      'retry': 'Erneut versuchen',
+      'uploadAvatar': 'Avatar hochladen',
+      'profileInformation': 'Profilinformationen',
+      'displayName': 'Anzeigename',
+      'bio': 'Bio',
+      'saveProfile': 'Profil speichern',
+      'status': 'Status',
+      'emoji': 'Emoji',
+      'statusMessage': 'Statusnachricht',
+      'availability': 'Verfügbarkeit',
+      'online': 'Online',
+      'away': 'Abwesend',
+      'busy': 'Beschäftigt',
+      'offline': 'Offline',
+      'saveStatus': 'Status speichern',
+      'friendsScreenTitle': 'Freunde',
+      'friendsLoadingError': 'Freunde können derzeit nicht geladen werden.',
+      'noFriendsYet': 'Noch keine Freunde',
+      'tapToAddFriends': 'Tippe auf +, um Freunde hinzuzufügen',
+      'noFriendRequests': 'Keine Freundschaftsanfragen',
+      'noBlockedUsers': 'Keine blockierten Nutzer',
+      'addFriendTitle': 'Freund hinzufügen',
+      'searchPlaceholder': 'Nach Benutzername oder E-Mail suchen',
+      'searchHint': 'Suche Nutzer per E-Mail oder Benutzername.',
+      'noUsersFound': 'Keine Nutzer gefunden.',
+      'friendRequestSent': 'Freundschaftsanfrage gesendet',
+      'searchButton': 'Suchen',
+      'closeButton': 'Schließen',
+      'message': 'Nachricht',
+      'block': 'Blockieren',
+      'remove': 'Entfernen',
+      'unblockUser': 'Nutzer entsperren',
+      'cancel': 'Abbrechen',
+      'unblock': 'Entsperren',
+      'newFriendRequestFrom': 'Neue Freundschaftsanfrage von ',
+      'notificationsTitle': 'Benachrichtigungen',
+      'markAllRead': 'Alle als gelesen markieren',
+      'noNotifications': 'Keine Benachrichtigungen',
+      'notificationErrorPrefix': 'Fehler: ',
+      'notificationActionFailedPrefix': 'Aktion fehlgeschlagen: ',
+      'justNow': 'gerade eben',
+      'retryAction': 'Erneut versuchen',
+      'saveNotifications': 'Benachrichtigungen speichern',
+      'saveCommunityPreferences': 'Community-Einstellungen speichern',
+      'communitySettings': 'Community-Einstellungen',
+    },
+    'it': {
+      'appName': 'BimStreaming',
+      'home': 'Home',
+      'profile': 'Profilo',
+      'friends': 'Amici',
+      'messages': 'Messaggi',
+      'communities': 'Community',
+      'notifications': 'Notifiche',
+      'settings': 'Impostazioni',
+      'theme': 'Tema',
+      'dark': 'Scuro',
+      'light': 'Chiaro',
+      'language': 'Lingua',
+      'saveAppearance': 'Salva aspetto',
+      'saving': 'Salvataggio...',
+      'themeLanguageSaved': 'Tema e lingua salvati',
+      'deviceId': 'ID dispositivo',
+      'sessionPassword': 'Password sessione',
+      'establishConnection': 'Stabilisci connessione',
+      'targetDeviceId': 'ID dispositivo di destinazione (o UUID utente)',
+      'targetSessionPassword': 'Password sessione di destinazione',
+      'deviceIdCopied': 'ID dispositivo copiato negli appunti',
+      'connectionInviteSent': 'Invito di connessione inviato',
+      'searchByEmailOrUsername': 'Cerca per nome utente o email',
+      'searchUsersByEmailOrUsername': 'Cerca utenti per email o nome utente.',
+      'search': 'Cerca',
+      'addFriend': 'Aggiungi amico',
+      'searchUsers': 'Cerca utenti per email o nome utente',
+      'sendSession': 'Invia sessione',
+      'sessionInviteSent': 'Invito di sessione inviato',
+      'friendsTitle': 'Amici',
+      'requests': 'Richieste',
+      'blocked': 'Bloccati',
+      'remoteSessionRequest': 'Richiesta di sessione remota',
+      'decline': 'Rifiuta',
+      'accept': 'Accetta',
+      'close': 'Chiudi',
+      'english': 'Inglese',
+      'french': 'Francese',
+      'spanish': 'Spagnolo',
+      'german': 'Tedesco',
+      'italian': 'Italiano',
+      'profileUpdatedSuccessfully': 'Profilo aggiornato con successo',
+      'failedToSaveProfile': 'Impossibile salvare il profilo: ',
+      'statusUpdatedSuccessfully': 'Stato aggiornato con successo',
+      'failedToUpdateStatus': 'Impossibile aggiornare lo stato: ',
+      'avatarUploadedSuccessfully': 'Avatar caricato con successo',
+      'avatarUploadFailed': 'Caricamento avatar non riuscito: ',
+      'unableToLoadProfileRightNow': 'Impossibile caricare il profilo al momento.',
+      'myProfile': 'Il mio profilo',
+      'userProfile': 'Profilo utente',
+      'retry': 'Riprova',
+      'uploadAvatar': 'Carica avatar',
+      'profileInformation': 'Informazioni profilo',
+      'displayName': 'Nome visualizzato',
+      'bio': 'Bio',
+      'saveProfile': 'Salva profilo',
+      'status': 'Stato',
+      'emoji': 'Emoji',
+      'statusMessage': 'Messaggio di stato',
+      'availability': 'Disponibilità',
+      'online': 'Online',
+      'away': 'Assente',
+      'busy': 'Occupato',
+      'offline': 'Offline',
+      'saveStatus': 'Salva stato',
+      'friendsScreenTitle': 'Amici',
+      'friendsLoadingError': 'Impossibile caricare gli amici al momento.',
+      'noFriendsYet': 'Nessun amico ancora',
+      'tapToAddFriends': 'Tocca il pulsante + per aggiungere amici',
+      'noFriendRequests': 'Nessuna richiesta di amicizia',
+      'noBlockedUsers': 'Nessun utente bloccato',
+      'addFriendTitle': 'Aggiungi amico',
+      'searchPlaceholder': 'Cerca per nome utente o email',
+      'searchHint': 'Cerca utenti per email o nome utente.',
+      'noUsersFound': 'Nessun utente trovato.',
+      'friendRequestSent': 'Richiesta di amicizia inviata',
+      'searchButton': 'Cerca',
+      'closeButton': 'Chiudi',
+      'message': 'Messaggio',
+      'block': 'Blocca',
+      'remove': 'Rimuovi',
+      'unblockUser': 'Sblocca utente',
+      'cancel': 'Annulla',
+      'unblock': 'Sblocca',
+      'newFriendRequestFrom': 'Nuova richiesta di amicizia da ',
+      'notificationsTitle': 'Notifiche',
+      'markAllRead': 'Segna tutto come letto',
+      'noNotifications': 'Nessuna notifica',
+      'notificationErrorPrefix': 'Errore: ',
+      'notificationActionFailedPrefix': 'Azione non riuscita: ',
+      'justNow': 'proprio ora',
+      'retryAction': 'Riprova',
+      'saveNotifications': 'Salva notifiche',
+      'saveCommunityPreferences': 'Salva preferenze community',
+      'communitySettings': 'Impostazioni community',
+    },
+  };
+
+  factory AppStrings.of(Locale locale) => AppStrings._(locale);
+
+  String _text(String key) {
+    final languageCode = locale.languageCode.toLowerCase();
+    return _localized[languageCode]?[key] ?? _localized['en']![key] ?? key;
+  }
+
+  String get appName => _text('appName');
+  String get home => _text('home');
+  String get profile => _text('profile');
+  String get friends => _text('friends');
+  String get messages => _text('messages');
+  String get communities => _text('communities');
+  String get notifications => _text('notifications');
+  String get settings => _text('settings');
+  String get theme => _text('theme');
+  String get dark => _text('dark');
+  String get light => _text('light');
+  String get language => _text('language');
+  String get saveAppearance => _text('saveAppearance');
+  String get saving => _text('saving');
+  String get themeLanguageSaved => _text('themeLanguageSaved');
+  String get deviceId => _text('deviceId');
+  String get sessionPassword => _text('sessionPassword');
+  String get establishConnection => _text('establishConnection');
+  String get targetDeviceId => _text('targetDeviceId');
+  String get targetSessionPassword => _text('targetSessionPassword');
+  String get deviceIdCopied => _text('deviceIdCopied');
+  String get connectionInviteSent => _text('connectionInviteSent');
+  String get searchByEmailOrUsername => _text('searchByEmailOrUsername');
+  String get searchUsersByEmailOrUsername => _text('searchUsersByEmailOrUsername');
+  String get search => _text('search');
+  String get addFriend => _text('addFriend');
+  String get searchUsers => _text('searchUsers');
+  String get sendSession => _text('sendSession');
+  String get sessionInviteSent => _text('sessionInviteSent');
+  String get noUsersFound => _text('noUsersFound');
+  String get friendsTitle => _text('friendsTitle');
+  String get requests => _text('requests');
+  String get blocked => _text('blocked');
+  String get remoteSessionRequest => _text('remoteSessionRequest');
+  String get decline => _text('decline');
+  String get accept => _text('accept');
+  String get close => _text('close');
+  String get english => _text('english');
+  String get french => _text('french');
+  String get spanish => _text('spanish');
+  String get german => _text('german');
+  String get italian => _text('italian');
+  String get profileUpdatedSuccessfully => _text('profileUpdatedSuccessfully');
+  String get failedToSaveProfile => _text('failedToSaveProfile');
+  String get statusUpdatedSuccessfully => _text('statusUpdatedSuccessfully');
+  String get failedToUpdateStatus => _text('failedToUpdateStatus');
+  String get avatarUploadedSuccessfully => _text('avatarUploadedSuccessfully');
+  String get avatarUploadFailed => _text('avatarUploadFailed');
+  String get unableToLoadProfileRightNow => _text('unableToLoadProfileRightNow');
+  String get myProfile => _text('myProfile');
+  String get userProfile => _text('userProfile');
+  String get retry => _text('retry');
+  String get uploadAvatar => _text('uploadAvatar');
+  String get profileInformation => _text('profileInformation');
+  String get displayName => _text('displayName');
+  String get bio => _text('bio');
+  String get saveProfile => _text('saveProfile');
+  String get status => _text('status');
+  String get emoji => _text('emoji');
+  String get statusMessage => _text('statusMessage');
+  String get availability => _text('availability');
+  String get online => _text('online');
+  String get away => _text('away');
+  String get busy => _text('busy');
+  String get offline => _text('offline');
+  String get saveStatus => _text('saveStatus');
+  String get friendsScreenTitle => _text('friendsScreenTitle');
+  String get friendsLoadingError => _text('friendsLoadingError');
+  String get noFriendsYet => _text('noFriendsYet');
+  String get tapToAddFriends => _text('tapToAddFriends');
+  String get noFriendRequests => _text('noFriendRequests');
+  String get noBlockedUsers => _text('noBlockedUsers');
+  String get addFriendTitle => _text('addFriendTitle');
+  String get searchPlaceholder => _text('searchPlaceholder');
+  String get searchHint => _text('searchHint');
+  String get friendRequestSent => _text('friendRequestSent');
+  String get searchButton => _text('searchButton');
+  String get closeButton => _text('closeButton');
+  String get message => _text('message');
+  String get block => _text('block');
+  String get remove => _text('remove');
+  String get unblockUser => _text('unblockUser');
+  String get cancel => _text('cancel');
+  String get unblock => _text('unblock');
+  String get newFriendRequestFrom => _text('newFriendRequestFrom');
+  String get notificationsTitle => _text('notificationsTitle');
+  String get markAllRead => _text('markAllRead');
+  String get noNotifications => _text('noNotifications');
+  String get notificationErrorPrefix => _text('notificationErrorPrefix');
+  String get notificationActionFailedPrefix => _text('notificationActionFailedPrefix');
+  String get justNow => _text('justNow');
+  String get retryAction => _text('retryAction');
+  String get saveNotifications => _text('saveNotifications');
+  String get saveCommunityPreferences => _text('saveCommunityPreferences');
+  String get communitySettings => _text('communitySettings');
+}

@@ -1,10 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
 
+	"bimstreaming/server/internal/auth"
+	"bimstreaming/server/internal/repository"
+	wshub "bimstreaming/server/internal/ws"
+
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -22,18 +28,32 @@ type Envelope struct {
 }
 
 type Router struct {
-	clients  *ClientRegistry
-	sessions *SessionRegistry
+	clients      *ClientRegistry
+	sessions     *SessionRegistry
+	repo         *repository.Repository
+	tokenManager *auth.TokenManager
+	hub          *wshub.Hub
 }
 
-func NewRouter(clients *ClientRegistry, sessions *SessionRegistry) *Router {
-	return &Router{clients: clients, sessions: sessions}
+func NewRouter(clients *ClientRegistry, sessions *SessionRegistry, repo *repository.Repository, tokenManager *auth.TokenManager, hub *wshub.Hub) *Router {
+	return &Router{clients: clients, sessions: sessions, repo: repo, tokenManager: tokenManager, hub: hub}
 }
 
 func (r *Router) HandleWS(w http.ResponseWriter, req *http.Request) {
+	token := req.URL.Query().Get("token")
+	authenticatedUserID := ""
+	if token != "" && r.tokenManager != nil {
+		if claims, err := r.tokenManager.ParseAccessToken(token); err == nil {
+			authenticatedUserID = claims.RegisteredClaims.Subject
+		}
+	}
+
 	clientID := req.URL.Query().Get("client_id")
 	if clientID == "" {
 		clientID = req.URL.Query().Get("user_id")
+	}
+	if clientID == "" && authenticatedUserID != "" {
+		clientID = authenticatedUserID
 	}
 	if clientID == "" {
 		http.Error(w, "client_id is required", http.StatusBadRequest)
@@ -50,15 +70,24 @@ func (r *Router) HandleWS(w http.ResponseWriter, req *http.Request) {
 	r.clients.Add(client)
 	log.Printf("client connected: %s", clientID)
 
+	if authenticatedUserID != "" {
+		r.hub.Register(authenticatedUserID, conn)
+		go r.setPresenceAndBroadcast(authenticatedUserID, true)
+	}
+
 	go r.writeLoop(client)
-	r.readLoop(client)
+	r.readLoop(client, authenticatedUserID)
 }
 
-func (r *Router) readLoop(c *Client) {
+func (r *Router) readLoop(c *Client, authenticatedUserID string) {
 	defer func() {
 		r.clients.Remove(c.ID)
 		_ = c.Conn.Close()
 		close(c.Send)
+		if authenticatedUserID != "" {
+			r.hub.Unregister(authenticatedUserID, c.Conn)
+			go r.setPresenceAndBroadcast(authenticatedUserID, false)
+		}
 		log.Printf("client disconnected: %s", c.ID)
 	}()
 
@@ -67,9 +96,7 @@ func (r *Router) readLoop(c *Client) {
 		if err != nil {
 			return
 		}
-
-		if messageType == websocket.BinaryMessage {
-			r.handleBinaryVideoFrame(c.ID, msg) // PHASE 2: relay binary video frames separately from JSON control signals
+		if messageType != websocket.TextMessage {
 			continue
 		}
 
@@ -93,28 +120,33 @@ func (r *Router) readLoop(c *Client) {
 	}
 }
 
-func (r *Router) handleBinaryVideoFrame(fromClientID string, msg []byte) {
-	if len(msg) < 8 {
+func (r *Router) setPresenceAndBroadcast(userID string, online bool) {
+	if r.repo == nil {
 		return
 	}
-	if msg[0] != 0xFE || msg[1] != 0xFF {
+	parsed, err := uuid.Parse(userID)
+	if err != nil {
 		return
 	}
-	toClientID, ok := r.sessions.FindPeer(fromClientID)
-	if !ok || toClientID == "" {
-		log.Printf("relay: peer not found, skipping binary frame from %s", fromClientID)
+	ctx := context.Background()
+	if err := r.repo.SetOnlineStatus(ctx, parsed, online); err != nil {
+		log.Printf("presence update failed: %v", err)
 		return
 	}
-	target, ok := r.clients.Get(toClientID)
-	if !ok {
+	friendIDs, err := r.repo.ListAcceptedFriendIDs(ctx, parsed)
+	if err != nil {
 		return
 	}
-	copyMsg := append([]byte(nil), msg...)
-	select {
-	case target.Send <- copyMsg:
-	default:
-		log.Printf("dropping binary frame for %s: outbound queue full", toClientID)
+	eventType := "user:offline"
+	if online {
+		eventType = "user:online"
 	}
+	targets := make([]string, 0, len(friendIDs)+1)
+	targets = append(targets, userID)
+	for _, fid := range friendIDs {
+		targets = append(targets, fid.String())
+	}
+	r.hub.PublishToMany(targets, eventType, map[string]string{"user_id": userID})
 }
 
 func (r *Router) handleRegister(clientID string, env Envelope) {
@@ -165,11 +197,7 @@ func (r *Router) handleRegister(clientID string, env Envelope) {
 
 func (r *Router) writeLoop(c *Client) {
 	for msg := range c.Send {
-		messageType := websocket.TextMessage
-		if len(msg) >= 2 && msg[0] == 0xFE && msg[1] == 0xFF {
-			messageType = websocket.BinaryMessage // PHASE 2: preserve binary frames over relay
-		}
-		if err := c.Conn.WriteMessage(messageType, msg); err != nil {
+		if err := c.Conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 			return
 		}
 	}

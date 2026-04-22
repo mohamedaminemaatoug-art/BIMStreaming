@@ -26,8 +26,10 @@ class KeyboardLayoutTranslator {
   static const Map<String, String> _layoutFamilyMap = layoutFamilyMap;
 
   /// Callback when layout changes.
-  final void Function(KeyboardLayout? oldLayout, KeyboardLayout? newLayout)? onClientLayoutChanged;
-  final void Function(KeyboardLayout? oldLayout, KeyboardLayout? newLayout)? onHostLayoutChanged;
+  final void Function(KeyboardLayout? oldLayout, KeyboardLayout? newLayout)?
+  onClientLayoutChanged;
+  final void Function(KeyboardLayout? oldLayout, KeyboardLayout? newLayout)?
+  onHostLayoutChanged;
 
   KeyboardLayoutTranslator({
     this.onClientLayoutChanged,
@@ -51,22 +53,19 @@ class KeyboardLayoutTranslator {
     if (!io.Platform.isWindows) return;
 
     try {
-      final result = await io.Process.run(
-        'powershell',
-        [
-          '-NoProfile',
-          '-ExecutionPolicy',
-          'Bypass',
-          '-Command',
-          // Get current keyboard layout from registry
-          r"""
+      final result = await io.Process.run('powershell', [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        // Get current keyboard layout from registry
+        r"""
 $layouts = Get-ItemProperty -Path 'HKCU:\Keyboard Layout\Preload' -ErrorAction SilentlyContinue
 $layout = $layouts.'1'
 if ([string]::IsNullOrWhiteSpace($layout)) { $layout = '00000409' }
 Write-Output $layout
-"""
-        ],
-      );
+""",
+      ]);
 
       if (result.exitCode == 0) {
         final layoutId = (result.stdout as String).trim();
@@ -140,7 +139,9 @@ Write-Output $layout
     final targetFamily = hostLayoutFamily;
 
     // If same layout or unknown, return as-is (character is visual source of truth).
-    if (sourceFamily == targetFamily || sourceFamily == 'unknown' || targetFamily == 'unknown') {
+    if (sourceFamily == targetFamily ||
+        sourceFamily == 'unknown' ||
+        targetFamily == 'unknown') {
       return character;
     }
 
@@ -245,7 +246,8 @@ Write-Output $layout
     // Fallback: try to infer from layout ID if not in known map.
     if (layoutId.contains('040c') || layoutId.contains('080c')) return 'AZERTY';
     if (layoutId.contains('0407') || layoutId.contains('0c07')) return 'QWERTZ';
-    if (layoutId.contains('0809') || layoutId.contains('0c09')) return 'QWERTY'; // Canadian
+    if (layoutId.contains('0809') || layoutId.contains('0c09'))
+      return 'QWERTY'; // Canadian
     return 'QWERTY'; // Default to QWERTY
   }
 }

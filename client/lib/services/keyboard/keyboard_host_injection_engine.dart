@@ -22,10 +22,8 @@ class KeyboardHostInjectionEngine {
   final KeyboardStateManager stateManager;
 
   /// Callback to execute PowerShell commands.
-  final Future<String> Function(
-    List<String> args, {
-    Duration? timeout,
-  }) executePowerShell;
+  final Future<String> Function(List<String> args, {Duration? timeout})
+  executePowerShell;
 
   /// Callback when injection occurs.
   final void Function(int physicalCode, String strategy)? onInjectionOccurred;
@@ -101,11 +99,15 @@ class KeyboardHostInjectionEngine {
           : event.keyLabel;
       if (translatedCharacter.isNotEmpty &&
           KeyboardInputAbstraction.isPrintableCharacter(translatedCharacter)) {
-        translatedCharacter = layoutTranslator.translateCharacter(translatedCharacter);
+        translatedCharacter = layoutTranslator.translateCharacter(
+          translatedCharacter,
+        );
       }
 
       // Skip key-up for printable characters to avoid duplicate text injection.
-      if (event.phase == 'up' && !event.isModifier && !_isControlKey(event.keyName)) {
+      if (event.phase == 'up' &&
+          !event.isModifier &&
+          !_isControlKey(event.keyName)) {
         return true;
       }
 
@@ -129,10 +131,7 @@ class KeyboardHostInjectionEngine {
   }
 
   /// Inject via Unicode input method (preferred for printable characters).
-  Future<bool> _injectUnicode(
-    KeyboardKeyEvent event,
-    String character,
-  ) async {
+  Future<bool> _injectUnicode(KeyboardKeyEvent event, String character) async {
     if (character.isEmpty || character.length != 1) return false;
 
     final codePoint = character.codeUnitAt(0);
@@ -145,7 +144,10 @@ class KeyboardHostInjectionEngine {
         (inputs + 1).ref = _buildUnicodeInput(codePoint, isKeyUp: true);
         final sent = SendInput(2, inputs, sizeOf<INPUT>());
         if (sent != 2) {
-          onInjectionFailed?.call(event.physicalCode, 'unicode sendinput returned $sent');
+          onInjectionFailed?.call(
+            event.physicalCode,
+            'unicode sendinput returned $sent',
+          );
           return false;
         }
       } finally {
@@ -155,7 +157,10 @@ class KeyboardHostInjectionEngine {
       onInjectionOccurred?.call(event.physicalCode, 'unicode');
       return true;
     } catch (e) {
-      onInjectionFailed?.call(event.physicalCode, 'unicode injection failed: $e');
+      onInjectionFailed?.call(
+        event.physicalCode,
+        'unicode injection failed: $e',
+      );
       return false;
     }
   }
@@ -173,14 +178,20 @@ class KeyboardHostInjectionEngine {
         (inputs + 0).ref = _buildVirtualKeyInput(vkCode, isKeyUp: !isKeyDown);
         final sent = SendInput(1, inputs, sizeOf<INPUT>());
         if (sent != 1) {
-          onInjectionFailed?.call(event.physicalCode, 'vk sendinput returned $sent');
+          onInjectionFailed?.call(
+            event.physicalCode,
+            'vk sendinput returned $sent',
+          );
           return false;
         }
       } finally {
         calloc.free(inputs);
       }
 
-      onInjectionOccurred?.call(event.physicalCode, 'vk_${vkCode.toRadixString(16).padLeft(2, '0')}');
+      onInjectionOccurred?.call(
+        event.physicalCode,
+        'vk_${vkCode.toRadixString(16).padLeft(2, '0')}',
+      );
       return true;
     } catch (e) {
       onInjectionFailed?.call(event.physicalCode, 'vk injection failed: $e');
@@ -189,16 +200,14 @@ class KeyboardHostInjectionEngine {
   }
 
   /// Inject with SendKeys (for text with modifiers).
-  Future<bool> _injectSendKeys(
-    KeyboardKeyEvent event,
-    String character,
-  ) async {
+  Future<bool> _injectSendKeys(KeyboardKeyEvent event, String character) async {
     try {
       final inputs = <INPUT>[];
       final modifierVks = <int>[];
 
       if (event.modifiers.control) modifierVks.add(VK_CONTROL);
-      if (event.modifiers.alt && !event.modifiers.altGraph) modifierVks.add(VK_MENU);
+      if (event.modifiers.alt && !event.modifiers.altGraph)
+        modifierVks.add(VK_MENU);
       if (event.modifiers.shift) modifierVks.add(VK_SHIFT);
       if (event.modifiers.meta) modifierVks.add(VK_LWIN);
 
@@ -222,14 +231,20 @@ class KeyboardHostInjectionEngine {
       }
 
       if (!_sendKeyboardInputs(inputs)) {
-        onInjectionFailed?.call(event.physicalCode, 'sendkeys sendinput returned failure');
+        onInjectionFailed?.call(
+          event.physicalCode,
+          'sendkeys sendinput returned failure',
+        );
         return false;
       }
 
       onInjectionOccurred?.call(event.physicalCode, 'sendkeys');
       return true;
     } catch (e) {
-      onInjectionFailed?.call(event.physicalCode, 'sendkeys injection failed: $e');
+      onInjectionFailed?.call(
+        event.physicalCode,
+        'sendkeys injection failed: $e',
+      );
       return false;
     }
   }
@@ -257,14 +272,23 @@ class KeyboardHostInjectionEngine {
       if (!_sendKeyboardInputs([
         _buildVirtualKeyInput(vkCode, isKeyUp: event.phase != 'down'),
       ])) {
-        onInjectionFailed?.call(event.physicalCode, 'modifier sendinput returned failure');
+        onInjectionFailed?.call(
+          event.physicalCode,
+          'modifier sendinput returned failure',
+        );
         return false;
       }
 
-      onInjectionOccurred?.call(event.physicalCode, 'modifier_0x${vkCode.toRadixString(16)}');
+      onInjectionOccurred?.call(
+        event.physicalCode,
+        'modifier_0x${vkCode.toRadixString(16)}',
+      );
       return true;
     } catch (e) {
-      onInjectionFailed?.call(event.physicalCode, 'modifier injection failed: $e');
+      onInjectionFailed?.call(
+        event.physicalCode,
+        'modifier injection failed: $e',
+      );
       return false;
     }
   }
@@ -331,7 +355,8 @@ class KeyboardHostInjectionEngine {
     // so typing works even when host has no physical numpad.
     final numpadMatch = RegExp(r'numpad\s*(\d)').firstMatch(keyNameLower);
     if (numpadMatch != null) {
-      if (event.characterCodePoint >= 0x30 && event.characterCodePoint <= 0x39) {
+      if (event.characterCodePoint >= 0x30 &&
+          event.characterCodePoint <= 0x39) {
         return event.characterCodePoint; // '0'..'9'
       }
       return 0x60 + int.parse(numpadMatch.group(1)!); // NUMPAD0 - NUMPAD9
@@ -390,9 +415,4 @@ class KeyboardHostInjectionEngine {
   }
 }
 
-enum InjectionStrategy {
-  unicode,
-  virtualKey,
-  sendKeys,
-  modifierOnly,
-}
+enum InjectionStrategy { unicode, virtualKey, sendKeys, modifierOnly }

@@ -45,6 +45,51 @@ Depuis la racine:
 
 Le script demarre le serveur (`server/`) puis lance Flutter depuis `client/`.
 
+## Backend et migrations
+
+Le serveur Go expose l'API HTTP sous `/api/v1` et conserve le canal WebSocket existant pour le routage temps reel.
+
+### Variables d'environnement serveur
+
+- `DATABASE_URL=postgres://user:pass@host:5432/bim_streaming?sslmode=require`
+- `JWT_SECRET=<32-byte hex>`
+- `JWT_REFRESH_SECRET=<32-byte hex>`
+- `ENCRYPTION_KEY=<32-byte hex>`
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`
+- `APP_BASE_URL=https://app.bim-streaming.com`
+- `AVATAR_STORAGE_PATH=./storage/avatars`
+- `MAX_UPLOAD_SIZE_MB=5`
+- `RATE_LIMIT_ENABLED=true`
+
+### Lancer les migrations
+
+Avec `golang-migrate` installe, depuis la racine du repo:
+
+```powershell
+migrate -path .\server\migrations -database "$env:DATABASE_URL" up
+```
+
+Pour revenir en arriere:
+
+```powershell
+migrate -path .\server\migrations -database "$env:DATABASE_URL" down 1
+```
+
+### Demarrer le serveur
+
+```powershell
+Set-Location server
+go run .
+```
+
+Le serveur ecoute par defaut sur `:8080` et expose:
+
+- `GET /healthz`
+- `GET /api/v1/ws?token=<access_token>`
+- les routes REST `GET/POST/PATCH/DELETE` sous `/api/v1`
+
+La specification OpenAPI se trouve dans [server/openapi.yaml](server/openapi.yaml).
+
 ## Rapport de migration
 
 Voir `ARCHITECTURE_SPLIT_REPORT.md` pour le detail des deplacements et de la compatibilite protocole.
