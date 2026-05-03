@@ -77,8 +77,15 @@ func (a *App) CreateRemoteInvite(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else if !isFriend {
-		forbidden(w, "friend invite required")
-		return
+		isCommunityMember, err := a.Repo.AreCommunityMembers(r.Context(), requesterID, targetUserID)
+		if err != nil {
+			internalError(w, "failed to verify community membership")
+			return
+		}
+		if !isCommunityMember {
+			forbidden(w, "friend or community member invite required")
+			return
+		}
 	}
 	invite, err := a.Repo.CreateRemoteInvite(r.Context(), requesterID, targetUser.DeviceID, time.Now().UTC().Add(2*time.Minute))
 	if err != nil {

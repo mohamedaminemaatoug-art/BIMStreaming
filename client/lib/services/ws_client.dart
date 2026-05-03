@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'app_config.dart';
 
 class WsException implements Exception {
   final String message;
@@ -44,17 +45,27 @@ class WsClient {
   }
 
   String _resolveWsUrl() {
+    final configFileSignalUrl = AppConfig.instance.signalUrl ?? '';
+    if (configFileSignalUrl.isNotEmpty) {
+      return '$configFileSignalUrl?token=${Uri.encodeComponent(_token ?? '')}';
+    }
     final configuredSignalUrl =
-        (Platform.environment['BIM_SIGNAL_URL'] ?? '').trim();
+      const String.fromEnvironment('BIM_SIGNAL_URL').trim().isNotEmpty
+        ? const String.fromEnvironment('BIM_SIGNAL_URL').trim()
+        : (Platform.environment['BIM_SIGNAL_URL'] ?? '').trim();
     if (configuredSignalUrl.isNotEmpty) {
       final signal = _normalizeHostPortUrl(configuredSignalUrl);
       return '$signal?token=${Uri.encodeComponent(_token ?? '')}';
     }
 
     final configuredApiUrl =
-        (Platform.environment['BIM_API_URL'] ??
-                Platform.environment['BIM_API_BASE_URL'] ??
-                '')
+      const String.fromEnvironment('BIM_API_URL').trim().isNotEmpty
+        ? const String.fromEnvironment('BIM_API_URL').trim()
+        : const String.fromEnvironment('BIM_API_BASE_URL').trim().isNotEmpty
+          ? const String.fromEnvironment('BIM_API_BASE_URL').trim()
+          : (Platform.environment['BIM_API_URL'] ??
+              Platform.environment['BIM_API_BASE_URL'] ??
+              '')
             .trim();
     if (configuredApiUrl.isNotEmpty) {
       final normalizedApi = _normalizeHostPortUrl(configuredApiUrl);

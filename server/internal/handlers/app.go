@@ -96,6 +96,7 @@ func (a *App) Mount(r chi.Router, authMW func(http.Handler) http.Handler, rateLi
 			pr.Patch("/friends/request/{id}", a.ResolveFriendRequest)
 			pr.Delete("/friends/{user_id}", a.DeleteFriend)
 			pr.Post("/friends/block/{user_id}", a.BlockUser)
+			pr.Delete("/friends/block/{user_id}", a.UnblockUser)
 
 			pr.Get("/dm", a.ListConversations)
 			pr.Get("/dm/{user_id}", a.GetDMHistory)
@@ -118,6 +119,7 @@ func (a *App) Mount(r chi.Router, authMW func(http.Handler) http.Handler, rateLi
 			pr.Patch("/communities/{id}/announcements/{announcement_id}", a.UpdateCommunityAnnouncement)
 			pr.Delete("/communities/{id}/announcements/{announcement_id}", a.DeleteCommunityAnnouncement)
 			pr.Get("/communities/{id}/members", a.ListCommunityMembers)
+			pr.Post("/communities/{id}/members", a.AddCommunityMemberDirect)
 			pr.Patch("/communities/{id}/members/{user_id}", a.UpdateCommunityMember)
 			pr.Delete("/communities/{id}/members/{user_id}", a.RemoveCommunityMember)
 			pr.Post("/communities/{id}/members/{user_id}/ban", a.BanCommunityMember)

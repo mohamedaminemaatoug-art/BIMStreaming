@@ -93,6 +93,12 @@ install(DIRECTORY "${NATIVE_ASSETS_DIR}"
    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
    COMPONENT Runtime)
 
+# VP9 codec DLL (built from rustdesk-screencapture Rust crate).
+set(CODEC_DLL "${CMAKE_CURRENT_SOURCE_DIR}/../../rustdesk-screencapture/target/release/bimstreaming_codec.dll")
+if(EXISTS "${CODEC_DLL}")
+  install(FILES "${CODEC_DLL}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" COMPONENT Runtime)
+endif()
+
 # Fully re-copy the assets directory on each build to avoid having stale files
 # from a previous install.
 set(FLUTTER_ASSET_DIR_NAME "flutter_assets")

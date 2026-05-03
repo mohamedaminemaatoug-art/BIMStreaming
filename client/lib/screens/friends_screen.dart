@@ -541,9 +541,9 @@ class BlockedList extends ConsumerWidget {
             child: Text(strings.cancel),
           ),
           ElevatedButton(
-            onPressed: () {
-              // Implement unblock logic
+            onPressed: () async {
               Navigator.pop(context);
+              await ref.read(friendsControllerProvider.notifier).unblockUser(user.id);
             },
             child: Text(strings.unblock),
           ),

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -95,6 +96,10 @@ func (r *Router) readLoop(c *Client, authenticatedUserID string) {
 		messageType, msg, err := c.Conn.ReadMessage()
 		if err != nil {
 			return
+		}
+		if messageType == websocket.BinaryMessage {
+			r.handleBinaryVideoFrame(msg)
+			continue
 		}
 		if messageType != websocket.TextMessage {
 			continue
@@ -197,10 +202,38 @@ func (r *Router) handleRegister(clientID string, env Envelope) {
 
 func (r *Router) writeLoop(c *Client) {
 	for msg := range c.Send {
-		if err := c.Conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+		msgType := websocket.TextMessage
+		if len(msg) >= 2 && msg[0] == 0xB1 && msg[1] == 0x4D {
+			msgType = websocket.BinaryMessage
+		}
+		if err := c.Conn.WriteMessage(msgType, msg); err != nil {
 			return
 		}
 	}
+}
+
+// handleBinaryVideoFrame routes a binary VP9 video frame to the target client.
+//
+// Binary envelope format (little-endian):
+//   [0]    0xB1  – magic byte 0
+//   [1]    0x4D  – magic byte 1
+//   [2-3]  version (ignored)
+//   [4-7]  uint32LE: length of toClientID (N)
+//   [8..8+N-1]  toClientID as UTF-8
+//   remainder:  session ID + flags + width + height + VP9 payload (forwarded opaque)
+func (r *Router) handleBinaryVideoFrame(msg []byte) {
+	if len(msg) < 8 {
+		return
+	}
+	if msg[0] != 0xB1 || msg[1] != 0x4D {
+		return
+	}
+	toIDLen := binary.LittleEndian.Uint32(msg[4:8])
+	if uint32(len(msg)) < 8+toIDLen {
+		return
+	}
+	toClientID := string(msg[8 : 8+toIDLen])
+	r.forwardTo(toClientID, msg)
 }
 
 func (r *Router) handleConnectionRequest(raw []byte, env Envelope) {

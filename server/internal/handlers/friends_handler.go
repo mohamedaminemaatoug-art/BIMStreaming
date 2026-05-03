@@ -181,3 +181,22 @@ func (a *App) ListBlockedUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"data": blocked})
 }
+
+func (a *App) UnblockUser(w http.ResponseWriter, r *http.Request) {
+	userID, err := currentUserID(r)
+	if err != nil {
+		unauthorized(w, "unauthorized")
+		return
+	}
+	otherID, err := parseUUIDParam(r, "user_id")
+	if err != nil {
+		badRequest(w, "invalid user id")
+		return
+	}
+	if err := a.Repo.DeleteFriendship(r.Context(), userID, otherID); err != nil {
+		internalError(w, "failed to unblock user")
+		return
+	}
+	_ = a.Repo.InsertAuditLog(r.Context(), models.AuditLog{ID: uuid.New(), UserID: uuid.NullUUID{UUID: userID, Valid: true}, Action: "friend_unblocked", ResourceType: "friendship", ResourceID: otherID.String(), IPAddress: clientIP(r), UserAgent: r.UserAgent()})
+	writeJSON(w, http.StatusOK, map[string]string{"message": "user unblocked"})
+}

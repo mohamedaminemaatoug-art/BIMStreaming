@@ -245,6 +245,30 @@ func (a *App) EndRemoteSession(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "failed to end session")
 		return
 	}
+
+	peerID := session.HostID
+	if userID == session.HostID {
+		peerID = session.ControllerID
+	}
+	peerUsername := ""
+	if peer, pErr := a.Repo.GetUserByID(r.Context(), peerID); pErr == nil {
+		peerUsername = peer.Username
+	}
+	startedAt := time.Now()
+	if saved.StartedAt.Valid {
+		startedAt = saved.StartedAt.Time
+	}
+	_ = a.Repo.CreateActivityLog(r.Context(), models.ActivityLog{
+		UserID:          userID,
+		TargetUsername:  peerUsername,
+		TargetDeviceID:  session.HostDeviceID,
+		SessionType:     session.SessionType,
+		DurationSeconds: saved.DurationSeconds,
+		Status:          "ended",
+		StartedAt:       startedAt,
+		EndedAt:         saved.EndedAt,
+	})
+
 	writeJSON(w, http.StatusOK, saved)
 }
 

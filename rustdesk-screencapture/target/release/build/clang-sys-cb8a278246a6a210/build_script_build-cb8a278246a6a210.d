@@ -1,0 +1,9 @@
+C:\Users\maato\Documents\BimSteaming\BimStreaming\rustdesk-screencapture\target\release\build\clang-sys-cb8a278246a6a210\build_script_build-cb8a278246a6a210.d: C:\Users\maato\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\clang-sys-1.8.1\build.rs C:\Users\maato\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\clang-sys-1.8.1\build\macros.rs C:\Users\maato\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\clang-sys-1.8.1\build\common.rs C:\Users\maato\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\clang-sys-1.8.1\build\dynamic.rs C:\Users\maato\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\clang-sys-1.8.1\build\static.rs
+
+C:\Users\maato\Documents\BimSteaming\BimStreaming\rustdesk-screencapture\target\release\build\clang-sys-cb8a278246a6a210\build_script_build-cb8a278246a6a210.exe: C:\Users\maato\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\clang-sys-1.8.1\build.rs C:\Users\maato\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\clang-sys-1.8.1\build\macros.rs C:\Users\maato\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\clang-sys-1.8.1\build\common.rs C:\Users\maato\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\clang-sys-1.8.1\build\dynamic.rs C:\Users\maato\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\clang-sys-1.8.1\build\static.rs
+
+C:\Users\maato\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\clang-sys-1.8.1\build.rs:
+C:\Users\maato\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\clang-sys-1.8.1\build\macros.rs:
+C:\Users\maato\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\clang-sys-1.8.1\build\common.rs:
+C:\Users\maato\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\clang-sys-1.8.1\build\dynamic.rs:
+C:\Users\maato\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\clang-sys-1.8.1\build\static.rs:

@@ -75,7 +75,7 @@ func (s *AvatarService) SaveUploadedAvatar(file multipart.File, header *multipar
 	}
 	cropped := imaging.Fill(img, 256, 256, imaging.Center, imaging.Lanczos)
 
-	filename := fmt.Sprintf("%s.png", userID.String())
+	filename := fmt.Sprintf("%s-%d.png", userID.String(), time.Now().UTC().UnixNano())
 	absPath := filepath.Join(s.storagePath, filename)
 	out, err := os.Create(absPath)
 	if err != nil {

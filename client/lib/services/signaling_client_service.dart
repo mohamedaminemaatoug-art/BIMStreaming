@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
+import 'app_config.dart';
 
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -30,22 +32,49 @@ class SignalingClientService {
     if (explicit != null && explicit.trim().isNotEmpty) {
       return explicit.trim();
     }
-    final configured = (Platform.environment['BIM_SIGNAL_URL'] ?? '').trim();
+    final configFileSignalUrl = AppConfig.instance.signalUrl ?? '';
+    if (configFileSignalUrl.isNotEmpty) return configFileSignalUrl;
+    final configured = const String.fromEnvironment('BIM_SIGNAL_URL').trim().isNotEmpty
+        ? const String.fromEnvironment('BIM_SIGNAL_URL').trim()
+        : (Platform.environment['BIM_SIGNAL_URL'] ?? '').trim();
     if (configured.isNotEmpty) {
       return configured;
+    }
+    final configuredApi =
+        const String.fromEnvironment('BIM_API_URL').trim().isNotEmpty
+            ? const String.fromEnvironment('BIM_API_URL').trim()
+            : const String.fromEnvironment('BIM_API_BASE_URL').trim().isNotEmpty
+                ? const String.fromEnvironment('BIM_API_BASE_URL').trim()
+                : (Platform.environment['BIM_API_URL'] ??
+                        Platform.environment['BIM_API_BASE_URL'] ??
+                        '')
+                    .trim();
+    if (configuredApi.isNotEmpty) {
+      final base = configuredApi
+          .replaceFirst(RegExp(r'/api/v1/?$'), '')
+          .replaceFirst('https://', 'wss://')
+          .replaceFirst('http://', 'ws://');
+      return '$base/api/v1/ws';
     }
     return 'ws://localhost:8080/api/v1/ws';
   }
 
   final StreamController<SignalEvent> _eventsController =
       StreamController<SignalEvent>.broadcast();
+  final StreamController<Uint8List> _binaryController =
+      StreamController<Uint8List>.broadcast();
   WebSocketChannel? _channel;
   bool _connected = false;
   String? _currentUserId;
 
   Stream<SignalEvent> get events => _eventsController.stream;
+
+  /// Binary VP9 video frames received from the peer.
+  Stream<Uint8List> get binaryFrames => _binaryController.stream;
+
   bool get isConnected => _connected;
   String get clientInstanceId => _clientInstanceId;
+  String get resolvedWsUrl => _wsBaseUrl;
   WebSocketChannel? get channel => _channel;
 
   Future<bool> connect({required String userId}) async {
@@ -90,6 +119,15 @@ class SignalingClientService {
   }
 
   void _onMessage(dynamic message) {
+    // Binary VP9 video frames are routed to the binaryFrames stream.
+    if (message is Uint8List) {
+      _binaryController.add(message);
+      return;
+    }
+    if (message is List<int>) {
+      _binaryController.add(Uint8List.fromList(message));
+      return;
+    }
     if (message is! String) {
       return;
     }
@@ -225,5 +263,6 @@ class SignalingClientService {
   void dispose() {
     disconnect();
     _eventsController.close();
+    _binaryController.close();
   }
 }

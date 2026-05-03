@@ -2,8 +2,11 @@ package middleware
 
 import (
 	"log"
+	"net"
 	"net/http"
 	"time"
+
+	"bufio"
 )
 
 type responseRecorder struct {
@@ -14,6 +17,20 @@ type responseRecorder struct {
 func (r *responseRecorder) WriteHeader(code int) {
 	r.statusCode = code
 	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *responseRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return hijacker.Hijack()
+}
+
+func (r *responseRecorder) Flush() {
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 func RequestLogger(next http.Handler) http.Handler {

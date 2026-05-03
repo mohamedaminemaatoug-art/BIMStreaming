@@ -181,16 +181,13 @@ class NotificationsList extends ConsumerWidget {
               final sessionToken = (response['session_token'] ?? '')
                   .toString()
                   .trim();
-              final peerUserId = (response['target_user_id'] ?? '')
-                  .toString()
-                  .trim();
               final requesterId = (notification.payload['requester_id'] ?? '')
                   .toString()
                   .trim();
-              if (sessionToken.isNotEmpty && peerUserId.isNotEmpty) {
+              if (sessionToken.isNotEmpty && requesterId.isNotEmpty) {
                 await openRemoteSession(
                   peerName: await requesterNameFor(requesterId),
-                  peerUserId: peerUserId,
+                  peerUserId: requesterId,
                   sessionToken: sessionToken,
                   sendLocalScreen: true,
                 );

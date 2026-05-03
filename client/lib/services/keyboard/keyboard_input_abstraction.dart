@@ -62,14 +62,20 @@ class KeyboardInputAbstraction {
   }
 
   /// Extract current modifier state from hardware keyboard.
+  ///
+  /// Includes lock key states (CapsLock, NumLock) so the host can sync
+  /// them before injecting — mirrors RustDesk's LockModesHandler.
   static ModifierState _extractModifiers() {
     final hw = HardwareKeyboard.instance;
+    final lockKeys = hw.lockModesEnabled;
     return ModifierState(
-      shift: hw.isShiftPressed,
-      control: hw.isControlPressed,
-      alt: hw.isAltPressed,
-      meta: hw.isMetaPressed,
+      shift:    hw.isShiftPressed,
+      control:  hw.isControlPressed,
+      alt:      hw.isAltPressed,
+      meta:     hw.isMetaPressed,
       altGraph: hw.logicalKeysPressed.contains(LogicalKeyboardKey.altGraph),
+      capsLock: lockKeys.contains(KeyboardLockMode.capsLock),
+      numLock:  lockKeys.contains(KeyboardLockMode.numLock),
     );
   }
 

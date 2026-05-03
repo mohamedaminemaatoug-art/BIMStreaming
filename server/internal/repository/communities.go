@@ -103,6 +103,15 @@ func (r *Repository) IsCommunityMember(ctx context.Context, communityID, userID 
 	return true, role, nil
 }
 
+func (r *Repository) CountCommunityMembers(ctx context.Context, communityID uuid.UUID) (int, error) {
+	var count int
+	err := r.db.GetContext(ctx, &count,
+		`SELECT COUNT(*) FROM community_members WHERE community_id=$1 AND deleted_at IS NULL`,
+		communityID,
+	)
+	return count, err
+}
+
 func (r *Repository) ListCommunityMembers(ctx context.Context, communityID uuid.UUID) ([]models.CommunityMember, error) {
 	rows := []models.CommunityMember{}
 	if err := r.db.SelectContext(ctx, &rows,
@@ -112,6 +121,25 @@ func (r *Repository) ListCommunityMembers(ctx context.Context, communityID uuid.
 		return nil, err
 	}
 	return rows, nil
+}
+
+func (r *Repository) AreCommunityMembers(ctx context.Context, userA, userB uuid.UUID) (bool, error) {
+	var exists bool
+	if err := r.db.GetContext(ctx, &exists, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM community_members a
+			JOIN community_members b ON a.community_id = b.community_id
+			JOIN communities c ON c.id = a.community_id AND c.deleted_at IS NULL
+			WHERE a.user_id = $1
+			  AND b.user_id = $2
+			  AND a.deleted_at IS NULL
+			  AND b.deleted_at IS NULL
+		)
+	`, userA, userB); err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 func (r *Repository) UpdateCommunityMember(ctx context.Context, communityID, userID uuid.UUID, role string, departmentID *uuid.UUID) error {

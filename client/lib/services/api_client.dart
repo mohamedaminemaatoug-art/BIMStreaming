@@ -2,10 +2,20 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+import 'app_config.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 String _resolveApiBaseUrl() {
+  final configFileApiUrl = AppConfig.instance.apiUrl ?? '';
+  if (configFileApiUrl.isNotEmpty) {
+    var v = configFileApiUrl;
+    if (!v.endsWith('/api/v1')) v = v.endsWith('/') ? '${v}api/v1' : '$v/api/v1';
+    return v;
+  }
+
   String normalize(String raw) {
     var value = raw.trim();
     if (value.isEmpty) {
@@ -29,8 +39,17 @@ String _resolveApiBaseUrl() {
     return value;
   }
 
-  final configured =
-      (Platform.environment['BIM_API_URL'] ??
+  final configured = (
+    const String.fromEnvironment('BIM_API_URL')
+        .trim()
+        .isNotEmpty
+        ? const String.fromEnvironment('BIM_API_URL')
+        : const String.fromEnvironment('BIM_API_BASE_URL')
+  ).trim().isNotEmpty
+      ? (const String.fromEnvironment('BIM_API_URL').trim().isNotEmpty
+          ? const String.fromEnvironment('BIM_API_URL')
+          : const String.fromEnvironment('BIM_API_BASE_URL'))
+      : (Platform.environment['BIM_API_URL'] ??
               Platform.environment['BIM_API_BASE_URL'] ??
               '')
           .trim();
@@ -61,28 +80,57 @@ class UnauthorizedException extends ApiException {
 
 class ApiClient {
   static final ApiClient _instance = ApiClient._internal();
-  late final FlutterSecureStorage _storage;
+  late final FlutterSecureStorage _secureStorage;
+  late final SharedPreferences _prefs;
   late final http.Client _httpClient;
 
   String? _accessToken;
   String? _refreshToken;
   bool _isRefreshing = false;
+  bool _secureStorageAvailable = true;
   final List<Completer<String>> _refreshCompleters = [];
 
   factory ApiClient() => _instance;
 
   ApiClient._internal() {
-    _storage = const FlutterSecureStorage();
+    _secureStorage = const FlutterSecureStorage();
     _httpClient = http.Client();
   }
 
-  /// Initialize the client - loads stored tokens
+  /// Initialize the client - loads stored tokens with fallback to SharedPreferences
   Future<void> init() async {
     try {
-      _accessToken = await _storage.read(key: _accessTokenKey);
-      _refreshToken = await _storage.read(key: _refreshTokenKey);
+      _prefs = await SharedPreferences.getInstance();
     } catch (e) {
-      // Ignore storage errors on init
+      if (kDebugMode) {
+        print('⚠️  SharedPreferences init failed: $e');
+      }
+    }
+
+    // Try secure storage first
+    try {
+      _accessToken = await _secureStorage.read(key: _accessTokenKey);
+      _refreshToken = await _secureStorage.read(key: _refreshTokenKey);
+      if (kDebugMode && (_accessToken != null || _refreshToken != null)) {
+        print('✅ Tokens loaded from secure storage');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('⚠️  Secure storage read failed: $e - Falling back to SharedPreferences');
+      }
+      _secureStorageAvailable = false;
+      // Fallback to SharedPreferences
+      try {
+        _accessToken = _prefs.getString(_accessTokenKey);
+        _refreshToken = _prefs.getString(_refreshTokenKey);
+        if (kDebugMode && (_accessToken != null || _refreshToken != null)) {
+          print('✅ Tokens loaded from SharedPreferences (fallback)');
+        }
+      } catch (e2) {
+        if (kDebugMode) {
+          print('❌ Failed to load tokens from both storages: $e2');
+        }
+      }
     }
   }
 
@@ -106,12 +154,38 @@ class ApiClient {
     _accessToken = accessToken;
     _refreshToken = refreshToken;
 
+    // Try to store in secure storage
+    if (_secureStorageAvailable) {
+      try {
+        await Future.wait([
+          _secureStorage.write(key: _accessTokenKey, value: accessToken),
+          _secureStorage.write(key: _refreshTokenKey, value: refreshToken),
+        ]);
+        if (kDebugMode) {
+          print('✅ Tokens stored in secure storage');
+        }
+        return;
+      } catch (e) {
+        if (kDebugMode) {
+          print('⚠️  Secure storage write failed: $e - Falling back to SharedPreferences');
+        }
+        _secureStorageAvailable = false;
+      }
+    }
+
+    // Fallback to SharedPreferences
     try {
       await Future.wait([
-        _storage.write(key: _accessTokenKey, value: accessToken),
-        _storage.write(key: _refreshTokenKey, value: refreshToken),
+        _prefs.setString(_accessTokenKey, accessToken),
+        _prefs.setString(_refreshTokenKey, refreshToken),
       ]);
+      if (kDebugMode) {
+        print('✅ Tokens stored in SharedPreferences (fallback)');
+      }
     } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to store tokens: $e');
+      }
       throw ApiException('Failed to store tokens: $e');
     }
   }
@@ -121,13 +195,44 @@ class ApiClient {
     _accessToken = null;
     _refreshToken = null;
 
+    List<String> failures = [];
+
+    // Try to clear from secure storage
+    if (_secureStorageAvailable) {
+      try {
+        await Future.wait([
+          _secureStorage.delete(key: _accessTokenKey),
+          _secureStorage.delete(key: _refreshTokenKey),
+        ]);
+        if (kDebugMode) {
+          print('✅ Tokens cleared from secure storage');
+        }
+      } catch (e) {
+        if (kDebugMode) {
+          print('⚠️  Secure storage clear failed: $e');
+        }
+        failures.add(e.toString());
+      }
+    }
+
+    // Also clear from SharedPreferences
     try {
       await Future.wait([
-        _storage.delete(key: _accessTokenKey),
-        _storage.delete(key: _refreshTokenKey),
+        _prefs.remove(_accessTokenKey),
+        _prefs.remove(_refreshTokenKey),
       ]);
+      if (kDebugMode) {
+        print('✅ Tokens cleared from SharedPreferences');
+      }
     } catch (e) {
-      throw ApiException('Failed to clear tokens: $e');
+      if (kDebugMode) {
+        print('⚠️  SharedPreferences clear failed: $e');
+      }
+      failures.add(e.toString());
+    }
+
+    if (failures.isNotEmpty) {
+      throw ApiException('Failed to clear tokens: ${failures.join(', ')}');
     }
   }
 
@@ -166,7 +271,41 @@ class ApiClient {
         }
 
         _accessToken = newAccessToken;
-        await _storage.write(key: _accessTokenKey, value: newAccessToken);
+        
+        // Try to store in secure storage first
+        if (_secureStorageAvailable) {
+          try {
+            await _secureStorage.write(key: _accessTokenKey, value: newAccessToken);
+            if (kDebugMode) {
+              print('✅ Refreshed access token stored in secure storage');
+            }
+          } catch (e) {
+            if (kDebugMode) {
+              print('⚠️  Secure storage write failed: $e - Falling back to SharedPreferences');
+            }
+            _secureStorageAvailable = false;
+            // Fallback to SharedPreferences
+            try {
+              await _prefs.setString(_accessTokenKey, newAccessToken);
+              if (kDebugMode) {
+                print('✅ Refreshed access token stored in SharedPreferences (fallback)');
+              }
+            } catch (e2) {
+              if (kDebugMode) {
+                print('❌ Failed to store refreshed token: $e2');
+              }
+            }
+          }
+        } else {
+          // Already failed before, use SharedPreferences directly
+          try {
+            await _prefs.setString(_accessTokenKey, newAccessToken);
+          } catch (e) {
+            if (kDebugMode) {
+              print('⚠️  SharedPreferences write failed during refresh: $e');
+            }
+          }
+        }
 
         // Notify all waiters
         for (final completer in _refreshCompleters) {

@@ -1,0 +1,11 @@
+[package]
+name = "bimstreaming_codec"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "bimstreaming_codec"
+crate-type = ["cdylib"]
+
+[build-dependencies]
+bindgen = "0.69"

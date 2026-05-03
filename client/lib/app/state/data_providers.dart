@@ -341,6 +341,15 @@ class FriendsController extends StateNotifier<FriendsState> {
     }
   }
 
+  Future<void> unblockUser(String userId) async {
+    try {
+      await _apiClient.delete('/friends/block/$userId');
+      await loadFriends();
+    } catch (e) {
+      state = state.copyWith(error: e.toString());
+    }
+  }
+
   Future<List<Friend>> searchUsers(String query) async {
     final q = query.trim();
     if (q.isEmpty) {
@@ -762,9 +771,15 @@ class CommunitiesController extends StateNotifier<CommunitiesState> {
     }
   }
 
-  Future<void> joinCommunity(String communityId) async {
+  Future<void> joinCommunity(String communityIdOrCode) async {
     try {
-      await _apiClient.post('/communities/join', body: {'code': communityId});
+      await _apiClient.post(
+        '/communities/join',
+        body: {
+          'code': communityIdOrCode,
+          'community_id': communityIdOrCode,
+        },
+      );
       await loadCommunities();
     } catch (e) {
       state = state.copyWith(error: e.toString());
@@ -881,6 +896,16 @@ class CommunitiesController extends StateNotifier<CommunitiesState> {
 
   Future<Map<String, dynamic>> generateCommunityInvite(String communityId) {
     return _apiClient.post('/communities/$communityId/invite');
+  }
+
+  Future<void> addCommunityMemberByEmail({
+    required String communityId,
+    required String email,
+  }) async {
+    await _apiClient.post(
+      '/communities/$communityId/members',
+      body: {'email': email, 'role': 'user'},
+    );
   }
 }
 

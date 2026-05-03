@@ -105,7 +105,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       });
 
       _displayNameController.text = _displayNameFromUser();
-      _bioController.text = _stringValue(user['bio']);
+      _bioController.text = _sanitizeBio(_stringValue(user['bio']));
       _availability = 'online';
 
       try {
@@ -223,6 +223,12 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     }
   }
 
+  String _sanitizeBio(String text) {
+    if (text.isEmpty) return '';
+    final cleaned = text.replaceAll(RegExp(r'\{String:\s*,\s*Valid:\s*false\}'), '');
+    return cleaned.trim();
+  }
+
   @override
   Widget build(BuildContext context) {
     final strings = AppStrings.of(ref.watch(localeProvider));
@@ -318,12 +324,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                                 ],
                               ),
                             ),
-                            if (viewingOwn)
-                              FilledButton.icon(
-                                onPressed: _uploadAvatar,
-                                icon: const Icon(Icons.cloud_upload),
-                                label: Text(strings.uploadAvatar),
-                              ),
+                            
                           ],
                         ),
                       ),

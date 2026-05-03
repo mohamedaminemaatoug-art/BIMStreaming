@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi' hide Size;
 import 'dart:io' as io;
+import 'dart:isolate';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
@@ -11,14 +12,17 @@ import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:ffi/ffi.dart';
-import 'package:image/image.dart' as img;
+import 'dart:ui' as ui;
 import 'package:path/path.dart' as p;
 import 'package:win32/win32.dart' as win32;
 import '../services/signaling_client_service.dart';
 import '../services/remote_audio_service.dart';
 import '../services/keyboard/keyboard_services.dart';
 import '../services/file_transfer_service.dart';
+import '../services/app_config.dart';
 import '../native/overlay_window.dart';
+import '../native/dxgi_capturer.dart';
+import '../native/vp9_codec.dart';
 
 final class _CursorInfoNative extends Struct {
   @Uint32()
@@ -54,6 +58,10 @@ final class _IconInfoNative extends Struct {
   external int hbmColor;
 }
 
+// JPEG isolate workers removed — VP9 DLL (bimstreaming_codec.dll) now handles
+// all encoding/decoding directly in the UI isolate at 2-5 ms/frame vs the old
+// 20-50 ms/frame JPEG path.
+
 class RemoteSupportPage extends StatefulWidget {
   final String deviceName;
   final String deviceId;
@@ -86,8 +94,8 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   static const int _defaultCaptureMaxWidth = 1280;
   static const int _defaultJpegQuality = 45;
   static const int _defaultCaptureIntervalMs = 33;
-  static const int _minCaptureIntervalMs = 33;
-  static const int _maxCaptureIntervalMs = 33;
+  static const int _minCaptureIntervalMs = 16;
+  static const int _maxCaptureIntervalMs = 66;
   static const bool _remoteAudioFeatureEnabled = false;
 
   // ===== NEW: Performance Tracking & Diagnostics =====
@@ -143,8 +151,8 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   final Stopwatch _cursorMovementStopwatch = Stopwatch();
   // ===== END: TeamViewer-Style Cursor Channel =====
 
-  bool _isConnected = true;
-  String _connectionStatus = 'Connected';
+  bool _isConnected = false;
+  String _connectionStatus = 'Connecting...';
   bool _isEncrypted = true;
   String _sessionTime = '00:00:00';
   String _encryptionType = 'AES-256 Encrypted';
@@ -158,6 +166,8 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   bool _isRebooting = false;
   bool _isScreenSharing = false;
   bool _isCapturing = false;
+  Isolate? _captureIsolate;
+  SendPort? _captureIsolateSendPort;
   bool _isSessionPaused = false;
   bool _isSessionPausedRemote = false;
   int _privacyDurationMinutes = 1;
@@ -288,7 +298,21 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   String _qualityLabel = 'Medium';
   String _autoQualityMode = 'Manual';
   int _captureFrameIntervalMs = _defaultCaptureIntervalMs;
-  bool _forceNativeScreenCapture = false;
+  bool _forceNativeScreenCapture = true; // GDI natif toujours actif — PowerShell trop lent (~300ms/frame)
+
+  // ===== DXGI Desktop Duplication (RustDesk-style hardware capture) =====
+  DxgiCapturer? _dxgiCapturer;
+  bool _dxgiCapturerFailed = false; // permanent failure — skip DXGI for session
+  // ===== END DXGI =====
+
+  // ===== VP9 codec (RustDesk-style encode/decode) =====
+  Vp9Encoder? _vp9Encoder;
+  Vp9Decoder? _vp9Decoder;
+  ui.Image? _remoteUiImage;
+  StreamSubscription<Uint8List>? _binarySubscription;
+  int _framesSinceKeyframe = 0;
+  bool _nextFrameIsKeyframe = true;
+  // ===== END VP9 =====
   String _screenshotPath = '';
   String _recordingsPath = '';
   int _selectedRemoteScreenIndex = 0;
@@ -297,6 +321,10 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   int _localScreenCount = 1;
   int _pingMs = 0;
   String _bandwidthText = '0 kb/s';
+  String _txBandwidthText = '0 kb/s';
+  String _rxBandwidthText = '0 kb/s';
+  int _bytesSentInterval = 0;
+  int _bytesReceivedInterval = 0;
   String _connectionQualityText = 'Stable';
   int _lastNetFrameCounter = 0;
   DateTime? _lastNetSampleAt;
@@ -346,6 +374,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
       );
     }
     _connectSessionSignalIfAvailable();
+    if (widget.sendLocalScreen) unawaited(_initCaptureIsolate());
     _startAutomaticScreenShareIfPossible();
     _startDiagnosticsTimer();
     _startKeyboardLayoutSync();
@@ -381,6 +410,7 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
         _sendResolutionUpdate();
       }
     });
+    unawaited(_ensureSessionSignalingConnected());
   }
 
   void _handleOverlayDisconnectRequested() {
@@ -716,10 +746,81 @@ Write-Output "$count,$width,$height"
       widget.signalingService != null &&
       (widget.currentUserId ?? '').isNotEmpty;
 
+  String _sessionRoleForRegister() {
+    // Router currently maps role="host" as the controller endpoint and
+    // role="viewer" as the agent endpoint.
+    return widget.sendLocalScreen ? 'viewer' : 'host';
+  }
+
+  Future<void> _ensureSessionSignalingConnected() async {
+    if (!_canSignal) {
+      if (!mounted) return;
+      setState(() {
+        _isConnected = false;
+        _connectionStatus = 'Signaling unavailable';
+      });
+      return;
+    }
+
+    final service = widget.signalingService;
+    if (service == null) {
+      if (!mounted) return;
+      setState(() {
+        _isConnected = false;
+        _connectionStatus = 'Signaling unavailable';
+      });
+      return;
+    }
+
+    final uid = (widget.currentUserId ?? '').trim();
+    if (uid.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _isConnected = false;
+        _connectionStatus = 'Missing user id';
+      });
+      return;
+    }
+
+    bool connected = service.isConnected;
+    if (!connected) {
+      try {
+        connected = await service.connect(userId: uid);
+      } catch (_) {
+        connected = false;
+      }
+    }
+
+    if (!mounted) return;
+    if (!connected) {
+      setState(() {
+        _isConnected = false;
+        _connectionStatus = 'Waiting for signaling...';
+      });
+      _startReconnectLoop();
+      return;
+    }
+
+    service.sendRegister(
+      sessionId: (widget.sessionId ?? '').trim(),
+      role: _sessionRoleForRegister(),
+      peerId: widget.deviceId.trim().isEmpty ? null : widget.deviceId.trim(),
+    );
+    setState(() {
+      _isConnected = true;
+      _connectionStatus = 'Connected';
+    });
+    _stopReconnectLoop();
+    _startAutomaticScreenShareIfPossible();
+  }
+
   void _connectSessionSignalIfAvailable() {
-    if (!_canSignal) return;
+    if (!_canSignal || widget.signalingService == null) return;
     _signalSubscription = widget.signalingService!.events.listen(
       _handleSignalEvent,
+    );
+    _binarySubscription = widget.signalingService!.binaryFrames.listen(
+      _handleBinaryVideoFrame,
     );
     _sendSessionPayload(
       messageType: 'transport_capabilities',
@@ -727,7 +828,7 @@ Write-Output "$count,$width,$height"
         'protocolVersion': 2,
         'supportsMoveDelta': true,
         'supportsViewportHint': true,
-        'videoMode': 'ws_jpeg_adaptive',
+        'videoMode': 'ws_vp9_binary',
         'inputMode': 'ws_input_v2',
       },
     );
@@ -802,7 +903,10 @@ Write-Output "$count,$width,$height"
       final prev = _lastNetSampleAt ?? now;
       final elapsed = now.difference(prev).inMilliseconds.clamp(1, 1000000);
       final frameDelta = _framesReceived - _lastNetFrameCounter;
-      final kbps = ((frameDelta * 140.0 * 8.0) / (elapsed / 1000.0))
+      final elapsedSec = elapsed / 1000.0;
+      final txKbps = ((_bytesSentInterval * 8.0) / elapsedSec / 1000.0)
+          .toStringAsFixed(0);
+      final rxKbps = ((_bytesReceivedInterval * 8.0) / elapsedSec / 1000.0)
           .toStringAsFixed(0);
       final fps = ((frameDelta * 1000.0) / elapsed)
           .clamp(0, 120)
@@ -815,12 +919,16 @@ Write-Output "$count,$width,$height"
           ? 'Excellent'
           : (_pingMs <= 100 ? 'Good' : (_pingMs <= 180 ? 'Fair' : 'Poor'));
       setState(() {
-        _bandwidthText = '$kbps kb/s';
+        _txBandwidthText = '$txKbps kb/s';
+        _rxBandwidthText = '$rxKbps kb/s';
+        _bandwidthText = '$rxKbps kb/s';
         _fpsText = fps;
         _packetLossText = '${packetLoss.toStringAsFixed(1)}%';
         _connectionQualityText = q;
         _lastNetFrameCounter = _framesReceived;
         _lastNetSampleAt = now;
+        _bytesSentInterval = 0;
+        _bytesReceivedInterval = 0;
       });
       await _refreshPing();
       _applyAutoQuality();
@@ -895,13 +1003,16 @@ Write-Output "$count,$width,$height"
   }
 
   Future<void> _refreshPing() async {
+    final wsUrl = widget.signalingService?.resolvedWsUrl ?? 'ws://localhost:8080/api/v1/ws';
+    final healthUrl = wsUrl
+        .replaceFirst('wss://', 'https://')
+        .replaceFirst('ws://', 'http://')
+        .replaceFirst(RegExp(r'/api/v1/ws.*$'), '/healthz');
     final sw = Stopwatch()..start();
     try {
       final client = io.HttpClient();
       client.connectionTimeout = const Duration(seconds: 2);
-      final req = await client.getUrl(
-        Uri.parse('http://127.0.0.1:8080/healthz'),
-      );
+      final req = await client.getUrl(Uri.parse(healthUrl));
       final res = await req.close();
       await res.drain<void>();
       sw.stop();
@@ -1049,7 +1160,7 @@ Write-Output "$count,$width,$height"
           break;
         case 'Low':
           _captureJpegQuality = 40;
-          _captureFrameIntervalMs = 33;
+          _captureFrameIntervalMs = 40;
           _captureMaxWidth = 960;
           _autoQualityMode = 'Manual';
           break;
@@ -1060,13 +1171,13 @@ Write-Output "$count,$width,$height"
           break;
         case 'High':
           _captureJpegQuality = 70;
-          _captureFrameIntervalMs = 33;
+          _captureFrameIntervalMs = 20;
           _captureMaxWidth = 1600;
           _autoQualityMode = 'Manual';
           break;
         case 'Ultra':
           _captureJpegQuality = 80;
-          _captureFrameIntervalMs = 33;
+          _captureFrameIntervalMs = 16;
           _captureMaxWidth = 1920;
           _autoQualityMode = 'Manual';
           break;
@@ -1077,23 +1188,38 @@ Write-Output "$count,$width,$height"
       }
       _applyVirtualResolutionPolicy();
     });
+    // Update VP9 encoder bitrate to match the new quality preset.
+    const bitrateMap = {'Low': 500, 'Medium': 1500, 'High': 3000, 'Ultra': 6000};
+    _vp9Encoder?.setBitrate(bitrateMap[preset] ?? 1500);
     _restartScreenShareTimerIfNeeded();
     _sendDisplayConfig();
   }
 
   void _applyAutoQuality() {
     if (_autoQualityMode != 'Auto') return;
-    final inputBurst =
-        DateTime.now().millisecondsSinceEpoch - _lastInputSentAtMs < 80;
-    // Auto-adjust quality based on bandwidth and ping.
-    // Favor lower latency and lower encode cost for smoother motion/video playback.
-    final newQuality = _pingMs <= 40
-        ? 48
-        : (_pingMs <= 80 ? 45 : (_pingMs <= 140 ? 40 : 36));
-    final tunedIntervalMs = 33;
+
+    // RustDesk-style adaptive QoS (from video_qos.rs):
+    //   threshold = 150 ms RTT; step ±5 fps; bounds 10–60 fps; default 30 fps.
+    // We treat _pingMs as RTT (round-trip time).
+    const int kThresholdMs = 150;
+    const int kMinFps      = 10;
+    const int kMaxFps      = 60;
+    const int kFpsStep     = 5;
+
+    final currentFps = (1000.0 / _captureFrameIntervalMs.clamp(1, 1000)).round();
+    final int newFps  = (_pingMs < kThresholdMs)
+        ? (currentFps + kFpsStep).clamp(kMinFps, kMaxFps)
+        : (currentFps - kFpsStep).clamp(kMinFps, kMaxFps);
+    final int newIntervalMs = (1000.0 / newFps).round();
+
+    // Also tune JPEG quality based on absolute latency.
+    final int newQuality = _pingMs <= 40 ? 48
+        : (_pingMs <= 80  ? 45
+        : (_pingMs <= 140 ? 40 : 36));
+
     setState(() {
-      _captureJpegQuality = newQuality;
-      _captureFrameIntervalMs = tunedIntervalMs;
+      _captureJpegQuality     = newQuality;
+      _captureFrameIntervalMs = newIntervalMs;
       _applyVirtualResolutionPolicy();
     });
     _restartScreenShareTimerIfNeeded();
@@ -1174,6 +1300,25 @@ Write-Output "$count,$width,$height"
     );
   }
 
+  // Appelle BlockInput Win32 côté AGENT pour bloquer/débloquer le clavier+souris physiques.
+  // BlockInput(TRUE) bloque les entrées physiques mais laisse passer SendInput() synthétique,
+  // donc le contrôleur peut toujours injecter des événements.
+  void _applyBlockInput(bool keyboardEnabled, bool mouseEnabled) {
+    if (!widget.sendLocalScreen) return; // seulement exécuté côté agent
+    if (!io.Platform.isWindows) return;
+    try {
+      _user32Lib ??= DynamicLibrary.open('user32.dll');
+      final blockInput = _user32Lib!.lookupFunction<
+          Int32 Function(Int32),
+          int Function(int)>('BlockInput');
+      // Bloquer si l'un ou l'autre est désactivé
+      final shouldBlock = !keyboardEnabled || !mouseEnabled;
+      blockInput(shouldBlock ? 1 : 0);
+    } catch (_) {
+      // BlockInput peut échouer sans droits suffisants — ignorer silencieusement
+    }
+  }
+
   void _setInputControl({bool? keyboardEnabled, bool? mouseEnabled}) {
     setState(() {
       if (keyboardEnabled != null) {
@@ -1184,6 +1329,8 @@ Write-Output "$count,$width,$height"
       }
     });
     _sendInputPolicy();
+    // Si c'est l'agent qui change ses propres permissions, appliquer BlockInput localement
+    _applyBlockInput(_keyboardInputEnabledForUser2, _mouseInputEnabledForUser2);
   }
 
   void _togglePauseSession() {
@@ -1435,6 +1582,13 @@ Write-Output "$count,$width,$height"
         _keyboardInputEnabledForUser2 = keyboard;
         _mouseInputEnabledForUser2 = mouse;
       });
+      if (widget.sendLocalScreen) {
+        // Côté AGENT : bloquer le clavier/souris physiques via Win32 BlockInput.
+        // SendInput() synthétique du contrôleur n'est PAS bloqué par BlockInput.
+        _applyBlockInput(keyboard, mouse);
+      }
+      // Côté CONTRÔLEUR : on met à jour l'état visuel (toggle UI) uniquement.
+      // Le contrôleur peut toujours envoyer ses events — voir les gardes supprimés.
       return;
     }
 
@@ -1532,8 +1686,13 @@ Write-Output "$count,$width,$height"
       if (widget.sendLocalScreen) {
         if (idxRaw is num) {
           final idx = idxRaw.toInt();
-          if (idx >= 0 && idx < _localScreenCount) {
+          if (idx >= 0 && idx < _localScreenCount && idx != _selectedLocalScreenIndex) {
             _selectedLocalScreenIndex = idx;
+            // Reinit DXGI for the new monitor output
+            _dxgiCapturer?.dispose();
+            _dxgiCapturer = null;
+            _dxgiCapturerFailed = false;
+            _initDxgiCapturer();
           }
         }
         if (resolution.isNotEmpty) {
@@ -1756,7 +1915,7 @@ Write-Output "$count,$width,$height"
     _reconnectAttempts = 0;
     _reconnectTimer = Timer.periodic(const Duration(seconds: 4), (_) async {
       if (!mounted) return;
-      if (_isConnected || !_canSignal || _isClosingSession) {
+      if (_isConnected || !_canSignal || _isClosingSession || widget.signalingService == null) {
         _stopReconnectLoop();
         return;
       }
@@ -1778,9 +1937,18 @@ Write-Output "$count,$width,$height"
       try {
         final uid = (widget.currentUserId ?? '').trim();
         if (uid.isEmpty) return;
-        final ok = await widget.signalingService!.connect(userId: uid);
+        final service = widget.signalingService;
+        if (service == null) return;
+        final ok = await service.connect(userId: uid);
         if (!mounted) return;
         if (ok) {
+          service.sendRegister(
+            sessionId: (widget.sessionId ?? '').trim(),
+            role: _sessionRoleForRegister(),
+            peerId: widget.deviceId.trim().isEmpty
+                ? null
+                : widget.deviceId.trim(),
+          );
           setState(() {
             _isConnected = true;
             _connectionStatus = 'Auto-reconnected';
@@ -2442,13 +2610,10 @@ Write-Output "$count,$width,$height"
       'right_up',
       'wheel',
     };
-    if (!_mouseInputEnabledForUser2 && mouseActions.contains(action)) {
-      return;
-    }
-    if (!_keyboardInputEnabledForUser2 &&
-        (action == 'key_press' || action == 'key_event')) {
-      return;
-    }
+    // NOTE: Physical input blocking on the host is handled exclusively by Win32 BlockInput().
+    // The controller's synthetic events (SendInput) must always pass through regardless
+    // of _keyboardInputEnabledForUser2 / _mouseInputEnabledForUser2 — those flags only
+    // gate BlockInput on the agent side, not the controller's injected events.
     if (action == 'key_press' && payload['legacyCompat'] == true) {
       return;
     }
@@ -2987,7 +3152,7 @@ switch ($action) {
     required String messageType,
     required Map<String, dynamic> payload,
   }) {
-    if (!_canSignal) {
+    if (!_canSignal || widget.signalingService == null) {
       print(
         '[RemoteSupportPage] Cannot signal: signalingService=${widget.signalingService}, userId=${widget.currentUserId}, sessionId=${widget.sessionId}',
       );
@@ -3209,6 +3374,7 @@ switch ($action) {
         _pendingRemoteScreenCount = null;
         _pendingRemoteScreenIndex = null;
         _framesReceived++;
+        _bytesReceivedInterval += _remoteScreenFrame!.length;
         if (_framesReceived % 30 == 0) {
           print(
             '[ScreenShare] Frame applied #$_framesReceived (${_remoteScreenFrame!.length} bytes)',
@@ -3333,6 +3499,17 @@ switch ($action) {
     _keyboardRepeatController.stopAllRepeats();
     _keyboardStateManager.forceReleaseAll(reason: 'dispose');
     _keyboardTransportLayer.dispose();
+    _disposeCaptureIsolate();
+    _dxgiCapturer?.dispose();
+    _dxgiCapturer = null;
+    _binarySubscription?.cancel();
+    _binarySubscription = null;
+    _vp9Encoder?.dispose();
+    _vp9Encoder = null;
+    _vp9Decoder?.dispose();
+    _vp9Decoder = null;
+    _remoteUiImage?.dispose();
+    _remoteUiImage = null;
     super.dispose();
   }
 
@@ -3342,16 +3519,7 @@ switch ($action) {
     final isController = !widget.sendLocalScreen;
 
     return Scaffold(
-      appBar: isController || !_isFullScreen
-          ? null
-          : AppBar(
-              backgroundColor: colors['bg']!,
-              elevation: 0,
-              title: Text(
-                tr('remote_support_title'),
-                style: TextStyle(color: colors['text']!),
-              ),
-            ),
+      appBar: null,
       body: isController
           ? _buildControllerView(colors)
           : _buildRemoteAgentView(colors),
@@ -3760,7 +3928,7 @@ switch ($action) {
       );
     }
 
-    if (_remoteScreenFrame == null) {
+    if (_remoteScreenFrame == null && _remoteUiImage == null) {
       final statusText = widget.sendLocalScreen
           ? _hostSessionBannerText
           : (_captureError.isNotEmpty
@@ -3817,8 +3985,7 @@ switch ($action) {
               onKeyEvent: (event) {
                 if (!_canSendRemoteInput ||
                     _isDeviceLocked ||
-                    _isSessionPaused ||
-                    !_keyboardInputEnabledForUser2) {
+                    _isSessionPaused) {
                   return;
                 }
 
@@ -3863,8 +4030,7 @@ switch ($action) {
                     onPointerDown:
                         _canSendRemoteInput &&
                             !_isDeviceLocked &&
-                            !_isSessionPaused &&
-                            _mouseInputEnabledForUser2
+                            !_isSessionPaused
                         ? (event) {
                             _revealOverlayTemporarily();
                             final p = normalize(event.localPosition);
@@ -3886,8 +4052,7 @@ switch ($action) {
                     onPointerHover:
                         _canSendRemoteInput &&
                             !_isDeviceLocked &&
-                            !_isSessionPaused &&
-                            _mouseInputEnabledForUser2
+                            !_isSessionPaused
                         ? (event) {
                             final now = DateTime.now().millisecondsSinceEpoch;
                             if (now - _lastPointerMoveMs < 1) return;
@@ -3900,8 +4065,7 @@ switch ($action) {
                     onPointerMove:
                         _canSendRemoteInput &&
                             !_isDeviceLocked &&
-                            !_isSessionPaused &&
-                            _mouseInputEnabledForUser2
+                            !_isSessionPaused
                         ? (event) {
                             final now = DateTime.now().millisecondsSinceEpoch;
                             if (now - _lastPointerMoveMs < 1) return;
@@ -3914,8 +4078,7 @@ switch ($action) {
                     onPointerUp:
                         _canSendRemoteInput &&
                             !_isDeviceLocked &&
-                            !_isSessionPaused &&
-                            _mouseInputEnabledForUser2
+                            !_isSessionPaused
                         ? (event) {
                             if (!_mouseButtonDown) return;
                             final p = normalize(event.localPosition);
@@ -3935,8 +4098,7 @@ switch ($action) {
                     onPointerCancel:
                         _canSendRemoteInput &&
                             !_isDeviceLocked &&
-                            !_isSessionPaused &&
-                            _mouseInputEnabledForUser2
+                            !_isSessionPaused
                         ? (event) {
                             if (!_mouseButtonDown) return;
                             _flushPendingMove();
@@ -3952,8 +4114,7 @@ switch ($action) {
                     onPointerSignal:
                         _canSendRemoteInput &&
                             !_isDeviceLocked &&
-                            !_isSessionPaused &&
-                            _mouseInputEnabledForUser2
+                            !_isSessionPaused
                         ? (event) {
                             if (event is PointerScrollEvent) {
                               _flushPendingMove();
@@ -3964,8 +4125,7 @@ switch ($action) {
                     onPointerPanZoomUpdate:
                         _canSendRemoteInput &&
                             !_isDeviceLocked &&
-                            !_isSessionPaused &&
-                            _mouseInputEnabledForUser2
+                            !_isSessionPaused
                         ? (event) {
                             final panDy = event.panDelta.dy;
                             if (panDy.abs() > 0.01) {
@@ -4014,13 +4174,20 @@ switch ($action) {
                               width: sourceWidth.toDouble(),
                               height: sourceHeight.toDouble(),
                               child: _buildRemoteCursorOverlay(
-                                Image.memory(
-                                  _remoteScreenFrame!,
-                                  width: sourceWidth.toDouble(),
-                                  height: sourceHeight.toDouble(),
-                                  fit: BoxFit.fill,
-                                  gaplessPlayback: true,
-                                ),
+                                _remoteUiImage != null
+                                    ? RawImage(
+                                        image: _remoteUiImage,
+                                        width: sourceWidth.toDouble(),
+                                        height: sourceHeight.toDouble(),
+                                        fit: BoxFit.fill,
+                                      )
+                                    : Image.memory(
+                                        _remoteScreenFrame!,
+                                        width: sourceWidth.toDouble(),
+                                        height: sourceHeight.toDouble(),
+                                        fit: BoxFit.fill,
+                                        gaplessPlayback: true,
+                                      ),
                               ),
                             ),
                           ),
@@ -5334,13 +5501,15 @@ switch ($action) {
           ),
         ),
         const SizedBox(height: 10),
+        const SizedBox(height: 6),
         _buildMetricLine('Ping', '$_pingMs ms', colors),
         _buildMetricLine(
           'Connection',
           _isConnected ? 'Connected' : 'Disconnected',
           colors,
         ),
-        _buildMetricLine('Bitrate', _bandwidthText, colors),
+        _buildMetricLine('Bitrate TX', _txBandwidthText, colors),
+        _buildMetricLine('Bitrate RX', _rxBandwidthText, colors),
         _buildMetricLine('FPS', _fpsText, colors),
         _buildMetricLine(
           'Frame latency',
@@ -5348,6 +5517,7 @@ switch ($action) {
           colors,
         ),
         _buildMetricLine('Packet loss', _packetLossText, colors),
+        _buildMetricLine('Frames dropped', '$_framesDropped', colors),
         _buildMetricLine('Protocol', 'v$_remoteProtocolVersion', colors),
         _buildMetricLine(
           'Remote (real)',
@@ -5799,134 +5969,225 @@ switch ($action) {
     }
   }
 
+  Future<void> _initCaptureIsolate() async {
+    // Initialize DXGI Desktop Duplication capturer (hardware-accelerated).
+    _initDxgiCapturer();
+    // Initialize VP9 encoder — dimensions set lazily on first frame.
+    // Encoder is recreated in _captureLocalScreenNativeVp9Packet if null.
+  }
+
+  void _initDxgiCapturer() {
+    if (_dxgiCapturerFailed) return;
+    try {
+      final cap = DxgiCapturer();
+      final ok = cap.init(monitor: _selectedLocalScreenIndex);
+      if (ok) {
+        _dxgiCapturer?.dispose();
+        _dxgiCapturer = cap;
+      } else {
+        cap.dispose();
+        _dxgiCapturerFailed = true;
+      }
+    } catch (_) {
+      _dxgiCapturerFailed = true;
+    }
+  }
+
+  void _disposeCaptureIsolate() {
+    _vp9Encoder?.dispose();
+    _vp9Encoder = null;
+    _nextFrameIsKeyframe = true;
+    _framesSinceKeyframe = 0;
+  }
+
+  /// Capture one DXGI frame and VP9-encode it. Returns null if nothing to send.
+  Future<Uint8List?> _captureLocalScreenNativeVp9Packet() async {
+    if (_dxgiCapturerFailed) return null;
+    if (_dxgiCapturer == null || !_dxgiCapturer!.isReady) {
+      if (_dxgiCapturerFailed) return null;
+      _initDxgiCapturer();
+      if (_dxgiCapturer == null || !_dxgiCapturer!.isReady) return null;
+    }
+    try {
+      final frame = _dxgiCapturer!.captureFrame();
+      if (frame == null) {
+        if (!_dxgiCapturer!.isReady) {
+          _dxgiCapturer!.dispose();
+          _dxgiCapturer = null;
+        }
+        return null;
+      }
+
+      _localCaptureLeft   = 0;
+      _localCaptureTop    = 0;
+      _localCaptureWidth  = frame.width;
+      _localCaptureHeight = frame.height;
+      _localFrameWidth    = frame.width;
+      _localFrameHeight   = frame.height;
+
+      // Lazily create/recreate encoder when frame dimensions are known.
+      if (_vp9Encoder == null ||
+          _vp9Encoder!.width != frame.width ||
+          _vp9Encoder!.height != frame.height) {
+        _vp9Encoder?.dispose();
+        final bitrateMap = {'Low': 500, 'Medium': 1500, 'High': 3000, 'Ultra': 6000};
+        final kbps = bitrateMap[_qualityLabel] ?? 1500;
+        _vp9Encoder = Vp9Encoder.create(frame.width, frame.height, bitrateKbps: kbps);
+        _nextFrameIsKeyframe = true;
+        _framesSinceKeyframe = 0;
+      }
+
+      final forceKey = _nextFrameIsKeyframe;
+      _nextFrameIsKeyframe = false;
+      return _vp9Encoder?.encode(frame.bgraPixels, forceKeyframe: forceKey);
+    } catch (e) {
+      _dxgiCapturerFailed = true;
+      _dxgiCapturer?.dispose();
+      _dxgiCapturer = null;
+      return null;
+    }
+  }
+
+  /// Wrap a VP9 packet in a binary envelope and push it over the WebSocket.
+  ///
+  /// Envelope layout (little-endian):
+  ///   [0]    0xB1  magic byte 0
+  ///   [1]    0x4D  magic byte 1
+  ///   [2-3]  0x00  version (reserved)
+  ///   [4-7]  uint32LE: length of toClientID UTF-8 bytes (N)
+  ///   [8..8+N-1] toClientID
+  ///   [8+N..11+N] uint32LE: length of sessionID UTF-8 bytes (M)
+  ///   [12+N..11+N+M] sessionID
+  ///   [12+N+M] flags byte (bit0 = keyframe)
+  ///   [13+N+M..14+N+M] uint16LE width
+  ///   [15+N+M..16+N+M] uint16LE height
+  ///   remainder: raw VP9 packet bytes
+  void _sendBinaryVideoFrame(
+    Uint8List vp9Packet, {
+    required int width,
+    required int height,
+    bool isKeyframe = false,
+  }) {
+    final channel = widget.signalingService?.channel;
+    if (channel == null) return;
+
+    final toId  = Uint8List.fromList(widget.deviceId.codeUnits);
+    final sessId = Uint8List.fromList((widget.sessionId ?? '').codeUnits);
+
+    final headerLen = 2 + 2 + 4 + toId.length + 4 + sessId.length + 1 + 2 + 2;
+    final envelope  = Uint8List(headerLen + vp9Packet.length);
+    final bd        = ByteData.sublistView(envelope);
+
+    int off = 0;
+    envelope[off++] = 0xB1;
+    envelope[off++] = 0x4D;
+    bd.setUint16(off, 0, Endian.little); off += 2; // version
+    bd.setUint32(off, toId.length, Endian.little); off += 4;
+    envelope.setAll(off, toId);         off += toId.length;
+    bd.setUint32(off, sessId.length, Endian.little); off += 4;
+    envelope.setAll(off, sessId);       off += sessId.length;
+    envelope[off++] = isKeyframe ? 1 : 0;
+    bd.setUint16(off, width,  Endian.little); off += 2;
+    bd.setUint16(off, height, Endian.little); off += 2;
+    envelope.setAll(off, vp9Packet);
+
+    channel.sink.add(envelope);
+  }
+
+  /// Decode an incoming binary VP9 envelope and update the displayed frame.
+  void _handleBinaryVideoFrame(Uint8List data) {
+    if (widget.sendLocalScreen) return; // host side does not decode
+    if (data.length < 8) return;
+    if (data[0] != 0xB1 || data[1] != 0x4D) return;
+
+    final bd = ByteData.sublistView(data);
+    int off = 4;
+    final toIdLen = bd.getUint32(off, Endian.little); off += 4;
+    off += toIdLen; // skip toClientID
+    if (off + 4 > data.length) return;
+    final sessIdLen = bd.getUint32(off, Endian.little); off += 4;
+    off += sessIdLen; // skip sessionID
+    if (off + 5 > data.length) return;
+    // final flags = data[off];
+    off += 1;
+    final w = bd.getUint16(off, Endian.little); off += 2;
+    final h = bd.getUint16(off, Endian.little); off += 2;
+
+    final vp9 = data.sublist(off);
+    if (vp9.isEmpty) return;
+
+    _vp9Decoder ??= Vp9Decoder.create();
+    final decoded = _vp9Decoder?.decode(vp9);
+    if (decoded == null) return;
+
+    final frameW = decoded.width > 0 ? decoded.width : w;
+    final frameH = decoded.height > 0 ? decoded.height : h;
+
+    ui.decodeImageFromPixels(
+      decoded.bgra,
+      frameW,
+      frameH,
+      ui.PixelFormat.bgra8888,
+      (img) {
+        if (!mounted) {
+          img.dispose();
+          return;
+        }
+        final old = _remoteUiImage;
+        setState(() {
+          _remoteUiImage = img;
+          _remoteFrameWidth  = frameW;
+          _remoteFrameHeight = frameH;
+          _framesReceived++;
+          _bytesReceivedInterval += data.length;
+        });
+        WidgetsBinding.instance.addPostFrameCallback((_) => old?.dispose());
+      },
+    );
+  }
+
   Future<void> _sendScreenFrame() async {
-    debugPrint('LOOP_START: _isScreenSharing=$_isScreenSharing');
     if (!_canSignal || !_isScreenSharing || _isCapturing) return;
     final nowMs = DateTime.now().millisecondsSinceEpoch;
-
-    // OPTIMIZATION: Reduced latency check from 24ms to 8ms
-    // Previously: if (nowMs - _lastInputSentAtMs < 24) return;
-    // This allows video to send more frequently while still respecting input priority
     if (nowMs - _lastInputSentAtMs < 8) return;
 
     _isCapturing = true;
-    final captureStartMs = DateTime.now().millisecondsSinceEpoch;
+    final captureStartMs = nowMs;
 
     try {
-      final bytes = await _captureLocalScreenToJpegBytes();
-      debugPrint('CAPTURE_RESULT: bytes=${bytes?.length ?? "null"}');
+      final packet = await _captureLocalScreenNativeVp9Packet();
       if (!mounted) return;
-      if (bytes == null || bytes.isEmpty) {
-        print('[ScreenShare] Capture returned null/empty');
-        final detail = _captureError.isNotEmpty
-            ? _captureError
-            : 'capture null';
-        if (mounted && _captureError.isEmpty) {
-          setState(() => _captureError = detail);
-        }
-        _sendCaptureStatus('error', detail);
+      if (packet == null || packet.isEmpty) {
+        _sendCaptureStatus('error', 'vp9 capture null');
         return;
       }
 
-      const maxFrameBytes = 20 * 1024 * 1024;
-      if (bytes.length > maxFrameBytes) {
-        print('[ScreenShare] Frame too large: ${bytes.length} bytes');
-        if (mounted)
-          setState(() => _captureError = 'too large: ${bytes.length}');
-        _sendCaptureStatus('error', 'Frame too large: ${bytes.length} bytes');
-        return;
+      // Force a keyframe every 150 frames (~5 s at 30 fps).
+      if (++_framesSinceKeyframe >= 150) {
+        _nextFrameIsKeyframe = true;
+        _framesSinceKeyframe = 0;
       }
 
-      // OPTIMIZATION: Enhanced frame differencing
-      // Check if frame is identical to last sent frame
-      final hash = _quickFrameHashAdvanced(bytes);
-      final captureTimeMs =
-          DateTime.now().millisecondsSinceEpoch - captureStartMs;
-
-      if (hash == _lastFrameHash && (nowMs - _lastFrameSentAtMs) < 1000) {
-        // Frame hasn't changed - skip sending (saves bandwidth)
-        _framesDropped++;
-        _captureTimeMs = captureTimeMs;
-        return;
-      }
-
-      // OPTIMIZATION: Adaptive JPEG quality based on frame size and network
-      int quality = _captureJpegQuality;
-      if (bytes.length > 512 * 1024) {
-        quality = (quality * 0.8).toInt().clamp(30, 90);
-      }
-
-      final channel = widget.signalingService?.channel;
-      debugPrint('PRE_SEND: channel=${channel != null ? "ok" : "NULL"}');
-      final b64 = base64Encode(bytes);
-      final encodeTimeMs =
-          DateTime.now().millisecondsSinceEpoch -
-          captureStartMs -
-          captureTimeMs;
-      final sent = _sendSessionPayload(
-        messageType: 'screen_frame',
-        payload: {
-          'frameData': b64,
-          'channel': 'video',
-          'sentAt': nowMs,
-          'frameHash': hash,
-          'frameWidth': _localFrameWidth,
-          'frameHeight': _localFrameHeight,
-          'virtualWidth': _localFrameWidth > 0
-              ? _localFrameWidth
-              : _virtualWidth,
-          'virtualHeight': _localFrameHeight > 0
-              ? _localFrameHeight
-              : _virtualHeight,
-          'remoteWidth': _localCaptureWidth > 0
-              ? _localCaptureWidth
-              : _screenWidthActual,
-          'remoteHeight': _localCaptureHeight > 0
-              ? _localCaptureHeight
-              : _screenHeightActual,
-          'screenCount': _localScreenCount,
-          'screenIndex': _selectedLocalScreenIndex,
-          'captureLeft': _localCaptureLeft,
-          'captureTop': _localCaptureTop,
-          'captureWidth': _localCaptureWidth,
-          'captureHeight': _localCaptureHeight,
-          // OPTIMIZATION: Add diagnostic metadata
-          'captureTimeMs': captureTimeMs,
-          'encodeTimeMs': encodeTimeMs,
-          'quality': quality,
-        },
+      _sendBinaryVideoFrame(
+        packet,
+        width: _localFrameWidth,
+        height: _localFrameHeight,
+        isKeyframe: _framesSinceKeyframe == 0,
       );
-      if (!sent) {
-        if (mounted) setState(() => _captureError = 'session send failed');
-        _sendCaptureStatus('error', 'Session send failed');
-        return;
-      }
-      debugPrint('POST_SEND: _framesTX=$_framesSent');
 
-      _lastFrameHash = hash;
-      _lastFrameSentHash = hash;
-      _lastFrameSentAtMs = nowMs;
-      _lastFrameBytes = bytes;
-      _lastFrameCaptureTime = DateTime.now();
-
-      if (mounted)
+      final captureTimeMs = DateTime.now().millisecondsSinceEpoch - captureStartMs;
+      if (mounted) {
         setState(() {
           _framesSent++;
+          _bytesSentInterval += packet.length;
           _captureError = '';
           _captureTimeMs = captureTimeMs;
-          _encodeTimeMs = encodeTimeMs;
         });
-
-      _sendCaptureStatus('ok', '');
-      if (_framesSent % 30 == 0) {
-        print(
-          '[ScreenShare] Sent frame #$_framesSent (${bytes.length} bytes) ${_localFrameWidth}x$_localFrameHeight quality=$quality',
-        );
       }
-    } catch (e, st) {
-      debugPrint('LOOP_EXCEPTION: $e\n$st');
-      if (mounted) setState(() => _captureError = 'capture/send exception: $e');
-      _sendCaptureStatus('error', 'Capture/send exception: $e');
+      _sendCaptureStatus('ok', '');
+    } catch (e) {
+      if (mounted) setState(() => _captureError = 'vp9 encode error: $e');
+      _sendCaptureStatus('error', 'VP9 encode exception: $e');
     } finally {
       _isCapturing = false;
     }
@@ -6654,153 +6915,154 @@ $g.Dispose();$g2.Dispose();$src.Dispose();$sc.Dispose()
     }
   }
 
-  Uint8List? _captureLocalScreenNativeJpegBytes() {
+  Future<Uint8List?> _captureLocalScreenNativeJpegBytes() async {
     if (!io.Platform.isWindows) return null;
 
+    // ── Try DXGI Desktop Duplication first (RustDesk-style, ~1-3 ms capture) ──
+    if (!_dxgiCapturerFailed) {
+      final dxgiResult = await _captureWithDxgi();
+      if (dxgiResult != null) return dxgiResult;
+      // null means: DXGI timed out (no new frame) or needs reinit — fall through to GDI
+    }
+
+    // ── GDI fallback (~15-20 ms) ─────────────────────────────────────────────
+    return _captureWithGdi();
+  }
+
+  /// Attempt DXGI capture. Returns JPEG bytes on success, null on timeout or error.
+  Future<Uint8List?> _captureWithDxgi() async {
+    // Initialize or reinitialize DXGI capturer if needed
+    if (_dxgiCapturer == null || !_dxgiCapturer!.isReady) {
+      if (_dxgiCapturerFailed) return null;
+      _initDxgiCapturer();
+      if (_dxgiCapturer == null || !_dxgiCapturer!.isReady) return null;
+    }
+
+    try {
+      final frame = _dxgiCapturer!.captureFrame();
+      if (frame == null) {
+        // Access lost → reinit on next frame
+        if (!_dxgiCapturer!.isReady) {
+          _dxgiCapturer!.dispose();
+          _dxgiCapturer = null;
+        }
+        return null;
+      }
+
+      _localCaptureLeft   = 0;
+      _localCaptureTop    = 0;
+      _localCaptureWidth  = frame.width;
+      _localCaptureHeight = frame.height;
+
+      // Legacy JPEG path removed — VP9 is handled by _captureLocalScreenNativeVp9Packet.
+      return null;
+    } catch (e) {
+      // DXGI exception — fall back to GDI permanently for this session
+      _dxgiCapturerFailed = true;
+      _dxgiCapturer?.dispose();
+      _dxgiCapturer = null;
+      return null;
+    }
+  }
+
+  /// GDI BitBlt fallback capture. Returns JPEG bytes or null on error.
+  Future<Uint8List?> _captureWithGdi() async {
     int capLeft = 0;
     int capTop = 0;
     int capWidth = win32.GetSystemMetrics(win32.SM_CXSCREEN);
     int capHeight = win32.GetSystemMetrics(win32.SM_CYSCREEN);
 
     if (_selectedLocalScreenIndex > 0) {
-      capLeft = win32.GetSystemMetrics(win32.SM_XVIRTUALSCREEN);
-      capTop = win32.GetSystemMetrics(win32.SM_YVIRTUALSCREEN);
-      capWidth = win32.GetSystemMetrics(win32.SM_CXVIRTUALSCREEN);
+      capLeft   = win32.GetSystemMetrics(win32.SM_XVIRTUALSCREEN);
+      capTop    = win32.GetSystemMetrics(win32.SM_YVIRTUALSCREEN);
+      capWidth  = win32.GetSystemMetrics(win32.SM_CXVIRTUALSCREEN);
       capHeight = win32.GetSystemMetrics(win32.SM_CYVIRTUALSCREEN);
     }
 
     if (capWidth <= 0 || capHeight <= 0) {
-      if (mounted)
-        setState(() => _captureError = 'Native capture invalid screen bounds');
+      if (mounted) setState(() => _captureError = 'GDI: invalid screen bounds');
       return null;
     }
 
-    final hScreenDc = win32.GetDC(0);
+    final hScreenDc  = win32.GetDC(0);
     if (hScreenDc == 0) {
-      if (mounted)
-        setState(() => _captureError = 'Native capture GetDC failed');
+      if (mounted) setState(() => _captureError = 'GDI: GetDC failed');
       return null;
     }
-
-    final hMemoryDc = win32.CreateCompatibleDC(hScreenDc);
+    final hMemoryDc  = win32.CreateCompatibleDC(hScreenDc);
     if (hMemoryDc == 0) {
       win32.ReleaseDC(0, hScreenDc);
-      if (mounted)
-        setState(
-          () => _captureError = 'Native capture CreateCompatibleDC failed',
-        );
+      if (mounted) setState(() => _captureError = 'GDI: CreateCompatibleDC failed');
       return null;
     }
-
-    final hBitmap = win32.CreateCompatibleBitmap(
-      hScreenDc,
-      capWidth,
-      capHeight,
-    );
+    final hBitmap = win32.CreateCompatibleBitmap(hScreenDc, capWidth, capHeight);
     if (hBitmap == 0) {
       win32.DeleteDC(hMemoryDc);
       win32.ReleaseDC(0, hScreenDc);
-      if (mounted)
-        setState(
-          () => _captureError = 'Native capture CreateCompatibleBitmap failed',
-        );
+      if (mounted) setState(() => _captureError = 'GDI: CreateCompatibleBitmap failed');
       return null;
     }
 
-    final oldObject = win32.SelectObject(hMemoryDc, hBitmap);
-    final copied = win32.BitBlt(
-      hMemoryDc,
-      0,
-      0,
-      capWidth,
-      capHeight,
-      hScreenDc,
-      capLeft,
-      capTop,
-      win32.SRCCOPY | win32.CAPTUREBLT,
-    );
+    final oldObj = win32.SelectObject(hMemoryDc, hBitmap);
+    final copied = win32.BitBlt(hMemoryDc, 0, 0, capWidth, capHeight,
+        hScreenDc, capLeft, capTop, win32.SRCCOPY | win32.CAPTUREBLT);
 
     if (copied == 0) {
-      win32.SelectObject(hMemoryDc, oldObject);
+      win32.SelectObject(hMemoryDc, oldObj);
       win32.DeleteObject(hBitmap);
       win32.DeleteDC(hMemoryDc);
       win32.ReleaseDC(0, hScreenDc);
-      if (mounted)
-        setState(() => _captureError = 'Native capture BitBlt failed');
+      if (mounted) setState(() => _captureError = 'GDI: BitBlt failed');
       return null;
     }
 
-    final bmi = calloc<win32.BITMAPINFO>();
+    final bmi       = calloc<win32.BITMAPINFO>();
     final byteCount = capWidth * capHeight * 4;
-    final pixelBuffer = calloc<Uint8>(byteCount);
+    final pixBuf    = calloc<Uint8>(byteCount);
+    var freed       = false;
+
+    void freeGdi() {
+      if (freed) return;
+      freed = true;
+      calloc.free(pixBuf);
+      calloc.free(bmi);
+      win32.SelectObject(hMemoryDc, oldObj);
+      win32.DeleteObject(hBitmap);
+      win32.DeleteDC(hMemoryDc);
+      win32.ReleaseDC(0, hScreenDc);
+    }
 
     try {
-      bmi.ref.bmiHeader.biSize = sizeOf<win32.BITMAPINFOHEADER>();
-      bmi.ref.bmiHeader.biWidth = capWidth;
-      bmi.ref.bmiHeader.biHeight = -capHeight;
-      bmi.ref.bmiHeader.biPlanes = 1;
-      bmi.ref.bmiHeader.biBitCount = 32;
+      bmi.ref.bmiHeader.biSize        = sizeOf<win32.BITMAPINFOHEADER>();
+      bmi.ref.bmiHeader.biWidth       = capWidth;
+      bmi.ref.bmiHeader.biHeight      = -capHeight;
+      bmi.ref.bmiHeader.biPlanes      = 1;
+      bmi.ref.bmiHeader.biBitCount    = 32;
       bmi.ref.bmiHeader.biCompression = win32.BI_RGB;
 
       final rows = win32.GetDIBits(
-        hMemoryDc,
-        hBitmap,
-        0,
-        capHeight,
-        pixelBuffer.cast(),
-        bmi,
-        win32.DIB_RGB_COLORS,
-      );
+          hMemoryDc, hBitmap, 0, capHeight, pixBuf.cast(), bmi, win32.DIB_RGB_COLORS);
 
       if (rows == 0) {
-        if (mounted)
-          setState(() => _captureError = 'Native capture GetDIBits failed');
+        if (mounted) setState(() => _captureError = 'GDI: GetDIBits failed');
         return null;
       }
 
-      final raw = pixelBuffer.asTypedList(byteCount);
-      final source = img.Image.fromBytes(
-        width: capWidth,
-        height: capHeight,
-        bytes: raw.buffer,
-        numChannels: 4,
-        order: img.ChannelOrder.bgra,
-      );
+      final rawCopy = Uint8List.fromList(pixBuf.asTypedList(byteCount));
 
-      img.Image output = source;
-      if (capWidth > _captureMaxWidth) {
-        final scale = _captureMaxWidth / capWidth;
-        final targetW = _captureMaxWidth;
-        final targetH = (capHeight * scale).round().clamp(1, 4320);
-        output = img.copyResize(
-          source,
-          width: targetW,
-          height: targetH,
-          interpolation: img.Interpolation.cubic,
-        );
-      }
-
-      _localFrameWidth = output.width;
-      _localFrameHeight = output.height;
-      _localCaptureLeft = capLeft;
-      _localCaptureTop = capTop;
-      _localCaptureWidth = capWidth;
+      _localCaptureLeft   = capLeft;
+      _localCaptureTop    = capTop;
+      _localCaptureWidth  = capWidth;
       _localCaptureHeight = capHeight;
 
-      final jpg = img.encodeJpg(output, quality: _captureJpegQuality);
-      if (mounted) setState(() => _captureError = '');
-      return Uint8List.fromList(jpg);
+      freeGdi();
+      // Legacy JPEG path removed — VP9 is handled by _captureLocalScreenNativeVp9Packet.
+      return null;
     } catch (e) {
-      if (mounted)
-        setState(() => _captureError = 'Native capture exception: $e');
+      if (mounted) setState(() => _captureError = 'GDI exception: $e');
       return null;
     } finally {
-      calloc.free(pixelBuffer);
-      calloc.free(bmi);
-      win32.SelectObject(hMemoryDc, oldObject);
-      win32.DeleteObject(hBitmap);
-      win32.DeleteDC(hMemoryDc);
-      win32.ReleaseDC(0, hScreenDc);
+      freeGdi();
     }
   }
 

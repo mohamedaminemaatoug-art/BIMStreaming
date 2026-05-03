@@ -293,6 +293,35 @@ class _AppShellState extends ConsumerState<AppShell> {
         }
         if (message.type == 'remote:invite_rejected') {
           _handleInviteRejected();
+          return;
+        }
+        if (message.type == 'dm:new' &&
+            !widget.location.startsWith('/app/messages')) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('You have a new message'),
+              duration: const Duration(seconds: 4),
+              action: SnackBarAction(
+                label: 'Open',
+                onPressed: () => context.go('/app/messages'),
+              ),
+            ),
+          );
+          return;
+        }
+        if (message.type == 'notification:new') {
+          final title =
+              message.data['title']?.toString() ?? 'New notification';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(title),
+              duration: const Duration(seconds: 4),
+              action: SnackBarAction(
+                label: 'View',
+                onPressed: () => context.go('/app/notifications'),
+              ),
+            ),
+          );
         }
       });
     });

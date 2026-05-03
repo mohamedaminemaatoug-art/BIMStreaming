@@ -113,12 +113,19 @@ class ModifierState {
   final bool meta;
   final bool altGraph;
 
+  // Lock key states — sent by controller so host can sync before injection
+  // (mirrors RustDesk's LockModesHandler in input_service.rs)
+  final bool capsLock;
+  final bool numLock;
+
   ModifierState({
     this.shift = false,
     this.control = false,
     this.alt = false,
     this.meta = false,
     this.altGraph = false,
+    this.capsLock = false,
+    this.numLock = false,
   });
 
   /// Check if any modifier is pressed.
@@ -131,12 +138,16 @@ class ModifierState {
     bool? alt,
     bool? meta,
     bool? altGraph,
+    bool? capsLock,
+    bool? numLock,
   }) => ModifierState(
     shift: shift ?? this.shift,
     control: control ?? this.control,
     alt: alt ?? this.alt,
     meta: meta ?? this.meta,
     altGraph: altGraph ?? this.altGraph,
+    capsLock: capsLock ?? this.capsLock,
+    numLock: numLock ?? this.numLock,
   );
 
   Map<String, dynamic> toJson() => {
@@ -145,6 +156,8 @@ class ModifierState {
     'alt': alt,
     'meta': meta,
     'altGraph': altGraph,
+    'capsLock': capsLock,
+    'numLock': numLock,
   };
 
   factory ModifierState.fromJson(Map<String, dynamic> json) => ModifierState(
@@ -153,6 +166,8 @@ class ModifierState {
     alt: (json['alt'] as bool?) ?? false,
     meta: (json['meta'] as bool?) ?? false,
     altGraph: (json['altGraph'] as bool?) ?? false,
+    capsLock: (json['capsLock'] as bool?) ?? false,
+    numLock: (json['numLock'] as bool?) ?? false,
   );
 
   @override
@@ -174,7 +189,9 @@ class ModifierState {
         control == other.control &&
         alt == other.alt &&
         meta == other.meta &&
-        altGraph == other.altGraph;
+        altGraph == other.altGraph &&
+        capsLock == other.capsLock &&
+        numLock == other.numLock;
   }
 
   @override
@@ -183,7 +200,9 @@ class ModifierState {
       control.hashCode ^
       alt.hashCode ^
       meta.hashCode ^
-      altGraph.hashCode;
+      altGraph.hashCode ^
+      capsLock.hashCode ^
+      numLock.hashCode;
 }
 
 /// Keyboard layout descriptor.

@@ -72,10 +72,12 @@ class RealtimeController extends StateNotifier<RealtimeState> {
   void _handleWSMessage(WSMessage message) {
     switch (message.type) {
       case 'dm:new':
-        final conversationId =
-            (message.data['conversation_id'] ?? message.data['from_user_id'])
-                ?.toString();
         final senderId = message.data['sender_id']?.toString();
+        final conversationId =
+            (message.data['conversation_id'] ??
+                    message.data['sender_id'] ??
+                    message.data['from_user_id'])
+                ?.toString();
         final body = (message.data['content'] ?? message.data['body'])
             ?.toString();
         if (conversationId == null || senderId == null || body == null) {
@@ -102,6 +104,7 @@ class RealtimeController extends StateNotifier<RealtimeState> {
                 isRead: false,
               ),
             );
+        ref.read(messagesControllerProvider.notifier).loadConversations();
         _appendMessage(
           conversationId,
           ChatMessage(
@@ -260,7 +263,9 @@ class RealtimeController extends StateNotifier<RealtimeState> {
 }
 
 final signalingClientProvider = Provider<SignalingClientService>((ref) {
-  return SignalingClientService();
+  final service = SignalingClientService();
+  ref.onDispose(service.dispose);
+  return service;
 });
 
 final realtimeControllerProvider =

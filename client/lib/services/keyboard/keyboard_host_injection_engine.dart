@@ -82,9 +82,10 @@ class KeyboardHostInjectionEngine {
   /// Inject a keyboard event from remote.
   ///
   /// Handles strategy selection:
-  /// 1. Unicode injection (for printable characters)
-  /// 2. Virtual key injection (for control/navigation keys)
-  /// 3. SendKeys fallback (for text with modifiers)
+  /// 1. Lock key sync (CapsLock/NumLock — RustDesk LockModesHandler approach)
+  /// 2. Unicode injection (for printable characters)
+  /// 3. Virtual key injection (for control/navigation keys)
+  /// 4. SendKeys fallback (for text with modifiers)
   Future<bool> injectKeyboardEvent(
     KeyboardKeyEvent event, {
     required String hostLayout,
@@ -93,6 +94,12 @@ class KeyboardHostInjectionEngine {
     if (!io.Platform.isWindows) return false;
 
     try {
+      // ── Lock-key sync (from RustDesk's LockModesHandler) ─────────────────
+      // Sync CapsLock and NumLock state between controller and host before
+      // injecting any key. This prevents typed characters from appearing in
+      // the wrong case when the lock states differ.
+      _syncLockKeys(event.modifiers);
+
       // Translate character if needed.
       String translatedCharacter = event.characterCodePoint > 0
           ? String.fromCharCode(event.characterCodePoint)
@@ -127,6 +134,34 @@ class KeyboardHostInjectionEngine {
     } catch (e) {
       onInjectionFailed?.call(event.physicalCode, e.toString());
       return false;
+    }
+  }
+
+  // ── Lock key synchronization ──────────────────────────────────────────────
+
+  /// Sync CapsLock and NumLock to match the remote controller's state.
+  ///
+  /// Adapted from RustDesk's src/server/input_service.rs LockModesHandler:
+  /// reads the current host toggle state via GetKeyState and sends a synthetic
+  /// key-click if the controller's state differs.
+  void _syncLockKeys(ModifierState remoteModifiers) {
+    // GetKeyState toggle bit (0x0001): 1 = lock is ON, 0 = lock is OFF.
+    final hostCapsOn = (GetKeyState(VK_CAPITAL) & 0x0001) != 0;
+    final hostNumOn  = (GetKeyState(VK_NUMLOCK)  & 0x0001) != 0;
+
+    if (remoteModifiers.capsLock != hostCapsOn) _syntheticKeyClick(VK_CAPITAL);
+    if (remoteModifiers.numLock  != hostNumOn)  _syntheticKeyClick(VK_NUMLOCK);
+  }
+
+  /// Send a synthetic key-down + key-up to toggle a lock key.
+  void _syntheticKeyClick(int vkCode) {
+    final inputs = calloc<INPUT>(2);
+    try {
+      (inputs + 0).ref = _buildVirtualKeyInput(vkCode, isKeyUp: false);
+      (inputs + 1).ref = _buildVirtualKeyInput(vkCode, isKeyUp: true);
+      SendInput(2, inputs, sizeOf<INPUT>());
+    } finally {
+      calloc.free(inputs);
     }
   }
 

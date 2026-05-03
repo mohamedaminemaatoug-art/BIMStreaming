@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"bimstreaming/server/internal/models"
+
 	"github.com/google/uuid"
 )
 
@@ -49,7 +51,16 @@ func (a *App) ListCommunities(w http.ResponseWriter, r *http.Request) {
 		internalError(w, "failed to list communities")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"data": communities})
+	type communityRow struct {
+		*models.Community
+		MemberCount int `json:"member_count"`
+	}
+	result := make([]communityRow, len(communities))
+	for i := range communities {
+		count, _ := a.Repo.CountCommunityMembers(r.Context(), communities[i].ID)
+		result[i] = communityRow{Community: &communities[i], MemberCount: count}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"data": result})
 }
 
 func (a *App) DiscoverCommunities(w http.ResponseWriter, r *http.Request) {
@@ -212,6 +223,19 @@ func (a *App) ListCommunityMembers(w http.ResponseWriter, r *http.Request) {
 
 	enriched := make([]map[string]interface{}, 0, len(members))
 	for _, member := range members {
+		user := usersByID[member.UserID]
+		username := ""
+		displayName := ""
+		avatarURL := ""
+		isOnline := false
+		if userMap, ok := user.(map[string]interface{}); ok {
+			username = strings.TrimSpace(fmt.Sprint(userMap["username"]))
+			displayName = strings.TrimSpace(fmt.Sprint(userMap["display_name"]))
+			avatarURL = strings.TrimSpace(fmt.Sprint(userMap["avatar_url"]))
+			if online, ok := userMap["is_online"].(bool); ok {
+				isOnline = online
+			}
+		}
 		enriched = append(enriched, map[string]interface{}{
 			"id":            member.ID,
 			"community_id":  member.CommunityID,
@@ -220,7 +244,11 @@ func (a *App) ListCommunityMembers(w http.ResponseWriter, r *http.Request) {
 			"role":          member.Role,
 			"status":        member.Status,
 			"joined_at":     member.JoinedAt,
-			"user":          usersByID[member.UserID],
+			"username":      username,
+			"display_name":  displayName,
+			"avatar_url":    avatarURL,
+			"is_online":     isOnline,
+			"user":          user,
 			"presence":      statusByID[member.UserID],
 		})
 	}
@@ -577,16 +605,25 @@ func (a *App) JoinCommunityByCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
+		Code        string `json:"code"`
+		CommunityID string `json:"community_id"`
+		Message     string `json:"message"`
 	}
 	if err := parseJSON(r, &body); err != nil {
 		badRequest(w, "invalid request")
 		return
 	}
-	community, err := a.Repo.GetCommunityByID(r.Context(), uuidFromCode(body.Code))
+	lookupValue := strings.TrimSpace(body.CommunityID)
+	if lookupValue == "" {
+		lookupValue = strings.TrimSpace(body.Code)
+	}
+	if lookupValue == "" {
+		badRequest(w, "community id or code is required")
+		return
+	}
+	community, err := a.Repo.GetCommunityByID(r.Context(), uuidFromCode(lookupValue))
 	if err != nil || community == nil {
-		community, err = a.Repo.GetCommunityByCode(r.Context(), body.Code)
+		community, err = a.Repo.GetCommunityByCode(r.Context(), lookupValue)
 		if err != nil {
 			notFound(w, "community not found")
 			return
@@ -878,6 +915,47 @@ func (a *App) DeleteDepartment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "department deleted"})
+}
+
+func (a *App) AddCommunityMemberDirect(w http.ResponseWriter, r *http.Request) {
+	actorID, err := currentUserID(r)
+	if err != nil {
+		unauthorized(w, "unauthorized")
+		return
+	}
+	communityID, err := parseUUIDParam(r, "id")
+	if err != nil {
+		badRequest(w, "invalid community id")
+		return
+	}
+	_, role, err := a.Repo.IsCommunityMember(r.Context(), communityID, actorID)
+	if err != nil || (role != "owner" && role != "admin" && role != "admin_sec") {
+		forbidden(w, "not allowed")
+		return
+	}
+	var body struct {
+		Email string `json:"email"`
+		Role  string `json:"role"`
+	}
+	if err := parseJSON(r, &body); err != nil || strings.TrimSpace(body.Email) == "" {
+		badRequest(w, "email is required")
+		return
+	}
+	if strings.TrimSpace(body.Role) == "" {
+		body.Role = "user"
+	}
+	user, err := a.Repo.GetUserByEmail(r.Context(), strings.ToLower(strings.TrimSpace(body.Email)))
+	if err != nil {
+		notFound(w, "user not found")
+		return
+	}
+	if err := a.Repo.AddCommunityMember(r.Context(), communityID, user.ID, body.Role); err != nil {
+		internalError(w, "failed to add member")
+		return
+	}
+	_ = a.Repo.InsertCommunityAuditLog(r.Context(), communityID, actorID, "member_added_direct", &user.ID, map[string]interface{}{"email": body.Email, "role": body.Role})
+	a.Hub.PublishToUser(user.ID.String(), "community:added", map[string]interface{}{"community_id": communityID})
+	writeJSON(w, http.StatusCreated, map[string]string{"message": "member added"})
 }
 
 func (a *App) communityAdminIDs(r *http.Request, communityID uuid.UUID) []string {
