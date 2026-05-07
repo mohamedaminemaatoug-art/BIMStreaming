@@ -136,6 +136,7 @@ BimStreaming est une application de bureau Windows full-stack composée de deux 
 | **Authentification** | Inscription, vérification e-mail, connexion, 2FA TOTP, codes de secours, réinitialisation de mot de passe, gestion de sessions multi-appareils |
 | **Profil utilisateur** | Avatar, nom d'affichage, biographie, statut personnalisé (emoji + disponibilité), préférences de langue, fuseau horaire, thème |
 | **Social** | Demandes d'amis, blocage, présence en ligne/hors-ligne en temps réel, messagerie directe 1:1 |
+
 | **Communautés** | Création, rejoindre par code, hiérarchie Communauté → Département, rôles granulaires, annonces, messages, réactions, pièces jointes, invitations, approbation d'adhésion, bannissements, journal d'audit |
 | **Contrôle à distance** | Invitation, appairage Contrôleur ↔ Agent, flux VP9 30–60 fps (capture DXGI), injection clavier, injection souris, streaming audio, transfert de fichiers, accès non accompagné, permissions granulaires, historique |
 | **Administration** | Liste des utilisateurs, bannissement/débannissement, gestion des communautés, sessions actives, statistiques, journal d'audit global |

@@ -303,6 +303,8 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   // ===== DXGI Desktop Duplication (RustDesk-style hardware capture) =====
   DxgiCapturer? _dxgiCapturer;
   bool _dxgiCapturerFailed = false; // permanent failure — skip DXGI for session
+  int _dxgiReinitRetryCount = 0;
+  static const int _dxgiMaxReinitRetries = 8;
   // ===== END DXGI =====
 
   // ===== VP9 codec (RustDesk-style encode/decode) =====
@@ -311,7 +313,14 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   ui.Image? _remoteUiImage;
   StreamSubscription<Uint8List>? _binarySubscription;
   int _framesSinceKeyframe = 0;
+  // Last raw BGRA frame kept for keyframe refresh when screen is static.
+  Uint8List? _lastCapturedBgra;
+  int _lastCapturedBgraW = 0;
+  int _lastCapturedBgraH = 0;
   bool _nextFrameIsKeyframe = true;
+  // Serial to discard out-of-order decodeImageFromPixels callbacks.
+  int _frameDecodeSerial = 0;
+  int _frameDisplaySerial = 0;
   // ===== END VP9 =====
   String _screenshotPath = '';
   String _recordingsPath = '';
@@ -320,6 +329,9 @@ class _RemoteSupportPageState extends State<RemoteSupportPage> {
   int _remoteScreenCount = 1;
   int _localScreenCount = 1;
   int _pingMs = 0;
+  double _smoothedPingMs = 0.0; // EMA of _pingMs for stable FPS decisions
+  int _fpsStabilityDir   = 0;   // +1 want more fps, -1 want less, 0 stable
+  int _fpsStabilityCount = 0;   // consecutive measurements in same direction
   String _bandwidthText = '0 kb/s';
   String _txBandwidthText = '0 kb/s';
   String _rxBandwidthText = '0 kb/s';
@@ -841,25 +853,25 @@ Write-Output "$count,$width,$height"
       return;
     }
     _isScreenSharing = true;
-    _screenShareTimer?.cancel();
-    _screenShareTimer = Timer.periodic(
-      Duration(milliseconds: _captureFrameIntervalMs),
-      (_) {
+    if (_screenShareTimer == null) {
+      // Fixed 16 ms base tick — _sendScreenFrame uses a time-gate so the
+      // effective FPS is controlled by _captureFrameIntervalMs without ever
+      // needing to cancel/restart this timer.
+      _screenShareTimer = Timer.periodic(const Duration(milliseconds: 16), (_) {
         _sendScreenFrame();
-      },
-    );
+      });
+    }
     _sendScreenFrame();
   }
 
   void _restartScreenShareTimerIfNeeded() {
     if (!widget.sendLocalScreen || !_isScreenSharing) return;
-    _screenShareTimer?.cancel();
-    _screenShareTimer = Timer.periodic(
-      Duration(milliseconds: _captureFrameIntervalMs),
-      (_) {
+    // Timer is fixed at 16 ms; no restart needed when interval changes.
+    if (_screenShareTimer == null) {
+      _screenShareTimer = Timer.periodic(const Duration(milliseconds: 16), (_) {
         _sendScreenFrame();
-      },
-    );
+      });
+    }
   }
 
   void _revealOverlayTemporarily() {
@@ -1198,31 +1210,61 @@ Write-Output "$count,$width,$height"
   void _applyAutoQuality() {
     if (_autoQualityMode != 'Auto') return;
 
-    // RustDesk-style adaptive QoS (from video_qos.rs):
-    //   threshold = 150 ms RTT; step ±5 fps; bounds 10–60 fps; default 30 fps.
-    // We treat _pingMs as RTT (round-trip time).
-    const int kThresholdMs = 150;
-    const int kMinFps      = 10;
-    const int kMaxFps      = 60;
-    const int kFpsStep     = 5;
+    // Smooth the raw ping with an EMA (α=0.25) so transient spikes don't
+    // cause immediate FPS changes.
+    _smoothedPingMs = _smoothedPingMs == 0
+        ? _pingMs.toDouble()
+        : _smoothedPingMs * 0.75 + _pingMs * 0.25;
+
+    const int kMinFps = 10;
+    const int kMaxFps = 60;
+    const int kFpsStep = 2; // small step → smooth ramp up/down
+
+    // Hysteresis band: only act outside [kLowMs, kHighMs].
+    const double kLowMs  = 80.0;
+    const double kHighMs = 180.0;
+
+    final int wantDir;
+    if (_smoothedPingMs < kLowMs) {
+      wantDir = 1;   // network has headroom → allow more fps
+    } else if (_smoothedPingMs > kHighMs) {
+      wantDir = -1;  // network is struggling → reduce fps
+    } else {
+      wantDir = 0;   // inside hysteresis band → hold current fps
+    }
+
+    // Require 2 consecutive measurements in same direction before acting
+    // to avoid reacting to momentary fluctuations.
+    if (wantDir == 0) {
+      _fpsStabilityCount = 0;
+      _fpsStabilityDir   = 0;
+    } else if (wantDir == _fpsStabilityDir) {
+      _fpsStabilityCount++;
+    } else {
+      _fpsStabilityDir   = wantDir;
+      _fpsStabilityCount = 1;
+    }
+
+    if (_fpsStabilityCount < 2) return;
 
     final currentFps = (1000.0 / _captureFrameIntervalMs.clamp(1, 1000)).round();
-    final int newFps  = (_pingMs < kThresholdMs)
-        ? (currentFps + kFpsStep).clamp(kMinFps, kMaxFps)
-        : (currentFps - kFpsStep).clamp(kMinFps, kMaxFps);
+    final int newFps = (currentFps + wantDir * kFpsStep).clamp(kMinFps, kMaxFps);
+    if (newFps == currentFps) return;
+
     final int newIntervalMs = (1000.0 / newFps).round();
 
-    // Also tune JPEG quality based on absolute latency.
-    final int newQuality = _pingMs <= 40 ? 48
-        : (_pingMs <= 80  ? 45
-        : (_pingMs <= 140 ? 40 : 36));
+    // Tune JPEG quality based on smoothed latency.
+    final int newQuality = _smoothedPingMs <= 40 ? 48
+        : (_smoothedPingMs <= 80  ? 45
+        : (_smoothedPingMs <= 140 ? 40 : 36));
 
     setState(() {
       _captureJpegQuality     = newQuality;
       _captureFrameIntervalMs = newIntervalMs;
       _applyVirtualResolutionPolicy();
     });
-    _restartScreenShareTimerIfNeeded();
+    // No timer restart needed: the 16 ms base timer + time-gate in
+    // _sendScreenFrame naturally applies the new interval.
   }
 
   void _sendDisplayConfig() {
@@ -1300,24 +1342,12 @@ Write-Output "$count,$width,$height"
     );
   }
 
-  // Appelle BlockInput Win32 côté AGENT pour bloquer/débloquer le clavier+souris physiques.
-  // BlockInput(TRUE) bloque les entrées physiques mais laisse passer SendInput() synthétique,
-  // donc le contrôleur peut toujours injecter des événements.
-  void _applyBlockInput(bool keyboardEnabled, bool mouseEnabled) {
-    if (!widget.sendLocalScreen) return; // seulement exécuté côté agent
-    if (!io.Platform.isWindows) return;
-    try {
-      _user32Lib ??= DynamicLibrary.open('user32.dll');
-      final blockInput = _user32Lib!.lookupFunction<
-          Int32 Function(Int32),
-          int Function(int)>('BlockInput');
-      // Bloquer si l'un ou l'autre est désactivé
-      final shouldBlock = !keyboardEnabled || !mouseEnabled;
-      blockInput(shouldBlock ? 1 : 0);
-    } catch (_) {
-      // BlockInput peut échouer sans droits suffisants — ignorer silencieusement
-    }
-  }
+  // BlockInput() was removed: it blocked the host's own physical keyboard/mouse
+  // while leaving the controller's synthetic SendInput() events unaffected —
+  // the exact opposite of what is needed. Filtering is now done in
+  // _applyRemoteInput() by checking _keyboardInputEnabledForUser2 /
+  // _mouseInputEnabledForUser2 before injecting each event.
+  void _applyBlockInput(bool keyboardEnabled, bool mouseEnabled) {}
 
   void _setInputControl({bool? keyboardEnabled, bool? mouseEnabled}) {
     setState(() {
@@ -1692,6 +1722,7 @@ Write-Output "$count,$width,$height"
             _dxgiCapturer?.dispose();
             _dxgiCapturer = null;
             _dxgiCapturerFailed = false;
+            _dxgiReinitRetryCount = 0;
             _initDxgiCapturer();
           }
         }
@@ -2610,10 +2641,19 @@ Write-Output "$count,$width,$height"
       'right_up',
       'wheel',
     };
-    // NOTE: Physical input blocking on the host is handled exclusively by Win32 BlockInput().
-    // The controller's synthetic events (SendInput) must always pass through regardless
-    // of _keyboardInputEnabledForUser2 / _mouseInputEnabledForUser2 — those flags only
-    // gate BlockInput on the agent side, not the controller's injected events.
+    // Determine the category of this action so we can apply the correct guard.
+    const Set<String> _kMouseActions = {
+      'move', 'move_delta', 'left_down', 'left_up', 'right_down', 'right_up', 'wheel',
+    };
+    const Set<String> _kKeyboardActions = {
+      'key_event', 'key_press', 'key_down', 'key_up',
+    };
+    // Sync/housekeeping actions (reset_all_keys, key_state_sync, layout_sync)
+    // are always allowed so we never leave injected keys stuck on the host.
+
+    if (_kMouseActions.contains(action) && !_mouseInputEnabledForUser2) return;
+    if (_kKeyboardActions.contains(action) && !_keyboardInputEnabledForUser2) return;
+
     if (action == 'key_press' && payload['legacyCompat'] == true) {
       return;
     }
@@ -3345,7 +3385,26 @@ switch ($action) {
       if (frameData == null || frameData.isEmpty) return;
 
       try {
-        _remoteScreenFrame = base64Decode(frameData);
+        final decoded = base64Decode(frameData);
+        // Validate JPEG magic bytes (FFD8FF) and end marker (FFD9) before
+        // replacing the current frame — corrupt frames are silently dropped to
+        // prevent a black screen.
+        final isValidJpeg = decoded.length > 4 &&
+            decoded[0] == 0xFF &&
+            decoded[1] == 0xD8 &&
+            decoded[2] == 0xFF &&
+            decoded[decoded.length - 2] == 0xFF &&
+            decoded[decoded.length - 1] == 0xD9;
+        if (!isValidJpeg) {
+          _framesDropped++;
+          _pendingRemoteFrameData = null;
+          _pendingRemoteFrameWidth = null;
+          _pendingRemoteFrameHeight = null;
+          _pendingRemoteScreenCount = null;
+          _pendingRemoteScreenIndex = null;
+          return;
+        }
+        _remoteScreenFrame = decoded;
         if (_pendingRemoteFrameWidth != null &&
             _pendingRemoteFrameHeight != null) {
           _remoteFrameWidth = _pendingRemoteFrameWidth!;
@@ -3384,8 +3443,14 @@ switch ($action) {
           setState(() {});
         }
       } catch (e) {
+        // Keep last good frame — do not set _remoteScreenFrame to null.
+        _framesDropped++;
         print('[ScreenShare] Decode error: $e');
-        _remoteScreenFrame = null;
+        _pendingRemoteFrameData = null;
+        _pendingRemoteFrameWidth = null;
+        _pendingRemoteFrameHeight = null;
+        _pendingRemoteScreenCount = null;
+        _pendingRemoteScreenIndex = null;
       }
     });
   }
@@ -5984,12 +6049,22 @@ switch ($action) {
       if (ok) {
         _dxgiCapturer?.dispose();
         _dxgiCapturer = cap;
+        _dxgiReinitRetryCount = 0;
+        // Force keyframe so the remote decoder resyncs cleanly after reinit.
+        _nextFrameIsKeyframe = true;
       } else {
         cap.dispose();
-        _dxgiCapturerFailed = true;
+        // DXGI_ERROR_ACCESS_LOST recovery often needs a few retries before
+        // Windows makes the duplication interface available again. Only give
+        // up after _dxgiMaxReinitRetries consecutive failures.
+        if (++_dxgiReinitRetryCount >= _dxgiMaxReinitRetries) {
+          _dxgiCapturerFailed = true;
+        }
       }
     } catch (_) {
-      _dxgiCapturerFailed = true;
+      if (++_dxgiReinitRetryCount >= _dxgiMaxReinitRetries) {
+        _dxgiCapturerFailed = true;
+      }
     }
   }
 
@@ -5998,6 +6073,19 @@ switch ($action) {
     _vp9Encoder = null;
     _nextFrameIsKeyframe = true;
     _framesSinceKeyframe = 0;
+  }
+
+  /// Returns true when [bgra] is entirely or almost entirely black.
+  /// Samples 64 evenly-spaced pixels — cheap enough to run every frame.
+  bool _isBlackFrame(Uint8List bgra) {
+    if (bgra.isEmpty) return true;
+    final step = ((bgra.length ~/ 4) ~/ 64).clamp(1, bgra.length ~/ 4);
+    for (int px = 0; px < bgra.length ~/ 4; px += step) {
+      final i = px * 4;
+      // BGRA: check B, G, R channels (index 0,1,2). Allow minor noise (≤8).
+      if (bgra[i] > 8 || bgra[i + 1] > 8 || bgra[i + 2] > 8) return false;
+    }
+    return true;
   }
 
   /// Capture one DXGI frame and VP9-encode it. Returns null if nothing to send.
@@ -6012,8 +6100,10 @@ switch ($action) {
       final frame = _dxgiCapturer!.captureFrame();
       if (frame == null) {
         if (!_dxgiCapturer!.isReady) {
+          // ACCESS_LOST or similar: dispose and allow retry from scratch.
           _dxgiCapturer!.dispose();
           _dxgiCapturer = null;
+          _dxgiReinitRetryCount = 0;
         }
         return null;
       }
@@ -6024,6 +6114,16 @@ switch ($action) {
       _localCaptureHeight = frame.height;
       _localFrameWidth    = frame.width;
       _localFrameHeight   = frame.height;
+
+      // DXGI can return all-black frames right after ACCESS_LOST recovery
+      // while the compositor hasn't rendered the desktop yet. Skip them to
+      // avoid sending a black keyframe that would flash on the remote.
+      if (_isBlackFrame(frame.bgraPixels)) return null;
+
+      // Keep last BGRA for keyframe refresh when the screen stays static.
+      _lastCapturedBgra   = frame.bgraPixels;
+      _lastCapturedBgraW  = frame.width;
+      _lastCapturedBgraH  = frame.height;
 
       // Lazily create/recreate encoder when frame dimensions are known.
       if (_vp9Encoder == null ||
@@ -6123,25 +6223,30 @@ switch ($action) {
     final frameW = decoded.width > 0 ? decoded.width : w;
     final frameH = decoded.height > 0 ? decoded.height : h;
 
+    // Assign a monotonically increasing serial before the async decode so
+    // out-of-order callbacks can be detected and discarded.
+    final serial = ++_frameDecodeSerial;
+
     ui.decodeImageFromPixels(
       decoded.bgra,
       frameW,
       frameH,
       ui.PixelFormat.bgra8888,
       (img) {
-        if (!mounted) {
+        // Discard stale callbacks: a newer frame has already been displayed.
+        if (!mounted || serial <= _frameDisplaySerial) {
           img.dispose();
           return;
         }
-        final old = _remoteUiImage;
+        _frameDisplaySerial = serial;
         setState(() {
+          _remoteUiImage?.dispose();
           _remoteUiImage = img;
           _remoteFrameWidth  = frameW;
           _remoteFrameHeight = frameH;
           _framesReceived++;
           _bytesReceivedInterval += data.length;
         });
-        WidgetsBinding.instance.addPostFrameCallback((_) => old?.dispose());
       },
     );
   }
@@ -6149,37 +6254,64 @@ switch ($action) {
   Future<void> _sendScreenFrame() async {
     if (!_canSignal || !_isScreenSharing || _isCapturing) return;
     final nowMs = DateTime.now().millisecondsSinceEpoch;
+    // Time-gate: skip this 16 ms tick if the target interval hasn't elapsed.
+    if (nowMs - _lastFrameSentAtMs < _captureFrameIntervalMs) return;
     if (nowMs - _lastInputSentAtMs < 8) return;
 
     _isCapturing = true;
     final captureStartMs = nowMs;
 
     try {
-      final packet = await _captureLocalScreenNativeVp9Packet();
+      Uint8List? packet = await _captureLocalScreenNativeVp9Packet();
       if (!mounted) return;
+
       if (packet == null || packet.isEmpty) {
-        _sendCaptureStatus('error', 'vp9 capture null');
+        // DXGI timeout: desktop unchanged. If >3 s without a sent frame,
+        // re-encode the last BGRA as a forced keyframe so the remote decoder
+        // can re-sync without waiting for the next real screen change.
+        if (nowMs - _lastFrameSentAtMs > 3000 &&
+            _lastCapturedBgra != null &&
+            _vp9Encoder != null &&
+            _vp9Encoder!.width == _lastCapturedBgraW &&
+            _vp9Encoder!.height == _lastCapturedBgraH) {
+          packet = _vp9Encoder!.encode(_lastCapturedBgra!, forceKeyframe: true);
+          if (packet != null && packet.isNotEmpty) {
+            _framesSinceKeyframe = 0;
+            _lastFrameSentAtMs = nowMs;
+            _sendBinaryVideoFrame(
+              packet,
+              width: _lastCapturedBgraW,
+              height: _lastCapturedBgraH,
+              isKeyframe: true,
+            );
+            if (mounted) setState(() { _framesSent++; _bytesSentInterval += packet!.length; });
+          }
+        } else {
+          _sendCaptureStatus('error', 'vp9 capture null');
+        }
         return;
       }
 
       // Force a keyframe every 150 frames (~5 s at 30 fps).
+      final bool isKeyframe = _nextFrameIsKeyframe || _framesSinceKeyframe == 0;
       if (++_framesSinceKeyframe >= 150) {
         _nextFrameIsKeyframe = true;
         _framesSinceKeyframe = 0;
       }
 
+      _lastFrameSentAtMs = nowMs;
       _sendBinaryVideoFrame(
         packet,
         width: _localFrameWidth,
         height: _localFrameHeight,
-        isKeyframe: _framesSinceKeyframe == 0,
+        isKeyframe: isKeyframe,
       );
 
       final captureTimeMs = DateTime.now().millisecondsSinceEpoch - captureStartMs;
       if (mounted) {
         setState(() {
           _framesSent++;
-          _bytesSentInterval += packet.length;
+          _bytesSentInterval += packet!.length;
           _captureError = '';
           _captureTimeMs = captureTimeMs;
         });
